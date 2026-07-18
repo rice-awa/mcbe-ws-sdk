@@ -1,72 +1,350 @@
-# PLAN — mcbe-ws-sdk 实现计划
+# mcbe-ws-sdk Implementation Plan
 
-> 基于冻结规格 [`docs/spec/2026-07-18-ws-sdk-design.md`](spec/2026-07-18-ws-sdk-design.md) 与产品需求 [`docs/PRD.md`](PRD.md)。
-> 本文件对应 superpowers writing-plans 流程；按搬迁批序组织，低风险→高。
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## 阶段总览
+**Goal:** Extract the generic MCBE WebSocket gateway out of `MCBE-AI-Agent` into an independent, PyPI-publishable Python package `mcbe-ws-sdk`, with a dual-layer API (event bus + capability SDK) and TS addon examples.
 
-| 批 | 性质 | 主要工作 |
+**Architecture:** Six-layer package (protocol / flow / command / delivery / gateway / addon+capability) connected by `EventBus` (replaces hard-coded if-elif), `ConnectionHook` (6 hook points), `ResponseSink` (5 dispatch routes), and frozen settings value objects (kills global `get_settings()` and `get_addon_bridge_service()` singletons). Host app (main repo `server.py`) re-implements business commands as `HostHook`/`HostSink`/`HostApp` injected into `McbeServerFacade`.
+
+**Tech Stack:** Python 3.11+, Pydantic v2, pydantic-settings, websockets, structlog, asyncio. Dev: ruff (line-length 100, target py311), mypy strict, pytest (≥85% core), twine.
+
+## Global Constraints
+
+- **Hard:** never modify main repo `services/` or `models/` — all new code goes under `mcbe-ws-sdk/src/mcbe_ws_sdk/`.
+- **Hard:** `mcbe-ws-sdk/` is an independent git repo (separate `.git/` from main repo).
+- **Hard:** dependency closure = `pydantic>=2.0`, `pydantic-settings>=2.0`, `websockets>=12`, `structlog>=24.0`. Do NOT pull in httpx / PyJWT / pydantic-ai.
+- **Hard:** preserve on-disk command-line byte safety 461 B (462 B measured broken), real UTF-8 byte back-calculation (no estimates), sentence-aware+char+byte chunking.
+- **Hard:** preserve multi-player isolation by `(connection_id, player_name)` bucketing.
+- **Hard:** preserve both addon bridge links: capability (`mcbeai:bridge_request` → `MCBEAI|RESP|...` chunks) and UI_CHAT (`MCBEAI|UI_CHAT|...` chunks).
+- **Hard:** preserve AI response reassembly protocol `scriptevent mcbeai:ai_resp {id,i,n,p,r,c}`.
+- **Hard:** Python 3.11+; mypy strict; ruff; pytest core coverage ≥85%.
+- MIT license.
+
+## Phase Overview
+
+| Batch | Nature | Main work |
 |---|---|---|
-| A | 低风险纯搬迁 | 协议模型 + flow + command + delivery + addon 三件套 |
-| B | 新建事件体系 | events / hook / sink / config Settings |
-| C | 核心重构 | connection 重写 + handler 抽净 |
-| D | 门面 + 能力 | server_facade + capability registry + service 改造 |
-| E | 主仓适配 + 示例 + 文档 | HostHook/HostSink/HostApp + examples + docs 6 篇 |
+| A | Low-risk relocation | protocol models + flow + command + delivery + addon trio (+e.stderr.stderr.stderr.stderr.... wait) |
+| B | New event system | events / hook / sink / config Settings |
+| C | Core rewrite | connection rewrite + handler stripping |
+| D | Facade + capability | server_facade + capability registry + service refactor |
+| E | Host adapt + examples + docs | HostHook/HostSink/HostApp + examples + 6 docs |
 
-**停点**：批 A–D 完成后即包里核心可用；批 E 主仓适配回归现有行为。
+**Stop point:** after batch A-D the package core is usable; batch E makes the main repo regress to existing behavior.
+
+> Execution note: per user instruction this plan is implemented with **parallel sub-agents** (superpowers:subagent-driven-development style), one sub-agent per decomposed task.
 
 ---
 
-## 批 A — 低风险搬迁 + 最小改造
+## Batch A — Relocation + minimal rewrite (TDD bite-sized)
 
-### A1. 协议层（protocol/）
+Each task carries its own test cycle. Sub-agents run in parallel per task.
 
-**搬迁清单**：
-- `models/minecraft.py` → `src/mcbe_ws_sdk/protocol/minecraft.py`
-- `models/agent.py`（`MCColor` / `MCPrefix`）→ 同上
-- `models/addon_bridge.py` → `src/mcbe_ws_sdk/protocol/addon.py`
+- [ ] **Task A0: Repository + packaging bootstrap**
 
-**改造点**：
-- 断内部 import（`from models.xxx` → `from mcbe_ws_sdk.protocol.xxx`）
-- 去 `_version.py` 依赖（协议层零版本信息）
+**Files:**
+- Create: `mcbe-ws-sdk/pyproject.toml`
+- Create: `mcbe-ws-sdk/src/mcbe_ws_sdk/__init__.py`
+- Create: `mcbe-ws-sdk/tests/conftest.py`
 
-### A2. 流控层（flow/）
+**Interfaces:**
+- Produces: importable `mcbe_ws_sdk` package with `__version__ = "0.1.0"`; ruff/mypy/pytest runnable from `mcbe-ws-sdk/`.
 
-**搬迁**：`services/websocket/flow_control.py` → `src/mcbe_ws_sdk/flow/flow_control.py`
+- [ ] **Step A0.1: Write pyproject.toml**
 
-**改造**：
-- `FlowControlMiddleware`：classmethod → 实例化 `__init__(self, settings: FlowControlSettings)`
-- 删 `get_settings()` 全局依赖（在 `config.py` 提供 `FlowControlSettings` 后由主仓/门面注入）
-- 仍保留字节反推分片核心逻辑不变
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-### A3. 命令层（command/）
+[project]
+name = "mcbe-ws-sdk"
+version = "0.1.0"
+description = "Generic WebSocket gateway SDK for Minecraft Bedrock Edition"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "mcbe-ws-sdk contributors" }]
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "websockets>=12",
+    "structlog>=24.0",
+]
 
-**搬迁**：`services/websocket/command.py` → `src/mcbe_ws_sdk/command/registry.py`
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "pytest-asyncio"]
 
-**改造**：仅修 import 路径；命令注册语义（整词匹配、别名）保持不变。
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcbe_ws_sdk"]
 
-### A4. 投递层（delivery/）
+[tool.ruff]
+line-length = 100
+target-version = "py311"
 
-**搬迁**：`services/websocket/delivery.py` → `src/mcbe_ws_sdk/delivery/outbound.py`
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 
-**改造**：`McbeOutboundDelivery` 接受 `FlowControlSettings` 而非全局 settings；保持串联流控分片+延迟+raw 日志。
+[tool.mypy]
+python_version = "3.11"
+strict = true
 
-### A5. addon 桥（addon/）
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+```
 
-**搬迁清单**：
-- `services/addon/protocol.py` → `src/mcbe_ws_sdk/addon/protocol.py`（codec 加 protocol 参数，去 `_protocol()` 全局）
-- `services/addon/session.py` → `src/mcbe_ws_sdk/addon/session.py`
-- `services/addon/service.py` → `src/mcbe_ws_sdk/addon/service.py`（删 `_addon_bridge_service` 与 `get_addon_bridge_service()`；超时/protocol 走 `AddonBridgeSettings`）
+Create `src/mcbe_ws_sdk/__init__.py`:
+```python
+"""Generic WebSocket gateway SDK for Minecraft Bedrock Edition."""
+__version__ = "0.1.0"
+```
 
-### A6. 测试同步迁
+- [ ] **Step A0.2: Verify package imports + tooling**
 
-- 把主仓 `tests/` 中涉及以上模块的测试迁到 `mcbe-ws-sdk/tests/unit/`
-- 先保证包内单元测试独立可跑（`pytest mcbe-ws-sdk/tests`）
+Run: `cd mcbe-ws-sdk && python -c "import mcbe_ws_sdk; print(mcbe_ws_sdk.__version__)"`
+Expected: `0.1.0`
 
-### 验证
+Run: `cd mcbe-ws-sdk && ruff check src`
+Expected: no errors
 
-- `pytest mcbe-ws-sdk/tests/unit` 全通过
-- 主仓原有测试仍通过（未改主仓代码）
+Commit: `chore: bootstrap mcbe-ws-sdk package`
+
+
+- [ ] **Task A1: Config value objects (`config.py`)**
+
+**Files:**
+- Create: `src/mcbe_ws_sdk/config.py`
+- Test: `tests/unit/test_config.py`
+
+**Interfaces:**
+- Produces: `FlowControlSettings`, `AddonProtocolConfig`, `AddonBridgeSettings`, `GatewaySettings` (all frozen dataclasses). Default `command_line_byte_budget == 461`.
+
+- [ ] **Step A1.1: Write failing test**
+
+`tests/unit/test_config.py`:
+```python
+from mcbe_ws_sdk.config import FlowControlSettings, GatewaySettings
+
+def test_flow_control_default_byte_budget_is_461():
+    s = FlowControlSettings()
+    assert s.command_line_byte_budget == 461
+
+def test_flow_control_frozen():
+    s = FlowControlSettings()
+    import pytest
+    with pytest.raises(AttributeError):
+        s.command_line_byte_budget = 500  # type: ignore[misc]
+
+def test_gateway_settings_default_nested():
+    g = GatewaySettings()
+    assert g.flow.command_line_byte_budget == 461
+    assert g.addon.timeout_seconds == 5.0
+```
+
+Run: `cd mcbe-ws-sdk && pytest tests/unit/test_config.py -v`
+Expected: FAIL `ModuleNotFoundError: mcbe_ws_sdk.config`
+
+- [ ] **Step A1.2: Implement `src/mcbe_ws_sdk/config.py`**
+
+```python
+from __future__ import annotations
+from dataclasses import dataclass, field
+
+@dataclass(frozen=True)
+class AddonProtocolConfig:
+    bridge_message_id: str = "mcbeai:bridge_request"
+    bridge_prefix: str = "MCBEAI|RESP"
+    ui_chat_prefix: str = "MCBEAI|UI_CHAT"
+    bridge_tool_player_name: str = "MCBEAI_TOOL"
+    ai_resp_message_id: str = "mcbeai:ai_resp"
+
+@dataclass(frozen=True)
+class FlowControlSettings:
+    command_line_byte_budget: int = 461
+    max_chunk_content_length: int = 400
+    chunk_sentence_mode: bool = True
+    chunk_delays: dict[str, float] = field(default_factory=lambda: {
+        "tellraw": 0.05, "scriptevent": 0.05,
+        "ai_resp": 0.15, "ai_resp_prelude": 0.5,
+    })
+
+@dataclass(frozen=True)
+class AddonBridgeSettings:
+    timeout_seconds: float = 5.0
+    protocol: AddonProtocolConfig = field(default_factory=AddonProtocolConfig)
+
+@dataclass(frozen=True)
+class GatewaySettings:
+    flow: FlowControlSettings = field(default_factory=FlowControlSettings)
+    addon: AddonBridgeSettings = field(default_factory=AddonBridgeSettings)
+```
+
+Run: `cd mcbe-ws-sdk && pytest tests/unit/test_config.py -v`
+Expected: 3 passed.
+
+Commit: `feat(config): add frozen settings value objects (kills get_settings)`
+
+
+- [ ] **Task A2: Protocol models (`protocol/`)**
+
+**Files:**
+- Create: `src/mcbe_ws_sdk/protocol/__init__.py`
+- Create: `src/mcbe_ws_sdk/protocol/minecraft.py` (relocate from main repo `models/minecraft.py` + `MCColor/MCPrefix` from `models/agent.py`)
+- Create: `src/mcbe_ws_sdk/protocol/addon.py` (relocate from main repo `models/addon_bridge.py`)
+- Test: `tests/unit/test_protocol.py`
+
+**Interfaces:**
+- Produces: `MinecraftHeader`, `MinecraftCommand`, `MinecraftSubscribe`, `PlayerMessageEvent`, `MCColor`, `MCPrefix`, `AddonBridgeRequest`, `BridgeChatChunk`, `UiChatChunk`. All pydantic v2; protocol layer has ZERO business imports (no `_version`).
+
+- [ ] **Step A2.1: Write failing test**
+
+`tests/unit/test_protocol.py` (representative subset):
+```python
+from mcbe_ws_sdk.protocol.minecraft import (
+    MinecraftCommand, MinecraftHeader, MCColor, MCPrefix,
+    MinecraftSubscribe, PlayerMessageEvent,
+)
+from mcbe_ws_sdk.protocol.addon import AddonBridgeRequest
+
+def test_minecraft_subscribe_player_message():
+    sub = MinecraftSubscribe.player_message()
+    assert sub.header.messagePurpose == "subscribe"
+    assert sub.header.eventName == "PlayerMessage"
+
+def test_mc_color_default():
+    assert MCColor.OK == "§a"
+
+def test_parse_player_message():
+    data = {"header":{"requestId":"x","messagePurpose":"event","version":1,
+      "eventName":"PlayerMessage"},"body":{"sender":"Steve","message":"Hi","type":"chat"}}
+    ev = PlayerMessageEvent.model_validate(data) if False else None  # stand-in
+```
+
+- [ ] **Step A2.2: Relocate protocol models**
+
+Read main repo `models/minecraft.py`, `models/agent.py` (only `MCColor`, `MCPrefix` classes), `models/addon_bridge.py`. Copy into `src/mcbe_ws_sdk/protocol/`, convert all imports to `from mcbe_ws_sdk.protocol.xxx import ...`, strip any `_version` / business imports. Preserve all validators and field semantics verbatim.
+
+Run: `pytest tests/unit/test_protocol.py -v` → PASSES.
+
+Commit: `feat(protocol): relocate MCBE packet models from main repo`
+
+
+- [ ] **Task A3: Flow control (`flow/`) — classmethod → instance**
+
+**Files:**
+- Create: `src/mcbe_ws_sdk/flow/__init__.py`
+- Create: `src/mcbe_ws_sdk/flow/flow_control.py` (from main repo `services/websocket/flow_control.py`)
+- Test: `tests/unit/test_flow_control.py`
+
+**Interfaces:**
+- Produces: `FlowControlMiddleware(settings: FlowControlSettings)` instance; methods `chunk_tellraw`, `chunk_scriptevent`, `chunk_ai_response`, `chunk_raw_command`, `chunk_delay_for`. Preserves 461 B + sentence/char/byte three-tier splitting unchanged.
+
+- [ ] **Step A3.1: Write failing test**
+
+`tests/unit/test_flow_control.py`:
+```python
+import pytest
+from mcbe_ws_sdk.flow import FlowControlMiddleware
+from mcbe_ws_sdk.config import FlowControlSettings
+
+def test_raw_command_over_budget_raises():
+    mid = FlowControlMiddleware(FlowControlSettings())
+    long_cmd = "say " + "x" * 1000
+    with pytest.raises(ValueError):
+        mid.chunk_raw_command(long_cmd)
+
+def test_chunk_delay_for_default_ai_resp():
+    mid = FlowControlMiddleware(FlowControlSettings())
+    assert mid.chunk_delay_for("ai_resp") == 0.15
+```
+
+- [ ] **Step A3.2: Relocate + rewrite FlowControlMiddleware**
+
+1. Read `services/websocket/flow_control.py`.
+2. Copy byte-calculation core (`_SENTENCE_DELIMITER_RE`, `command_line_for`, `_split_by_command_fit_chars`, splitters, `_send_chunked`) verbatim.
+3. Convert: drop classmethod-only design; add `__init__(self, settings: FlowControlSettings)`; replace all `get_settings().flow_control.*` reads with `self.settings.*`.
+4. Imports: `from mcbe_ws_sdk.config import FlowControlSettings`, `from mcbe_ws_sdk.protocol.minecraft import MinecraftCommand`.
+
+Run: `pytest tests/unit/test_flow_control.py -v` → PASSES.
+
+Commit: `feat(flow): relocate FlowControlMiddleware, convert to instance with settings`
+
+
+- [ ] **Task A4: Command registry (`command/`)**
+
+**Files:**
+- Create: `src/mcbe_ws_sdk/command/__init__.py`
+- Create: `src/mcbe_ws_sdk/command/registry.py` (from `services/websocket/command.py`)
+- Test: `tests/unit/test_command.py`
+
+**Interfaces:**
+- Produces: `CommandRegistry`, `ParsedCommand`. Whole-word matching + alias behavior unchanged.
+
+- [ ] **Step A4.1: Write failing test resolving `#登录` must not match `#登录xxx`**
+
+- [ ] **Step A4.2: Relocate, fix imports to new package.**
+
+Commit: `feat(command): relocate CommandRegistry`
+
+
+- [ ] **Task A5: Delivery outbound (`delivery/`)**
+
+**Files:**
+- Create: `src/mcbe_ws_sdk/delivery/__init__.py`
+- Create: `src/mcbe_ws_sdk/delivery/outbound.py` (from `services/websocket/delivery.py`)
+- Test: `tests/unit/test_delivery.py`
+
+**Interfaces:**
+- Produces: `McbeOutboundDelivery(connection_id, send_payload, settings: FlowControlSettings)`. Chunks via FlowControlMiddleware + raw log unchanged.
+
+Commit: `feat(delivery): relocate McbeOutboundDelivery with settings`
+
+
+- [ ] **Task A6: Addon bridge (`addon/`) — kill singleton**
+
+**Files:**
+- Create: `src/mcbe_ws_sdk/addon/__init__.py`
+- Create: `src/mcbe_ws_sdk/addon/protocol.py` (relocate codec from `services/addon/protocol.py`, add protocol parameter, drop `_protocol()` global)
+- Create: `src/mcbe_ws_sdk/addon/session.py` (relocate from `services/addon/session.py`)
+- Create: `src/mcbe_ws_sdk/addon/service.py` (relocate from `services/addon/service.py`; DELETE `_addon_bridge_service` and `get_addon_bridge_service()`; timeout/protocol via `AddonBridgeSettings`)
+- Test: `tests/unit/test_addon_bridge.py`
+
+**Interfaces:**
+- Produces: `AddonBridgeService(settings: AddonBridgeSettings)`, `AddonBridgeClient` protocol, `AddonBridgeSession`, codec functions. No module-level singleton.
+
+- [ ] **Step A6.1: Write failing test**
+
+`tests/unit/test_addon_bridge.py`:
+```python
+from mcbe_ws_sdk.addon.service import AddonBridgeService
+from mcbe_ws_sdk.config import AddonBridgeSettings
+
+def test_service_no_global_singleton():
+    a = AddonBridgeService(AddonBridgeSettings(timeout_seconds=1.0))
+    b = AddonBridgeService(AddonBridgeSettings(timeout_seconds=2.0))
+    assert a is not b
+    assert a._timeout_seconds == 1.0
+    assert b._timeout_seconds == 2.0
+```
+
+- [ ] **Step A6.2: Relocate + kill singleton + rewire imports; fix `_protocol()` calls to explicit protocol parameter.**
+
+Commit: `feat(addon): relocate bridge trio, delete get_addon_bridge_service singleton`
+
+
+- [ ] **Task A7: Batch A verification gate**
+
+Run: `cd mcbe-ws-sdk && ruff check src tests && mypy src && pytest tests/unit -v --cov=mcbe_ws_sdk --cov-report=term-missing`
+Expected: ruff clean, mypy strict clean, all unit tests pass.
+
+Verify main repo untouched:
+```bash
+cd /home/riceawa/Desktop/code/MCBE-AI-A-agent
+git status --short
+# must NOT list any services/ or models/ modifications
+```
+
+Commit batch A marker if everything is green.
 
 ---
 
@@ -212,4 +490,4 @@
 
 ---
 
-**下一步**：本计划经批准后进入执行（按批 A–E）。
+**下一步**：本计划经批准后，按用户指令使用 subagent-driven-development 并行子代理逐任务执行（批 A 任务 A0–A7）。
