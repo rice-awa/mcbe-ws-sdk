@@ -167,5 +167,33 @@ class DefaultResponseSink:
                 await self.on_run_command(state, envelope.payload)
             case ResponseKind.AI_RESPONSE_SYNC:
                 await self.on_ai_response_sync(state, envelope.payload)
-            case other:  # pragma: no cover - exhaustiveness guard
-                raise TypeError(f"Unknown response kind: {other}")
+class SilentResponseSink(DefaultResponseSink):
+    """Facade default sink: logs + no-ops on the three command routes.
+
+    A host that injects only a :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook`
+    (and relies on the gateway default ``sink``) must never crash on outbound
+    command messages — but :class:`DefaultResponseSink` raises
+    :class:`NotImplementedError` on ``GAME_MESSAGE`` / ``RUN_COMMAND`` /
+    ``AI_RESPONSE_SYNC``. This subclass mirrors :class:`NoOpHook`: it logs a
+    warning (once per call, with the kind) and returns ``None`` instead of
+    raising, so a naive host gets visible-but-safe behaviour. The two render
+    routes are inherited unchanged.
+    """
+
+    async def on_game_message(self, state: ConnectionState, payload: dict[str, Any]) -> None:
+        logger.warning(
+            "silent_sink_game_message_unhandled",
+            connection_id=str(state.id),
+        )
+
+    async def on_run_command(self, state: ConnectionState, payload: dict[str, Any]) -> None:
+        logger.warning(
+            "silent_sink_run_command_unhandled",
+            connection_id=str(state.id),
+        )
+
+    async def on_ai_response_sync(self, state: ConnectionState, payload: dict[str, Any]) -> None:
+        logger.warning(
+            "silent_sink_ai_response_sync_unhandled",
+            connection_id=str(state.id),
+        )
