@@ -15,11 +15,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from mcbe_ws_sdk._logging import get_logger
-from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.messages import StreamChunk, SystemNotification
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.gateway.connection import ConnectionState
 
 logger = get_logger(__name__)
 

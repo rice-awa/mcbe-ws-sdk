@@ -1,0 +1,92 @@
+"""Tests for the relocated MCBE protocol handler (handler.py)."""
+
+from __future__ import annotations
+
+import pytest
+
+from mcbe_ws_sdk.command import CommandRegistry
+from mcbe_ws_sdk.gateway.handler import (
+    MessageSurfaceConfig,
+    MinecraftProtocolHandler,
+    TellrawMessage,
+)
+
+
+def _registry() -> CommandRegistry:
+    return CommandRegistry(
+        {
+            "#登录": "login",
+            "AGENT 聊天": {
+                "type": "chat",
+                "aliases": ["AI 聊天"],
+                "description": "与 AI 对话",
+                "usage": "<内容>",
+            },
+            "帮助": {"type": "help", "aliases": ["?"], "description": "显示帮助", "usage": None},
+        }
+    )
+
+
+def test_create_subscribe_message_is_player_message() -> None:
+    payload = MinecraftProtocolHandler.create_subscribe_message()
+    assert '"messagePurpose":"subscribe"' in payload.replace(" ", "")
+    assert '"eventName":"PlayerMessage"' in payload.replace(" ", "")
+
+
+def test_parse_player_message_happy_path() -> None:
+    data = {
+        "header": {"requestId": "x", "messagePurpose": "event", "eventName": "PlayerMessage"},
+        "body": {"sender": "Steve", "message": "hi", "type": "chat"},
+    }
+    event = MinecraftProtocolHandler.parse_player_message(data)
+    assert event is not None
+    assert event.sender == "Steve"
+    assert event.message == "hi"
+
+
+def test_parse_player_message_ignores_non_player_message() -> None:
+    data = {"header": {"eventName": "CommandResponse"}, "body": {}}
+    assert MinecraftProtocolHandler.parse_player_message(data) is None
+
+
+def test_create_welcome_message_uses_help_prefix() -> None:
+    handler = MinecraftProtocolHandler(_registry())
+    welcome = handler.create_welcome_message(
+        connection_id="abc12345",
+        model="deepseek-chat",
+        provider="deepseek",
+        context_enabled=True,
+    )
+    assert "abc1234" in welcome  # truncated id
+    assert "deepseek/deepseek-chat" in welcome
+    assert "帮助" in welcome
+
+
+def test_parse_typed_command_whole_word_matching() -> None:
+    handler = MinecraftProtocolHandler(_registry())
+    # Prefix alone resolves; prefix without trailing space on a longer message
+    # must NOT resolve (whole-word rule is the registry's job).
+    assert handler.parse_typed_command("AGENT 聊天 你好") is not None
+    assert handler.parse_typed_command("#登录密码123") is None  # no following space
+
+
+def test_get_help_text_lists_commands_and_hides_login() -> None:
+    handler = MinecraftProtocolHandler(_registry())
+    help_text = handler.get_help_text()
+    assert "与 AI 对话" in help_text
+    assert "显示帮助" in help_text
+    assert "#登录" not in help_text
+
+
+def test_message_renderers_use_surface_prefix_and_color() -> None:
+    handler = MinecraftProtocolHandler(_registry())
+    assert handler.create_error_message("boom") == TellrawMessage(
+        text="❌ 错误: boom", color="§c"
+    )
+    assert handler.create_success_message("ok") == TellrawMessage(text="✅ ok", color="§a")
+    assert handler.create_info_message("hi") == TellrawMessage(text="ℹ hi", color="§b")
+
+
+def test_surface_is_frozen() -> None:
+    with pytest.raises(AttributeError):
+        MessageSurfaceConfig().error_color = "§0"  # type: ignore[misc]
