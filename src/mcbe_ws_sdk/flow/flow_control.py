@@ -1,5 +1,7 @@
 """统一流控中间件：将所有出站长文本分片为安全大小的 Minecraft 命令。"""
 
+from __future__ import annotations
+
 import json
 import re
 import uuid
@@ -18,6 +20,17 @@ class FlowControlMiddleware:
     def __init__(self, settings: FlowControlSettings) -> None:
         self.settings = settings
 
+    @property
+    def _byte_budget(self) -> int:
+        """MCBE commandLine 实测安全字节上限。
+
+        数据来源: 自动递增压力测试 (200B→512B, step 1B, interval 0ms, 222 包)
+          最大成功 commandLine: 461 B
+          首次失败 commandLine: 462 B
+        取 461 为硬上限；超过此值 server 会拒绝 commandRequest
+        """
+        return self.settings.command_line_byte_budget
+
     def chunk_delay_for(self, kind: str) -> float:
         """返回指定分片场景的分片间延迟（秒）。
 
@@ -26,10 +39,17 @@ class FlowControlMiddleware:
         """
         return self.settings.chunk_delays.get(kind, 0.0)
 
+    def _get_max_length(self, max_length: int | None) -> int:
+        """获取有效的最大长度值。"""
+        if max_length is None or max_length <= 0:
+            return self.settings.max_chunk_content_length
+        return max_length
+
     def chunk_tellraw(
         self,
         message: str,
         color: str = "§a",
+        max_length: int | None = None,
         target: str = "@a",
     ) -> list[str]:
         """将长 tellraw 消息分片为多个 commandRequest JSON 字符串列表。
@@ -41,13 +61,16 @@ class FlowControlMiddleware:
         if not message:
             return []
 
-        text_parts = self._split_tellraw_text(message, color=color, target=target)
+        max_len = self._get_max_length(max_length)
+        text_parts = self._split_tellraw_text(
+            message, color=color, target=target, max_length=max_len
+        )
 
         payloads: list[str] = []
         for part in text_parts:
             command = MinecraftCommand.create_tellraw(part, color=color, target=target)
             payload = command.model_dump_json(exclude_none=True)
-            _assert_byte_safe(payload, self.settings.command_line_byte_budget)
+            self._assert_byte_safe(payload)
             payloads.append(payload)
         return payloads
 
@@ -55,6 +78,7 @@ class FlowControlMiddleware:
         self,
         content: str,
         message_id: str = "server:data",
+        max_length: int | None = None,
     ) -> list[str]:
         """将长 scriptevent payload 分片为多个 commandRequest JSON 字符串列表。
 
@@ -68,8 +92,10 @@ class FlowControlMiddleware:
         if not content:
             return []
 
+        max_len = self._get_max_length(max_length)
         text_parts = self._split_by_command_fit(
             content,
+            max_len,
             lambda part: MinecraftCommand.create_scriptevent(part, message_id).body.commandLine,
         )
 
@@ -77,11 +103,11 @@ class FlowControlMiddleware:
         for part in text_parts:
             command = MinecraftCommand.create_scriptevent(part, message_id)
             payload = command.model_dump_json(exclude_none=True)
-            _assert_byte_safe(payload, self.settings.command_line_byte_budget)
+            self._assert_byte_safe(payload)
             payloads.append(payload)
         return payloads
 
-    def chunk_raw_command(self, command: str) -> list[str]:
+    def chunk_raw_command(self, command: str, max_length: int | None = None) -> list[str]:
         """包装原始命令为 commandRequest JSON 列表（始终返回单元素）。
 
         原始命令不能在动词之外的位置被截断，否则后续分片会成为非法命令。
@@ -89,7 +115,7 @@ class FlowControlMiddleware:
         """
         cmd = MinecraftCommand.create_raw(command)
         payload = cmd.model_dump_json(exclude_none=True)
-        budget = self.settings.command_line_byte_budget
+        budget = self._byte_budget
         command_line_bytes = len(cmd.body.commandLine.encode("utf-8"))
         if command_line_bytes > budget:
             raise ValueError(
@@ -104,6 +130,7 @@ class FlowControlMiddleware:
         player_name: str,
         role: str,
         text: str,
+        max_length: int | None = None,
     ) -> list[str]:
         """将 AI 响应编码为 scriptevent 分片命令列表。
 
@@ -112,6 +139,7 @@ class FlowControlMiddleware:
         空文本仍发送 1 条空载荷以保留 total ≥ 1 的契约。
         commandLine 字节数 ≤ 461 B（MCBE 实测安全上限）。
         """
+        max_len = self._get_max_length(max_length)
         msg_id = f"resp-{uuid.uuid4().hex[:8]}"
 
         text_parts = [text] if text else [""]
@@ -122,6 +150,7 @@ class FlowControlMiddleware:
                 refined_parts.extend(
                     self._split_ai_response_text(
                         part,
+                        max_len,
                         msg_id=msg_id,
                         player_name=player_name,
                         role=role,
@@ -148,7 +177,7 @@ class FlowControlMiddleware:
                 content=content,
             )
             payload = cmd.model_dump_json(exclude_none=True)
-            _assert_byte_safe(payload, self.settings.command_line_byte_budget)
+            self._assert_byte_safe(payload)
             payloads.append(payload)
 
         return payloads
@@ -179,6 +208,7 @@ class FlowControlMiddleware:
     def _split_ai_response_text(
         self,
         text: str,
+        max_length: int,
         *,
         msg_id: str,
         player_name: str,
@@ -187,6 +217,7 @@ class FlowControlMiddleware:
     ) -> list[str]:
         return self._split_by_command_fit(
             text,
+            max_length,
             lambda part: self._create_ai_response_command(
                 msg_id=msg_id,
                 index=total_hint,
@@ -202,10 +233,12 @@ class FlowControlMiddleware:
         text: str,
         color: str,
         target: str,
+        max_length: int,
     ) -> list[str]:
         """按最终 create_tellraw commandLine 的真实 UTF-8 字节数切分文本。"""
         return self._split_by_command_fit(
             text,
+            max_length,
             lambda part: MinecraftCommand.create_tellraw(
                 part, color=color, target=target
             ).body.commandLine,
@@ -218,6 +251,7 @@ class FlowControlMiddleware:
     def _split_by_command_fit(
         self,
         text: str,
+        max_length: int,
         command_line_for: Callable[[str], str],
         *,
         error_message: str = "command wrapper exceeds byte budget; no room for content",
@@ -230,7 +264,7 @@ class FlowControlMiddleware:
         buffer = ""
         for part in self._semantic_parts(text):
             tentative = buffer + part
-            if _command_part_fits(tentative, self.settings, command_line_for):
+            if self._command_part_fits(tentative, max_length, command_line_for):
                 buffer = tentative
                 continue
 
@@ -238,14 +272,14 @@ class FlowControlMiddleware:
                 chunks.append(buffer)
                 buffer = ""
 
-            if _command_part_fits(part, self.settings, command_line_for):
+            if self._command_part_fits(part, max_length, command_line_for):
                 buffer = part
                 continue
 
             chunks.extend(
-                _split_by_command_fit_chars(
+                self._split_by_command_fit_chars(
                     part,
-                    self.settings,
+                    max_length,
                     command_line_for,
                     error_message=error_message,
                 )
@@ -276,58 +310,163 @@ class FlowControlMiddleware:
                 sentences.append(combined)
         return sentences if sentences else [""]
 
-
-def _command_part_fits(
-    part: str,
-    settings: FlowControlSettings,
-    command_line_for: Callable[[str], str],
-) -> bool:
-    if len(part) > settings.max_chunk_content_length:
-        return False
-    return len(command_line_for(part).encode("utf-8")) <= settings.command_line_byte_budget
-
-
-def _split_by_command_fit_chars(
-    text: str,
-    settings: FlowControlSettings,
-    command_line_for: Callable[[str], str],
-    *,
-    error_message: str,
-) -> list[str]:
-    chunks: list[str] = []
-    buffer = ""
-    for ch in text:
-        tentative = buffer + ch
-        if _command_part_fits(tentative, settings, command_line_for):
-            buffer = tentative
-            continue
+    def _split_by_command_fit_chars(
+        self,
+        text: str,
+        max_length: int,
+        command_line_for: Callable[[str], str],
+        *,
+        error_message: str,
+    ) -> list[str]:
+        chunks: list[str] = []
+        buffer = ""
+        for ch in text:
+            tentative = buffer + ch
+            if self._command_part_fits(tentative, max_length, command_line_for):
+                buffer = tentative
+                continue
+            if buffer:
+                chunks.append(buffer)
+                buffer = ch
+                if self._command_part_fits(buffer, max_length, command_line_for):
+                    continue
+            raise ValueError(error_message)
         if buffer:
             chunks.append(buffer)
-            buffer = ch
-            if _command_part_fits(buffer, settings, command_line_for):
+        return chunks if chunks else [""]
+
+    def _command_part_fits(
+        self,
+        part: str,
+        max_length: int,
+        command_line_for: Callable[[str], str],
+    ) -> bool:
+        return len(part) <= max_length and self._command_line_fits(command_line_for(part))
+
+    def _command_line_fits(self, command_line: str) -> bool:
+        return len(command_line.encode("utf-8")) <= self._byte_budget
+
+    def _split_text(
+        self,
+        text: str,
+        max_length: int,
+        byte_budget: int | None = None,
+    ) -> list[str]:
+        """语义分片核心：按句子分片 + 字符上限 + 字节上限三重约束。
+
+        max_length: 单分片字符数上限（向后兼容入参语义）。
+        byte_budget: 单分片 UTF-8 字节数上限。默认按 tellraw 包装开销推导，
+            chunk_* 方法应显式传入对应场景的预算以获得最大有效载荷。
+        sentence_mode=False 时跳过语义合并，仍受双重约束。
+        """
+        if byte_budget is None:
+            byte_budget = self._byte_budget
+
+        if not text:
+            return [""]
+
+        if not self.settings.chunk_sentence_mode:
+            return self._chunk_by_limits(text, max_length, byte_budget)
+
+        # 按分隔符拆分，保留分隔符
+        parts = _SENTENCE_DELIMITER_RE.split(text)
+
+        # 将文本段与后续分隔符重新组合
+        sentences: list[str] = []
+        i = 0
+        while i < len(parts):
+            segment = parts[i]
+            delimiter = (
+                parts[i + 1]
+                if i + 1 < len(parts)
+                and _SENTENCE_DELIMITER_RE.match(parts[i + 1])
+                else ""
+            )
+            combined = segment + delimiter if delimiter else segment
+            i += 2 if delimiter else 1
+            if combined:
+                sentences.append(combined)
+
+        if not sentences:
+            return [""]
+
+        # 合并短句：受字符上限 max_length 与字节预算 byte_budget 双重约束
+        merged: list[str] = []
+        buffer = ""
+        for sentence in sentences:
+            tentative = buffer + sentence
+            if (
+                len(tentative) <= max_length
+                and len(tentative.encode("utf-8")) <= byte_budget
+            ):
+                buffer = tentative
                 continue
-        raise ValueError(error_message)
-    if buffer:
-        chunks.append(buffer)
-    return chunks if chunks else [""]
 
+            if buffer:
+                merged.append(buffer)
 
-def _assert_byte_safe(payload: str, byte_budget: int) -> None:
-    """字节级兜底：分片后 commandLine 字节数必须 ≤ 实测安全预算。
+            # 单句若超出任一限制，按双重约束切碎
+            if (
+                len(sentence) > max_length
+                or len(sentence.encode("utf-8")) > byte_budget
+            ):
+                merged.extend(self._chunk_by_limits(sentence, max_length, byte_budget))
+                buffer = ""
+            else:
+                buffer = sentence
+        if buffer:
+            merged.append(buffer)
 
-    正常路径下 _split_by_command_fit 已在源头保证字节安全；此函数作为防御性校验，
-    若调用方绕过 chunk_* 直接构造命令时仍能尽早暴露问题。
-    """
-    try:
-        data = json.loads(payload)
-        command_line = data.get("body", {}).get("commandLine", "")
-    except (json.JSONDecodeError, AttributeError):
-        return
+        return merged if merged else [""]
 
-    byte_len = len(command_line.encode("utf-8"))
-    if byte_len > byte_budget:
-        raise ValueError(
-            f"chunked commandLine exceeds byte budget "
-            f"({byte_len} > {byte_budget}); "
-            "this indicates a bug in chunk splitting or wrapper overhead estimate"
-        )
+    @staticmethod
+    def _chunk_by_limits(
+        text: str, max_chars: int, max_bytes: int
+    ) -> list[str]:
+        """按字符上限和字节上限将文本切分，保证不切坏 UTF-8 多字节字符。"""
+        chunks: list[str] = []
+        current: list[str] = []
+        current_chars = 0
+        current_bytes = 0
+
+        for ch in text:
+            ch_bytes = len(ch.encode("utf-8"))
+            if (
+                current_chars + 1 > max_chars
+                or current_bytes + ch_bytes > max_bytes
+            ):
+                if current:
+                    chunks.append("".join(current))
+                current = [ch]
+                current_chars = 1
+                current_bytes = ch_bytes
+            else:
+                current.append(ch)
+                current_chars += 1
+                current_bytes += ch_bytes
+
+        if current:
+            chunks.append("".join(current))
+
+        return chunks if chunks else [""]
+
+    def _assert_byte_safe(self, payload: str) -> None:
+        """字节级兜底：分片后 commandLine 字节数必须 ≤ 实测安全预算。
+
+        正常路径下 _split_text 已在源头保证字节安全；此函数作为防御性校验，
+        若调用方绕过 chunk_* 直接构造命令时仍能尽早暴露问题。
+        """
+        try:
+            data = json.loads(payload)
+            command_line = data.get("body", {}).get("commandLine", "")
+        except (json.JSONDecodeError, AttributeError):
+            return
+
+        byte_len = len(command_line.encode("utf-8"))
+        budget = self._byte_budget
+        if byte_len > budget:
+            raise ValueError(
+                f"chunked commandLine exceeds byte budget "
+                f"({byte_len} > {budget}); "
+                "this indicates a bug in _split_text or wrapper overhead estimate"
+            )
