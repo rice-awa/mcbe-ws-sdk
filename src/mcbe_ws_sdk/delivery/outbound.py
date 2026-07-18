@@ -103,5 +103,5 @@ class McbeOutboundDelivery:
 
 
 def _request_id_from_payload(payload: str) -> str:
-    data = json.loads(payload)
-    return data["header"]["requestId"]
+    data: Any = json.loads(payload)
+    return str(data["header"]["requestId"])
