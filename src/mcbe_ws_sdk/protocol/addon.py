@@ -2,9 +2,43 @@
 
 from __future__ import annotations
 
+import json
+from json import JSONDecodeError
 from typing import Any
 
 from pydantic import BaseModel
+
+
+class AddonBridgeRequest(BaseModel):
+    """脱壳后的入站 addon 能力请求（解码自 ``scriptevent mcbeai:bridge_request``）。"""
+
+    request_id: str
+    capability: str
+    payload: dict[str, Any]
+
+
+def parse_addon_bridge_request(command_line: str, message_id: str) -> AddonBridgeRequest | None:
+    """Parse an inbound addon capability request out of a scriptevent commandLine.
+
+    Returns ``None`` when ``command_line`` is not a matching ``scriptevent``.
+    The JSON body is validated against :class:`AddonBridgeRequest`.
+    """
+    if not command_line.startswith("scriptevent "):
+        return None
+    rest = command_line[len("scriptevent "):]
+    if not rest.startswith(message_id):
+        return None
+    rest = rest[len(message_id):].lstrip()
+    try:
+        payload = json.loads(rest)
+    except JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return AddonBridgeRequest.model_validate(payload)
+    except ValueError:
+        return None
 
 
 class AddonBridgeChunk(BaseModel):

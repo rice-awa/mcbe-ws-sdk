@@ -32,6 +32,15 @@ class AddonBridgeSettings:
 
 
 @dataclass(frozen=True)
+class WebsocketTransportConfig:
+    """Transport knobs for the facade's ``websockets.serve`` lifetime."""
+
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+
+@dataclass(frozen=True)
 class GatewaySettings:
     flow: FlowControlSettings = field(default_factory=FlowControlSettings)
     addon: AddonBridgeSettings = field(default_factory=AddonBridgeSettings)
+    websocket: WebsocketTransportConfig = field(default_factory=WebsocketTransportConfig)
