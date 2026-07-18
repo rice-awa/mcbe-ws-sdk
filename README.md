@@ -28,14 +28,13 @@ from mcbe_ws_sdk import McbeServerFacade, ConnectionHook
 
 class MyHook(ConnectionHook):
     async def on_connected(self, state):
-        print("connected:", state)
+        print("connected:", state.id)
 
-    async def on_event(self, state, event):
-        if event.type.value == "player_message":
-            print("chat:", event.body.get("body"))
+    async def on_player_message(self, state, event):
+        print("chat:", event.message)
 
     async def on_disconnected(self, state):
-        print("disconnected:", state)
+        print("disconnected:", state.id)
 
 
 async def main() -> None:
@@ -71,8 +70,9 @@ also works).
 
 A host implements / injects these classes:
 
-- `ConnectionHook` (+ 7 hooks): `on_connected`, `on_event`, `on_command`,
-  `on_disconnected`, `on_player_joined`, `on_player_left`, `on_error`.
+- `ConnectionHook` (+ 7 hooks): `on_connected`, `on_authenticated`,
+  `on_disconnected`, `on_player_message`, `on_bridge_message`,
+  `on_ui_chat_reassembled`, `on_command_response`.
 - `ResponseSink` / `SilentResponseSink` / `DefaultResponseSink`: how outbound
   tellraw / scriptevent / AI-response payloads are delivered.
 - `AddonBridgeService` + `AddonBridgeClient`: the ScriptEvent bridge carrying

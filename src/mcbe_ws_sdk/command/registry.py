@@ -16,38 +16,18 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-#: Canonical MCBE command table the facade loads into its default
+#: Canonical command table the facade loads into its default
 #: :class:`CommandRegistry`. Whole-word prefixes (the registry matches a prefix
-#: only when it is the entire message or followed by whitespace), so
-#: ``#登录 123456`` resolves to the ``login`` command with content ``123456``.
-#: ``#登录`` is hidden from the help listing (the ``login`` type is skipped by
-#: :meth:`MinecraftProtocolHandler.get_help_text`).
+#: only when it is the entire message or followed by whitespace).
+#:
+#: This is intentionally the *neutral, transport-grade* command set — connection
+#: handshake (``#登录``, hidden from help) and the two gateway utilities the host
+#: drives via its :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook`
+#: (``运行命令`` to run a minecraft command, ``帮助`` for help). AI-specific
+#: commands (chat / script / context / model-switch) live in the *host*
+#: application's own registry, not the SDK default.
 DEFAULT_COMMANDS: dict[str, str | dict[str, Any]] = {
     "#登录": {"type": "login", "description": "登录"},
-    "AGENT 聊天": {
-        "type": "chat",
-        "aliases": ["AI 聊天"],
-        "description": "与 AI 对话",
-        "usage": "<内容>",
-    },
-    "AGENT 脚本": {
-        "type": "script",
-        "aliases": [],
-        "description": "使用 ScriptEvent 发送",
-        "usage": "<内容>",
-    },
-    "AGENT 上下文": {
-        "type": "context",
-        "aliases": [],
-        "description": "管理对话上下文",
-        "usage": "<开启|关闭|状态>",
-    },
-    "切换模型": {
-        "type": "switch_model",
-        "aliases": [],
-        "description": "切换 LLM 提供商",
-        "usage": "<提供商>",
-    },
     "运行命令": {
         "type": "run_command",
         "aliases": [],

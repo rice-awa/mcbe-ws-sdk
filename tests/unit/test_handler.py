@@ -16,11 +16,11 @@ def _registry() -> CommandRegistry:
     return CommandRegistry(
         {
             "#登录": "login",
-            "AGENT 聊天": {
-                "type": "chat",
-                "aliases": ["AI 聊天"],
-                "description": "与 AI 对话",
-                "usage": "<内容>",
+            "运行命令": {
+                "type": "run_command",
+                "aliases": [],
+                "description": "执行 Minecraft 命令",
+                "usage": "<命令>",
             },
             "帮助": {"type": "help", "aliases": ["?"], "description": "显示帮助", "usage": None},
         }
@@ -53,12 +53,8 @@ def test_create_welcome_message_uses_help_prefix() -> None:
     handler = MinecraftProtocolHandler(_registry())
     welcome = handler.create_welcome_message(
         connection_id="abc12345",
-        model="deepseek-chat",
-        provider="deepseek",
-        context_enabled=True,
     )
     assert "abc1234" in welcome  # truncated id
-    assert "deepseek/deepseek-chat" in welcome
     assert "帮助" in welcome
 
 
@@ -66,15 +62,15 @@ def test_parse_typed_command_whole_word_matching() -> None:
     handler = MinecraftProtocolHandler(_registry())
     # Prefix alone resolves; prefix without trailing space on a longer message
     # must NOT resolve (whole-word rule is the registry's job).
-    assert handler.parse_typed_command("AGENT 聊天 你好") is not None
+    assert handler.parse_typed_command("运行命令 help") is not None
     assert handler.parse_typed_command("#登录密码123") is None  # no following space
 
 
 def test_get_help_text_lists_commands_and_hides_login() -> None:
     handler = MinecraftProtocolHandler(_registry())
     help_text = handler.get_help_text()
-    assert "与 AI 对话" in help_text
     assert "显示帮助" in help_text
+    assert "执行 Minecraft 命令" in help_text
     assert "#登录" not in help_text
 
 

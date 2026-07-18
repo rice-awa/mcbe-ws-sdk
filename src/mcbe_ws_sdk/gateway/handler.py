@@ -61,12 +61,10 @@ class MessageSurfaceConfig:
 
     welcome_message_template: str = (
         "-----------\n"
-        "成功连接 MCBE AI Agent v{version}\n"
+        "已连接到 MCBE WebSocket 网关\n"
         "连接 ID: {connection_id}...\n"
-        "当前模型: {provider}/{model}\n"
-        "上下文: {context_status}\n"
-        "-----------\n"
-        '使用 "{help_command}" 查看可用命令'
+        '使用 "{help_command}" 查看可用命令\n'
+        "-----------"
     )
     context_enabled_text: str = "启用"
     context_disabled_text: str = "关闭"
@@ -103,23 +101,11 @@ class MinecraftProtocolHandler:
         self,
         *,
         connection_id: str,
-        model: str,
-        provider: str,
-        context_enabled: bool,
     ) -> str:
-        """Render the post-connect welcome banner (plain text; wrap in a message)."""
+        """Render the post-connect welcome banner (plain text; wrap a message)."""
         help_prefix = self.command_registry.get_command_prefix("help") or "帮助"
-        context_status = (
-            self.surface.context_enabled_text
-            if context_enabled
-            else self.surface.context_disabled_text
-        )
         return self.surface.welcome_message_template.format(
-            version="",
             connection_id=connection_id[:8],
-            provider=provider,
-            model=model,
-            context_status=context_status,
             help_command=help_prefix,
         )
 

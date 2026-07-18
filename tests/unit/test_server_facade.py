@@ -275,16 +275,16 @@ async def test_routes_command_through_handler_and_hook() -> None:
     facade = McbeServerFacade(hook=hook, sink=RecordingSink())
 
     await facade._on_connection(
-        FakeWebSocket(frames=[_player_message_frame("Alice", "AGENT 聊天 hello")]),
+        FakeWebSocket(frames=[_player_message_frame("Alice", "帮助 状态")]),
     )
 
     assert len(hook.player_messages) == 1
-    assert hook.player_messages[0].message == "AGENT 聊天 hello"
+    assert hook.player_messages[0].message == "帮助 状态"
     assert hook.player_messages[0].sender == "Alice"
     assert hook.bridge_requests == []  # not mistaken for a capability request
     # The command is registered in the default registry.
-    parsed = facade.handler.parse_typed_command("AGENT 聊天 hello")
-    assert parsed is not None and parsed.type == "chat"
+    parsed = facade.handler.parse_typed_command("帮助 状态")
+    assert parsed is not None and parsed.type == "help"
 
 
 # --------------------------------------------------------------------------- #
@@ -377,5 +377,4 @@ def test_default_facade_wiring_and_default_commands() -> None:
     assert isinstance(facade.manager.sink, SilentResponseSink)
     # Default registry loads the canonical command table.
     assert facade.handler.parse_typed_command("帮助") is not None
-    assert facade.handler.parse_typed_command("AGENT 聊天 hi").type == "chat"  # type: ignore[union-attr]
     assert "#登录" in DEFAULT_COMMANDS
