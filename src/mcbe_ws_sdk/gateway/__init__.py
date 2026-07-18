@@ -23,11 +23,13 @@ from mcbe_ws_sdk.gateway.handler import (
 )
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
 from mcbe_ws_sdk.gateway.messages import StreamChunk, SystemNotification
+from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.gateway.sink import (
     DefaultResponseSink,
     ResponseKind,
     ResponseSink,
     RouteEnvelope,
+    SilentResponseSink,
 )
 
 __all__ = [
@@ -37,6 +39,7 @@ __all__ = [
     "ConnectionState",
     "DefaultResponseSink",
     "EventBus",
+    "McbeServerFacade",
     "MessageSurfaceConfig",
     "MinecraftProtocolHandler",
     "NoOpHook",
@@ -45,6 +48,7 @@ __all__ = [
     "ResponseSink",
     "RouteEnvelope",
     "SendPayload",
+    "SilentResponseSink",
     "StreamChunk",
     "SystemNotification",
     "TellrawMessage",

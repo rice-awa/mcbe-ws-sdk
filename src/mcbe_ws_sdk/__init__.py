@@ -15,6 +15,12 @@ chunking are provided; the agent's LLM / message-broker concerns are the host's.
 """
 
 from mcbe_ws_sdk.addon import AddonBridgeClient, AddonBridgeService
+from mcbe_ws_sdk.capability import (
+    CapabilityContext,
+    CapabilityHandler,
+    CapabilityRegistry,
+    LoggingStubHandler,
+)
 from mcbe_ws_sdk.gateway import (
     DEFAULT_PLAYER_KEY,
     ConnectionHook,
@@ -22,6 +28,7 @@ from mcbe_ws_sdk.gateway import (
     ConnectionState,
     DefaultResponseSink,
     EventBus,
+    McbeServerFacade,
     MessageSurfaceConfig,
     MinecraftProtocolHandler,
     NoOpHook,
@@ -30,6 +37,7 @@ from mcbe_ws_sdk.gateway import (
     ResponseSink,
     RouteEnvelope,
     SendPayload,
+    SilentResponseSink,
     StreamChunk,
     SystemNotification,
     TellrawMessage,
@@ -42,6 +50,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "addon",
+    "capability",
     "gateway",
     "protocol",
     # protocol
@@ -60,6 +69,7 @@ __all__ = [
     "ConnectionState",
     "DefaultResponseSink",
     "EventBus",
+    "McbeServerFacade",
     "MessageSurfaceConfig",
     "MinecraftProtocolHandler",
     "NoOpHook",
@@ -68,8 +78,14 @@ __all__ = [
     "ResponseSink",
     "RouteEnvelope",
     "SendPayload",
+    "SilentResponseSink",
     "StreamChunk",
     "SystemNotification",
     "TellrawMessage",
     "WsEventType",
+    # capability
+    "CapabilityContext",
+    "CapabilityHandler",
+    "CapabilityRegistry",
+    "LoggingStubHandler",
 ]
