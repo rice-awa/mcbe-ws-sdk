@@ -18,14 +18,13 @@ from uuid import uuid4
 import structlog
 
 from mcbe_ws_sdk.addon.protocol import (
-    AddonBridgeChunk,
-    UiChatChunk,
     decode_bridge_chat_chunk,
     decode_ui_chat_chunk,
     reassemble_bridge_chunks,
     reassemble_ui_chat_chunks,
 )
 from mcbe_ws_sdk.config import AddonProtocolConfig
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk
 
 logger = structlog.get_logger(__name__)
 

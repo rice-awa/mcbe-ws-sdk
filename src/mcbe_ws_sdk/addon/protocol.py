@@ -18,45 +18,16 @@ import json
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
-
 from mcbe_ws_sdk.config import AddonProtocolConfig
+from mcbe_ws_sdk.protocol.addon import (
+    AddonBridgeChunk,
+    AddonBridgeResponse,
+    UiChatChunk,
+    UiChatMessage,
+)
 
 if TYPE_CHECKING:
     from mcbe_ws_sdk.flow.flow_control import FlowControlMiddleware
-
-
-class AddonBridgeChunk(BaseModel):
-    """A single bridge response fragment parsed from a chat message."""
-
-    request_id: str
-    chunk_index: int
-    total_chunks: int
-    content: str
-
-
-class AddonBridgeResponse(BaseModel):
-    """A fully reassembled bridge response."""
-
-    request_id: str
-    payload: dict[str, Any]
-
-
-class UiChatChunk(BaseModel):
-    """A single UI chat fragment parsed from a chat message."""
-
-    msg_id: str
-    chunk_index: int
-    total_chunks: int
-    content: str
-
-
-class UiChatMessage(BaseModel):
-    """A fully reassembled UI chat message."""
-
-    msg_id: str
-    player_name: str
-    message: str
 
 
 def _split_prefix(expected: str) -> tuple[str, str]:
