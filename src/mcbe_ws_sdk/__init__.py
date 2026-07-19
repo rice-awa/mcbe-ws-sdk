@@ -49,7 +49,7 @@ from mcbe_ws_sdk.gateway import (
     TellrawMessage,
     WsEventType,
 )
-from mcbe_ws_sdk.protocol.addon import AddonBridgeResponse
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import AddonBridgeResponse
 from mcbe_ws_sdk.protocol.minecraft import MCColor, MCPrefix, PlayerMessageEvent
 
 __version__ = "0.1.0"

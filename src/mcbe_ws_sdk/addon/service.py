@@ -8,10 +8,9 @@ Changes vs. the original:
   ``get_addon_bridge_service()`` factory. The service is constructed with an
   explicit :class:`AddonBridgeSettings` and any number of independent instances
   may coexist.
-* Timeout and protocol are taken from ``AddonBridgeSettings`` instead of a
+* Timeout and profile are taken from ``AddonBridgeSettings`` instead of a
   mutable global settings read.
-* ``is_bridge_chat_message`` / ``is_ui_chat_message`` use the configured protocol
-  rather than an implicit ``_protocol()`` global.
+* ``is_bridge_chat_message`` / ``is_ui_chat_message`` use the configured profile.
 """
 
 from __future__ import annotations
@@ -24,11 +23,15 @@ from uuid import UUID
 
 import structlog
 
-from mcbe_ws_sdk.addon.protocol import encode_bridge_request
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import BridgeTimeoutError
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_bridge_request
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+    AddonBridgeChunk,
+    UiChatChunk,
+    UiChatMessage,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -58,7 +61,7 @@ class AddonBridgeService:
         self._settings = settings
         self._sessions: dict[UUID, AddonBridgeSession] = {}
         self._timeout_seconds = settings.timeout_seconds
-        self._protocol = settings.protocol
+        self._profile = settings.profile
         self._ui_chat_callback: UiChatCallback | None = None
 
     def create_client(
@@ -83,7 +86,7 @@ class AddonBridgeService:
             request_id=request.request_id,
             capability=capability,
             payload=payload,
-            protocol=self._protocol,
+            profile=self._profile,
         )
         try:
             await send_command(command)
@@ -97,15 +100,15 @@ class AddonBridgeService:
     def is_bridge_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is an addon response fragment."""
         return (
-            sender == self._protocol.bridge_tool_player_name
-            and message.startswith(self._protocol.bridge_prefix)
+            sender == self._profile.bridge_sender
+            and message.startswith(self._profile.bridge_response_prefix)
         )
 
     def is_ui_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is a UI chat fragment."""
         return (
-            sender == self._protocol.bridge_tool_player_name
-            and message.startswith(self._protocol.ui_chat_prefix)
+            sender == self._profile.bridge_sender
+            and message.startswith(self._profile.ui_chat_prefix)
         )
 
     async def handle_player_message(

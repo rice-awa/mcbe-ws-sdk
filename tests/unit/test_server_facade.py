@@ -41,7 +41,11 @@ from mcbe_ws_sdk.gateway.sink import (
     RouteEnvelope,
     SilentResponseSink,
 )
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+    AddonBridgeChunk,
+    UiChatChunk,
+    UiChatMessage,
+)
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,

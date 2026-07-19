@@ -1,14 +1,21 @@
-"""Addon bridge protocol models."""
-
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+
+class AddonBridgeRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    v: Literal[2] = 2
+    request_id: str
+    capability: str
+    payload: dict[str, Any]
 
 
 class AddonBridgeChunk(BaseModel):
-    """Bridge response fragment parsed from addon chat."""
+    model_config = ConfigDict(extra="allow")
 
     request_id: str
     chunk_index: int
@@ -17,14 +24,14 @@ class AddonBridgeChunk(BaseModel):
 
 
 class AddonBridgeResponse(BaseModel):
-    """Reassembled bridge response."""
+    model_config = ConfigDict(extra="allow")
 
     request_id: str
     payload: dict[str, Any]
 
 
 class UiChatChunk(BaseModel):
-    """UI chat fragment parsed from addon chat."""
+    model_config = ConfigDict(extra="allow")
 
     msg_id: str
     chunk_index: int
@@ -33,7 +40,7 @@ class UiChatChunk(BaseModel):
 
 
 class UiChatMessage(BaseModel):
-    """Reassembled UI chat message."""
+    model_config = ConfigDict(extra="allow")
 
     msg_id: str
     player_name: str

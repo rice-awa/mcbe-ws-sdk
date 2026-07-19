@@ -1,5 +1,6 @@
 """Tests for the relocated MCBE protocol models."""
-from mcbe_ws_sdk.protocol.addon import (
+
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
     AddonBridgeChunk,
     AddonBridgeResponse,
     UiChatChunk,

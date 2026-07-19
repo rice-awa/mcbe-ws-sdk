@@ -3,7 +3,7 @@
 Verifies the key extraction invariants:
   * No module-level ``_addon_bridge_service`` singleton — two instances with
     different timeouts are independent.
-  * Codec round-trips with explicit ``AddonProtocolConfig``.
+  * Codec round-trips with the isolated legacy profile.
   * Session reassembles multi-fragment bridge responses and UI chat.
   * Service.request_capability drives the request/future lifecycle.
 """
@@ -15,22 +15,28 @@ from uuid import UUID
 
 import pytest
 
-from mcbe_ws_sdk.addon.protocol import (
-    AddonBridgeResponse,
-    decode_bridge_chat_chunk,
-    encode_bridge_request,
-    reassemble_bridge_chunks,
-)
 from mcbe_ws_sdk.addon.service import AddonBridgeService, AddonMessageResult
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
-from mcbe_ws_sdk.config import AddonBridgeSettings, AddonProtocolConfig
+from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import (
     BridgeClosedError,
     BridgeLimitError,
     BridgeTimeoutError,
     ProtocolError,
 )
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import (
+    AddonBridgeResponse,
+    decode_bridge_chat_chunk,
+    encode_bridge_request,
+    reassemble_bridge_chunks,
+)
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+    AddonBridgeChunk,
+    AddonBridgeRequest,
+    UiChatChunk,
+    UiChatMessage,
+)
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LegacyMcbeAiV1Profile
 
 
 def _complete_ui_chunk(player: str, message: str) -> str:
@@ -53,12 +59,11 @@ def test_two_instances_are_independent() -> None:
 
 
 def test_encode_then_decode_bridge_chunk_roundtrip() -> None:
-    protocol = AddonProtocolConfig()
-    cmd = encode_bridge_request("req-1", "get_greeting", {"player": "Steve"}, protocol=protocol)
+    cmd = encode_bridge_request("req-1", "get_greeting", {"player": "Steve"})
     assert cmd.startswith("scriptevent mcbeai:bridge_request ")
 
     chunk = "MCBEAI|RESP|req-1|1/2|hello"
-    parsed = decode_bridge_chat_chunk(chunk, protocol=protocol)
+    parsed = decode_bridge_chat_chunk(chunk)
     assert parsed.request_id == "req-1"
     assert parsed.chunk_index == 1
     assert parsed.total_chunks == 2
@@ -66,11 +71,10 @@ def test_encode_then_decode_bridge_chunk_roundtrip() -> None:
 
 
 def test_reassemble_bridge_chunks_parses_json_payload() -> None:
-    protocol = AddonProtocolConfig()
     # Reassembly joins fragments BEFORE JSON parse, so boundaries may split JSON.
     chunks = [
-        decode_bridge_chat_chunk('MCBEAI|RESP|r1|1/2|{"greet":"hi, ', protocol=protocol),
-        decode_bridge_chat_chunk('MCBEAI|RESP|r1|2/2|Steve"}', protocol=protocol),
+        decode_bridge_chat_chunk('MCBEAI|RESP|r1|1/2|{"greet":"hi, '),
+        decode_bridge_chat_chunk('MCBEAI|RESP|r1|2/2|Steve"}'),
     ]
     response = reassemble_bridge_chunks(chunks)
     assert isinstance(response, AddonBridgeResponse)
@@ -80,8 +84,7 @@ def test_reassemble_bridge_chunks_parses_json_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_session_reassembles_bridge_response() -> None:
-    protocol = AddonProtocolConfig()
-    session = AddonBridgeSession(AddonBridgeSettings(protocol=protocol))
+    session = AddonBridgeSession(AddonBridgeSettings())
     request = session.create_request(capability="get_greeting", payload={"player": "Steve"})
 
     rid = request.request_id
@@ -95,8 +98,7 @@ async def test_session_reassembles_bridge_response() -> None:
 
 
 def test_session_reassembles_ui_chat() -> None:
-    protocol = AddonProtocolConfig()
-    session = AddonBridgeSession(AddonBridgeSettings(protocol=protocol))
+    session = AddonBridgeSession(AddonBridgeSettings())
 
     first_chunk, first_message = session.handle_ui_chat_chunk(
         'MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
@@ -109,6 +111,63 @@ def test_session_reassembles_ui_chat() -> None:
     )
     assert isinstance(second_chunk, UiChatChunk)
     assert second_message == UiChatMessage(msg_id="m1", player_name="Steve", message="hello")
+
+
+def test_legacy_wire_models_preserve_unknown_fields() -> None:
+    request = AddonBridgeRequest.model_validate(
+        {
+            "v": 2,
+            "request_id": "r1",
+            "capability": "greet",
+            "payload": {"name": "Steve"},
+            "trace": "keep-me",
+        }
+    )
+    bridge_chunk = AddonBridgeChunk.model_validate(
+        {
+            "request_id": "r1",
+            "chunk_index": 1,
+            "total_chunks": 1,
+            "content": "{}",
+            "trace": "chunk-extra",
+        }
+    )
+    response = AddonBridgeResponse.model_validate(
+        {"request_id": "r1", "payload": {"ok": True}, "trace": "resp-extra"}
+    )
+    ui_chunk = UiChatChunk.model_validate(
+        {
+            "msg_id": "m1",
+            "chunk_index": 1,
+            "total_chunks": 1,
+            "content": "{\"player\":\"Steve\",\"message\":\"hi\"}",
+            "trace": "ui-extra",
+        }
+    )
+    ui_message = UiChatMessage.model_validate(
+        {
+            "msg_id": "m1",
+            "player_name": "Steve",
+            "message": "hi",
+            "trace": "msg-extra",
+        }
+    )
+
+    assert request.model_extra == {"trace": "keep-me"}
+    assert request.model_dump()["trace"] == "keep-me"
+    assert bridge_chunk.model_dump()["trace"] == "chunk-extra"
+    assert response.model_extra == {"trace": "resp-extra"}
+    assert response.model_dump()["trace"] == "resp-extra"
+    assert ui_chunk.model_extra == {"trace": "ui-extra"}
+    assert ui_chunk.model_dump()["trace"] == "ui-extra"
+    assert ui_message.model_extra == {"trace": "msg-extra"}
+    assert ui_message.model_dump()["trace"] == "msg-extra"
+
+
+def test_profile_can_override_bridge_request_message_id() -> None:
+    profile = LegacyMcbeAiV1Profile(bridge_request_message_id="custom:bridge")
+    command = encode_bridge_request("r1", "ping", {}, profile=profile)
+    assert command.startswith("scriptevent custom:bridge ")
 
 
 @pytest.mark.asyncio

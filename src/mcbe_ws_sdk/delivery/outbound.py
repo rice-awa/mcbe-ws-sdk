@@ -28,6 +28,10 @@ class McbeOutboundDelivery:
         self._send_payload = send_payload
         self._flow = FlowControlMiddleware(settings)
 
+    @property
+    def flow(self) -> FlowControlMiddleware:
+        return self._flow
+
     async def send_payload(self, payload: str, source: str) -> None:
         """发送已构造好的 payload，用于订阅、初始化等非长文本路径。"""
         await self._send_one(payload, source)
@@ -40,7 +44,7 @@ class McbeOutboundDelivery:
         target: str = "@a",
     ) -> int:
         """发送 tellraw 文本并返回实际 payload 数量。"""
-        payloads = self._flow.chunk_tellraw(message, color=color, target=target)
+        payloads = self.flow.chunk_tellraw(message, color=color, target=target)
         await self._send_chunked(payloads, "tellraw", source)
         return len(payloads)
 
@@ -51,7 +55,7 @@ class McbeOutboundDelivery:
         source: str = "scriptevent",
     ) -> int:
         """发送 scriptevent 文本并返回实际 payload 数量。"""
-        payloads = self._flow.chunk_scriptevent(content, message_id)
+        payloads = self.flow.chunk_scriptevent(content, message_id)
         await self._send_chunked(payloads, "scriptevent", source)
         return len(payloads)
 
@@ -62,7 +66,7 @@ class McbeOutboundDelivery:
         before_send: Callable[[str], None] | None = None,
     ) -> str:
         """发送不可语义分片的原始命令，超长时抛 ``FrameTooLargeError``。"""
-        payload = self._flow.chunk_raw_command(command)[0]
+        payload = self.flow.chunk_raw_command(command)[0]
         request_id = _request_id_from_payload(payload)
         if before_send is not None:
             before_send(request_id)
@@ -70,7 +74,7 @@ class McbeOutboundDelivery:
         return request_id
 
     async def _send_chunked(self, payloads: list[str], delay_kind: str, source: str) -> None:
-        chunk_delay = self._flow.chunk_delay_for(delay_kind)
+        chunk_delay = self.flow.chunk_delay_for(delay_kind)
         for idx, payload in enumerate(payloads):
             await self._send_one(
                 payload,

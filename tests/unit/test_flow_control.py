@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from mcbe_ws_sdk.config import FlowControlSettings
@@ -18,9 +20,16 @@ def test_raw_command_over_custom_budget_raises_frame_too_large_error():
         middleware.chunk_raw_command("say this command is too long")
 
 
-def test_chunk_delay_for_default_ai_resp():
+def test_chunk_delay_for_unknown_kind_defaults_to_zero() -> None:
     mid = FlowControlMiddleware(FlowControlSettings())
-    assert mid.chunk_delay_for("ai_resp") == 0.15
+    assert mid.chunk_delay_for("unknown") == 0.0
+
+
+def test_chunk_raw_command_signature_stays_generic() -> None:
+    assert list(inspect.signature(FlowControlMiddleware.chunk_raw_command).parameters) == [
+        "self",
+        "command",
+    ]
 
 
 def test_tellraw_short_text_single_chunk_under_budget():

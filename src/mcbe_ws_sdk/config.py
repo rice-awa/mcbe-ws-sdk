@@ -7,6 +7,7 @@ from numbers import Real
 from types import MappingProxyType
 
 from mcbe_ws_sdk.errors import ConfigurationError
+from mcbe_ws_sdk.profiles.types import AddonBridgeProfile, default_addon_bridge_profile
 
 
 def _require_positive_int(value: object, field_name: str) -> None:
@@ -26,15 +27,6 @@ def _require_finite_real(value: object, field_name: str, *, allow_zero: bool = F
 
 
 @dataclass(frozen=True)
-class AddonProtocolConfig:
-    bridge_message_id: str = "mcbeai:bridge_request"
-    bridge_prefix: str = "MCBEAI|RESP"
-    ui_chat_prefix: str = "MCBEAI|UI_CHAT"
-    bridge_tool_player_name: str = "MCBEAI_TOOL"
-    ai_resp_message_id: str = "mcbeai:ai_resp"
-
-
-@dataclass(frozen=True)
 class FlowControlSettings:
     command_line_byte_budget: int = 461
     max_chunk_content_length: int = 400
@@ -43,8 +35,6 @@ class FlowControlSettings:
         default_factory=lambda: {
             "tellraw": 0.05,
             "scriptevent": 0.05,
-            "ai_resp": 0.15,
-            "ai_resp_prelude": 0.5,
         }
     )
 
@@ -69,7 +59,7 @@ class AddonBridgeSettings:
     max_chunks_per_message: int = 64
     max_message_bytes: int = 262_144
     max_total_buffer_bytes: int = 1_048_576
-    protocol: AddonProtocolConfig = field(default_factory=AddonProtocolConfig)
+    profile: AddonBridgeProfile = field(default_factory=default_addon_bridge_profile)
 
     def __post_init__(self) -> None:
         for name in ("timeout_seconds", "buffer_ttl_seconds"):

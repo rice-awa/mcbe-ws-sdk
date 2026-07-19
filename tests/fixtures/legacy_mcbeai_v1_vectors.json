@@ -1,0 +1,14 @@
+{
+  "bridge_requests": [
+    {
+      "name": "legacy-v1-without-version",
+      "version": 1,
+      "message": "{\"request_id\":\"r-1\",\"capability\":\"greet\",\"payload\":{\"name\":\"Steve\"}}"
+    },
+    {
+      "name": "current-v2",
+      "version": 2,
+      "message": "{\"v\":2,\"request_id\":\"r-1\",\"capability\":\"greet\",\"payload\":{\"name\":\"Steve\"}}"
+    }
+  ]
+}

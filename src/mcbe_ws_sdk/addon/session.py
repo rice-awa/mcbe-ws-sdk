@@ -9,15 +9,19 @@ from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar
 from uuid import uuid4
 
-from mcbe_ws_sdk.addon.protocol import (
+from mcbe_ws_sdk.config import AddonBridgeSettings
+from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, ProtocolError
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import (
     decode_bridge_chat_chunk,
     decode_ui_chat_chunk,
     reassemble_bridge_chunks,
     reassemble_ui_chat_chunks,
 )
-from mcbe_ws_sdk.config import AddonBridgeSettings
-from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, ProtocolError
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+    AddonBridgeChunk,
+    UiChatChunk,
+    UiChatMessage,
+)
 
 
 class _ChunkWithContent(Protocol):
@@ -55,7 +59,7 @@ class AddonBridgeSession:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
-        self._protocol = settings.protocol
+        self._profile = settings.profile
         self._clock = clock
         self._pending_requests: dict[str, PendingAddonRequest] = {}
         self._chunk_buffers: dict[str, ChunkBuffer[AddonBridgeChunk]] = {}
@@ -82,7 +86,7 @@ class AddonBridgeSession:
     def handle_chat_chunk(self, chunk_message: str) -> AddonBridgeChunk:
         """Consume a chat fragment; resolve its request future once complete."""
         try:
-            chunk = decode_bridge_chat_chunk(chunk_message, protocol=self._protocol)
+            chunk = decode_bridge_chat_chunk(chunk_message, profile=self._profile)
         except ValueError as exc:
             protocol_error = ProtocolError(str(exc))
             request_id = self._pending_bridge_request_id(chunk_message)
@@ -131,7 +135,7 @@ class AddonBridgeSession:
         if len(parts) != 5:
             return None
         namespace, prefix, request_id, _, _ = parts
-        bridge_prefix = self._protocol.bridge_prefix.split("|", 1)
+        bridge_prefix = self._profile.bridge_response_prefix.split("|", 1)
         if len(bridge_prefix) != 2:
             return None
         expected_namespace, expected_prefix = bridge_prefix
@@ -158,7 +162,7 @@ class AddonBridgeSession:
     def handle_ui_chat_chunk(self, chunk_message: str) -> tuple[UiChatChunk, UiChatMessage | None]:
         """Consume a UI chat fragment; return the chunk and a completed message if available."""
         try:
-            chunk = decode_ui_chat_chunk(chunk_message, protocol=self._protocol)
+            chunk = decode_ui_chat_chunk(chunk_message, profile=self._profile)
         except ValueError as exc:
             raise ProtocolError(str(exc)) from exc
 
