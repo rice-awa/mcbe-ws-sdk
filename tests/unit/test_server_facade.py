@@ -334,7 +334,7 @@ async def test_sink_receives_stream_chunk() -> None:
     assert env.payload.content == "hello world"
 
     await facade.manager.drop_connection(state.id)
-    await asyncio.sleep(0.05)
+    assert state.id not in facade.manager._sender_tasks
 
 
 # --------------------------------------------------------------------------- #

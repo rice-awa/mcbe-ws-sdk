@@ -135,9 +135,7 @@ class ConnectionManager:
         :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook.on_disconnected`).
         """
         state = self._connections.pop(connection_id, None)
-        task = self._sender_tasks.pop(connection_id, None)
-        if task is not None:
-            task.cancel()
+        await self._cancel_sender(connection_id)
         if state is not None:
             await self._bus.emit(WsEventType.DISCONNECTED, state)
             logger.info("connection_dropped", connection_id=str(connection_id))
@@ -156,9 +154,16 @@ class ConnectionManager:
         """Drop every connection (on server stop)."""
         for connection_id in list(self._connections):
             await self.drop_connection(connection_id)
-        if self._sender_tasks:
-            await asyncio.gather(*self._sender_tasks.values(), return_exceptions=True)
-            self._sender_tasks.clear()
+
+    async def _cancel_sender(self, connection_id: UUID) -> None:
+        task = self._sender_tasks.pop(connection_id, None)
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     async def _response_sender(self, state: ConnectionState) -> None:
         """Drain ``state.response_queue`` and route each message via the sink."""
@@ -191,6 +196,7 @@ class ConnectionManager:
                     )
         except asyncio.CancelledError:
             logger.info("response_sender_cancelled", connection_id=str(state.id))
+            raise
         except Exception:
             logger.exception("response_sender_error", connection_id=str(state.id))
         logger.info("response_sender_stopped", connection_id=str(state.id))

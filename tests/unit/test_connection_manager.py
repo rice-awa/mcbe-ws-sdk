@@ -114,16 +114,19 @@ async def test_response_sender_drops_unroutable_message(manager: ConnectionManag
 
 
 @pytest.mark.asyncio
-async def test_drop_connection_emits_disconnected(
+async def test_drop_connection_awaits_sender_task_cleanup(
     manager: ConnectionManager, bus: EventBus
 ) -> None:
-    state = await manager.create_connection(connection_id=UUID(int=4), send_payload=_send_noop)
+    state = await manager.create_connection(connection_id=UUID(int=41), send_payload=_send_noop)
     disconnected: list[ConnectionState] = []
     bus.subscribe(WsEventType.DISCONNECTED, lambda s: disconnected.append(s), weak=False)
+    task = manager._sender_tasks[state.id]
 
     await manager.drop_connection(state.id)
-    await asyncio.sleep(0.05)  # let cancelled sender settle
 
+    assert task.done()
+    assert state.id not in manager._sender_tasks
+    assert manager.get_connection(state.id) is None
     assert manager.connection_count == 0
     assert disconnected == [state]
 
