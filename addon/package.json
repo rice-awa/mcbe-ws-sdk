@@ -1,0 +1,17 @@
+{
+  "name": "mcbe-ws-bridge-addon",
+  "version": "0.1.0",
+  "description": "Minimal MCBE WebSocket bridge addon (mcbe-ws-sdk protocol layer)",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf lib"
+  },
+  "dependencies": {
+    "@minecraft/server": "^2.0.0",
+    "@minecraft/server-ui": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
