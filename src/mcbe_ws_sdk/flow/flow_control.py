@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Callable
 
 from mcbe_ws_sdk.config import FlowControlSettings
+from mcbe_ws_sdk.errors import FrameTooLargeError
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommand
 
 # 句子分隔符：中英文句号、问号、感叹号、换行
@@ -111,14 +112,14 @@ class FlowControlMiddleware:
         """包装原始命令为 commandRequest JSON 列表（始终返回单元素）。
 
         原始命令不能在动词之外的位置被截断，否则后续分片会成为非法命令。
-        因此此方法**不进行分片**：长度超限时抛 ValueError，由调用方决策。
+        因此此方法**不进行分片**：长度超限时抛 FrameTooLargeError，由调用方决策。
         """
         cmd = MinecraftCommand.create_raw(command)
         payload = cmd.model_dump_json(exclude_none=True)
         budget = self._byte_budget
         command_line_bytes = len(cmd.body.commandLine.encode("utf-8"))
         if command_line_bytes > budget:
-            raise ValueError(
+            raise FrameTooLargeError(
                 f"raw command too long in bytes "
                 f"({command_line_bytes} > {budget}); "
                 "cannot be safely chunked"

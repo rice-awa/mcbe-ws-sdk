@@ -21,6 +21,17 @@ from mcbe_ws_sdk.capability import (
     CapabilityRegistry,
     LoggingStubHandler,
 )
+from mcbe_ws_sdk.errors import (
+    BridgeClosedError,
+    BridgeError,
+    BridgeLimitError,
+    BridgeTimeoutError,
+    ConfigurationError,
+    FacadeLifecycleError,
+    FrameTooLargeError,
+    McbeWsSdkError,
+    ProtocolError,
+)
 from mcbe_ws_sdk.gateway import (
     DEFAULT_PLAYER_KEY,
     ConnectionHook,
@@ -59,6 +70,16 @@ __all__ = [
     "MCColor",
     "MCPrefix",
     "PlayerMessageEvent",
+    # errors
+    "BridgeClosedError",
+    "BridgeError",
+    "BridgeLimitError",
+    "BridgeTimeoutError",
+    "ConfigurationError",
+    "FacadeLifecycleError",
+    "FrameTooLargeError",
+    "McbeWsSdkError",
+    "ProtocolError",
     # addon
     "AddonBridgeClient",
     "AddonBridgeService",

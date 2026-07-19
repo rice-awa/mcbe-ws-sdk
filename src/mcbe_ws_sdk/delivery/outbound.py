@@ -61,7 +61,7 @@ class McbeOutboundDelivery:
         source: str = "raw_command",
         before_send: Callable[[str], None] | None = None,
     ) -> str:
-        """发送不可语义分片的原始命令，超长时由 FlowControlMiddleware 拒绝。"""
+        """发送不可语义分片的原始命令，超长时抛 ``FrameTooLargeError``。"""
         payload = self._flow.chunk_raw_command(command)[0]
         request_id = _request_id_from_payload(payload)
         if before_send is not None:

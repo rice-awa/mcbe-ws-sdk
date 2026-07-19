@@ -1,14 +1,21 @@
 import pytest
 
 from mcbe_ws_sdk.config import FlowControlSettings
+from mcbe_ws_sdk.errors import FrameTooLargeError
 from mcbe_ws_sdk.flow import FlowControlMiddleware
 
 
 def test_raw_command_over_budget_raises():
     mid = FlowControlMiddleware(FlowControlSettings())
     long_cmd = "say " + "x" * 1000
-    with pytest.raises(ValueError):
+    with pytest.raises(FrameTooLargeError):
         mid.chunk_raw_command(long_cmd)
+
+
+def test_raw_command_over_custom_budget_raises_frame_too_large_error():
+    middleware = FlowControlMiddleware(FlowControlSettings(command_line_byte_budget=16))
+    with pytest.raises(FrameTooLargeError):
+        middleware.chunk_raw_command("say this command is too long")
 
 
 def test_chunk_delay_for_default_ai_resp():
