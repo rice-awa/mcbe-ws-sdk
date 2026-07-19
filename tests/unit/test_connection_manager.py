@@ -125,6 +125,7 @@ async def test_drop_connection_awaits_sender_task_cleanup(
     await manager.drop_connection(state.id)
 
     assert task.done()
+    assert task.cancelled()
     assert state.id not in manager._sender_tasks
     assert manager.get_connection(state.id) is None
     assert manager.connection_count == 0
