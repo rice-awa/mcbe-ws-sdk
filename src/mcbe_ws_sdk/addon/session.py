@@ -69,10 +69,7 @@ class AddonBridgeSession:
         """Create and register a pending request."""
         if len(self._pending_requests) >= self._settings.max_pending_requests:
             raise BridgeLimitError("maximum pending requests exceeded")
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
+        loop = asyncio.get_running_loop()
         request = PendingAddonRequest(
             request_id=f"addon-{uuid4().hex}",
             capability=capability,
@@ -106,8 +103,11 @@ class AddonBridgeSession:
         try:
             response = reassemble_bridge_chunks(list(complete.chunks.values()))
         except ValueError as exc:
-            self._pending_requests.pop(chunk.request_id, None)
-            raise ProtocolError(str(exc)) from exc
+            error = ProtocolError(str(exc))
+            request = self._pending_requests.pop(chunk.request_id, None)
+            if request is not None and not request.future.done():
+                request.future.set_exception(error)
+            raise error from exc
 
         request = self._pending_requests.pop(chunk.request_id, None)
         if request is not None and not request.future.done():

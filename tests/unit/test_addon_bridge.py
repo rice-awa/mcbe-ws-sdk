@@ -24,7 +24,12 @@ from mcbe_ws_sdk.addon.protocol import (
 from mcbe_ws_sdk.addon.service import AddonBridgeService, AddonMessageResult
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings, AddonProtocolConfig
-from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, BridgeTimeoutError
+from mcbe_ws_sdk.errors import (
+    BridgeClosedError,
+    BridgeLimitError,
+    BridgeTimeoutError,
+    ProtocolError,
+)
 from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
 
@@ -113,9 +118,9 @@ async def test_service_request_capability_end_to_end() -> None:
 
     sent: list[str] = []
 
-    async def send_command(cmd: str) -> str:
+    async def send_command(cmd: str) -> None:
         sent.append(cmd)
-        return "ok"
+        return None
 
     # Drive request + resolver concurrently so _send_command actually runs.
     async def resolve_once_pending() -> None:
@@ -199,11 +204,85 @@ async def test_close_connection_finishes_pending_request_with_bridge_closed() ->
         await request.future
 
 
-def test_session_rejects_excessive_chunk_count() -> None:
+@pytest.mark.asyncio
+async def test_session_rejects_excessive_chunk_count() -> None:
     session = AddonBridgeSession(AddonBridgeSettings(max_chunks_per_message=2))
     request = session.create_request("x", {})
     with pytest.raises(BridgeLimitError):
         session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/3|x")
+
+
+@pytest.mark.asyncio
+async def test_session_prunes_expired_buffers_before_accepting_new_chunk() -> None:
+    now = 100.0
+
+    def clock() -> float:
+        return now
+
+    session = AddonBridgeSession(
+        AddonBridgeSettings(buffer_ttl_seconds=1.0, max_buffer_ids=1),
+        clock=clock,
+    )
+    request = session.create_request("x", {})
+
+    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+    assert session._chunk_buffers[request.request_id].chunks.keys() == {1}
+
+    now = 101.0
+    chunk, ui_message = session.handle_ui_chat_chunk(
+        'MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
+    )
+
+    assert isinstance(chunk, UiChatChunk)
+    assert ui_message is None
+    assert request.request_id not in session._chunk_buffers
+    assert "m1" in session._ui_chat_chunk_buffers
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_excessive_buffer_ids() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings(max_buffer_ids=1))
+    request = session.create_request("x", {})
+
+    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+
+    with pytest.raises(BridgeLimitError, match="maximum buffer ids exceeded"):
+        session.handle_ui_chat_chunk('MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he')
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_message_byte_limit() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings(max_message_bytes=1))
+    request = session.create_request("x", {})
+
+    with pytest.raises(BridgeLimitError, match="message byte limit exceeded"):
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|ab")
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_total_buffer_byte_limit() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings(max_total_buffer_bytes=3))
+    request = session.create_request("x", {})
+
+    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|ab")
+
+    with pytest.raises(BridgeLimitError, match="total buffer byte limit exceeded"):
+        session.handle_ui_chat_chunk('MCBEAI|UI_CHAT|m1|1/2|{"player":"S","message":"x"}')
+
+
+@pytest.mark.asyncio
+async def test_malformed_bridge_response_completes_future_with_protocol_error() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings())
+    request = session.create_request("x", {})
+
+    with pytest.raises(ProtocolError):
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/1|not-json")
+
+    assert request.request_id not in session._pending_requests
+    assert request.request_id not in session._chunk_buffers
+    assert request.future.done()
+    with pytest.raises(ProtocolError):
+        await request.future
 
 
 def test_is_bridge_and_ui_chat_message() -> None:
