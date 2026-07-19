@@ -1,76 +1,100 @@
-import { system, world } from "@minecraft/server";
-import type { Player } from "@minecraft/server";
+import { GameMode, world, system } from "@minecraft/server";
+import { spawnSimulatedPlayer } from "@minecraft/server-gametest";
 
-import { BRIDGE_RESPONSE_PREFIX, BRIDGE_MAX_CHUNK_CONTENT_LENGTH } from "./constants";
-import { chunkBridgePayload } from "./chunking";
+import { chunkBridgePayload, chunkUiChatPayload } from "./chunking";
+import { BRIDGE_MAX_CHUNK_CONTENT_LENGTH, TOOL_PLAYER_NAME } from "./constants";
 
-const TAG = "bridge_tool";
+const DEBUG = true;
 
-let initialized = false;
+function log(message: string): void {
+  if (DEBUG) {
+    console.log(`[MCBE-AI-ToolPlayer] ${message}`);
+  }
+}
 
-/**
- * 确保存在一个被标记为 `bridge_tool` 的玩家实体，并在首次调用时加载相关维度。
- * 如果世界尚未就绪（getAllPlayers 为空且 playSound 不可用）则跳过 — 由 worldLoad 重试。
- */
+const TOOL_PLAYER_DIMENSION = "overworld";
+const TOOL_PLAYER_LOCATION = { x: 300000, y: 100, z: 300000 };
+const TOOL_PLAYER_CHECK_INTERVAL_TICKS = 20 * 30;
+
+let isToolPlayerInitialized = false;
+
 export function ensureToolPlayer(): void {
-  if (initialized) {
+  log(`ensureToolPlayer: 检查模拟玩家 ${TOOL_PLAYER_NAME} 是否存在...`);
+
+  const existing = world.getAllPlayers().find((player) => player.name === TOOL_PLAYER_NAME);
+
+  if (existing) {
+    log("ensureToolPlayer: 模拟玩家已存在，跳过创建");
     return;
   }
 
+  log(
+    `ensureToolPlayer: 模拟玩家不存在，尝试在 (${TOOL_PLAYER_LOCATION.x}, ${TOOL_PLAYER_LOCATION.y}, ${TOOL_PLAYER_LOCATION.z}) 创建...`
+  );
   try {
-    const players = world.getAllPlayers() || [];
-    if (players.length === 0) {
-      return; // 世界尚未就绪 — worldLoad 回调会重试
-    }
+    const dimension = world.getDimension(TOOL_PLAYER_DIMENSION);
+    log(`ensureToolPlayer: 获取维度 ${TOOL_PLAYER_DIMENSION} 成功`);
 
-    // 如果已有带 tag 的玩家，复用
-    for (const p of players) {
-      if (p.hasTag(TAG)) {
-        initialized = true;
-        return;
-      }
-    }
-
-    // 给第一个在线玩家打上 bridge_tool 标签
-    players[0].addTag(TAG);
-    world.getDimension("overworld").runCommand(`tellraw @a[tag=${TAG}] {"rawtext":[{"text":"MCBE bridge tool ready"}]}`);
-    initialized = true;
-  } catch {
-    // 世界未就绪时静默跳过
+    const player = spawnSimulatedPlayer(
+      {
+        dimension,
+        ...TOOL_PLAYER_LOCATION,
+      },
+      TOOL_PLAYER_NAME,
+      GameMode.Creative
+    );
+    log(`ensureToolPlayer: 模拟玩家创建成功: ${player.name}`);
+  } catch (error) {
+    log(`ensureToolPlayer: 模拟玩家创建失败: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
 }
 
-function findToolPlayer(): Player | undefined {
-  const players = world.getAllPlayers();
-  return players.find((p) => p.hasTag(TAG));
+export async function sendBridgeResponseChunks(requestId: string, payload: string): Promise<void> {
+  const toolPlayer = world.getAllPlayers().find((player) => player.name === TOOL_PLAYER_NAME);
+
+  if (!toolPlayer) {
+    throw new Error("Tool player is not available");
+  }
+
+  const chunks = chunkBridgePayload(requestId, payload, BRIDGE_MAX_CHUNK_CONTENT_LENGTH);
+  for (const chunk of chunks) {
+    await toolPlayer.runCommand(`tell @s ${chunk}`);
+  }
 }
 
-/**
- * 将桥接响应编码为 MCBEAI|RESP 分片，以 MCBEAI_TOOL 玩家身份发送 tellraw。
- *
- * 与 Python SDK `AddonBridgeService` 的 `MCBEAI|RESP` 格式完全匹配。
- */
-export async function sendBridgeResponseChunks(requestId: string, jsonBody: string): Promise<void> {
-  const chunks = chunkBridgePayload(requestId, jsonBody, BRIDGE_MAX_CHUNK_CONTENT_LENGTH);
-  const toolPlayer = findToolPlayer();
+let uiChatSeq = 0;
+
+export function sendUiChatMessage(playerName: string, message: string): void {
+  const toolPlayer = world.getAllPlayers().find((player) => player.name === TOOL_PLAYER_NAME);
+
   if (!toolPlayer) {
-    console.warn(`[bridge] 无法发送响应: 没有持有 ${TAG} tag 的在线玩家`);
+    throw new Error("Tool player is not available");
+  }
+
+  const id = `ui-${Date.now()}-${++uiChatSeq}`;
+  const payload = JSON.stringify({ player: playerName, message });
+  const chunks = chunkUiChatPayload(id, payload, BRIDGE_MAX_CHUNK_CONTENT_LENGTH);
+  for (const chunk of chunks) {
+    toolPlayer.runCommand(`tell @s ${chunk}`);
+  }
+}
+
+export function initializeToolPlayer(): void {
+  log("initializeToolPlayer: 开始初始化...");
+
+  if (isToolPlayerInitialized) {
+    log("initializeToolPlayer: 已初始化过，跳过");
     return;
   }
 
-  const dimension = world.getDimension("overworld");
+  log("initializeToolPlayer: 调用 ensureToolPlayer...");
+  ensureToolPlayer();
 
-  for (const chunk of chunks) {
-    const escaped = chunk.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const cmd = `tellraw @a[name="${toolPlayer.name}"] {"rawtext":[{"text":"${escaped}"}]}`;
-    await new Promise<void>((resolve) => {
-      try {
-        dimension.runCommand(cmd);
-      } catch {
-        // 忽略单条tellraw失败
-      }
-      // system.run 延迟确保命令间不堆积
-      system.runTimeout(() => resolve(), 1);
-    });
-  }
+  isToolPlayerInitialized = true;
+  log("initializeToolPlayer: 初始化完成，设置定时检查...");
+
+  system.runInterval(() => {
+    ensureToolPlayer();
+  }, TOOL_PLAYER_CHECK_INTERVAL_TICKS);
 }

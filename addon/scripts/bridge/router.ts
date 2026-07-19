@@ -1,13 +1,14 @@
-import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
+import type { Player, ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import { system } from "@minecraft/server";
 
-import { BRIDGE_MESSAGE_ID } from "./constants";
+import { BRIDGE_MESSAGE_ID, TOOL_PLAYER_NAME } from "./constants";
+import { defaultCapabilityRegistry } from "./capabilities";
 
 let isBridgeRouterRegistered = false;
 
 export type CapabilityHandler = (
   capability: string,
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown>
 ) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
 export type ResponseSender = (requestId: string, jsonBody: string) => Promise<void>;
@@ -38,15 +39,36 @@ export async function handleBridgeScriptEvent(event: ScriptEventCommandMessageAf
     return;
   }
 
+  // 发送者校验：脚本事件默认仅放行服务端来源，与 Python SDK 用
+  // sender == MCBEAI_TOOL 做入站信任边界的意图对齐——服务端来源比聊天消息路径
+  // 更窄，足以防止玩家伪造 scriptevent。实体来源仅在发送者为 MCBEAI_TOOL 工具玩家时放行。
+  const isFromServer = event.sourceType === "Server";
+  const isFromToolPlayer =
+    event.sourceType === "Entity" && (event.sourceEntity as Player | undefined)?.name === TOOL_PLAYER_NAME;
+  if (!isFromServer && !isFromToolPlayer) {
+    console.warn(`[bridge] 忽略非法来源的 scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
+    return;
+  }
+
   const request = JSON.parse(event.message) as {
     request_id: string;
     capability: string;
     payload?: Record<string, unknown>;
   };
 
-  const payload = capabilityHandler
-    ? await capabilityHandler(request.capability, request.payload ?? {})
-    : defaultErrorPayload(request.capability);
+  let payload: Record<string, unknown>;
+  if (capabilityHandler) {
+    // 宿主已注入处理器，优先使用（覆盖默认注册表）。
+    payload = await capabilityHandler(request.capability, request.payload ?? {});
+  } else {
+    // 回退到默认注册表：按能力名查找并调用。
+    const defaultHandler = defaultCapabilityRegistry[request.capability];
+    if (defaultHandler) {
+      payload = await defaultHandler(request.capability, request.payload ?? {});
+    } else {
+      payload = defaultErrorPayload(request.capability);
+    }
+  }
 
   if (responseSender) {
     await responseSender(request.request_id, JSON.stringify(payload));

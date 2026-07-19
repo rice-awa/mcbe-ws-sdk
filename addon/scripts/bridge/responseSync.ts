@@ -1,6 +1,7 @@
+import type { Player } from "@minecraft/server";
 import { system, world } from "@minecraft/server";
 
-import { AI_RESP_MESSAGE_ID } from "./constants";
+import { AI_RESP_MESSAGE_ID, TOOL_PLAYER_NAME } from "./constants";
 
 // ── 分片缓冲区 ──
 // msg_id → Map<index, chunk payload>
@@ -15,7 +16,7 @@ type AiRespChunk = {
   c: string;
 };
 
-/** 重组完成后的回调签名：(playerName, role, fullText, sourcePlayer) */
+/** 重组完成后的回调签名：(playerName, role, fullText) */
 export type AiRespHandler = (playerName: string, role: string, text: string) => void;
 
 let handler: AiRespHandler | null = null;
@@ -35,6 +36,16 @@ export function registerResponseSyncHandler(): void {
 
   system.afterEvents.scriptEventReceive.subscribe((event) => {
     if (event.id !== AI_RESP_MESSAGE_ID) {
+      return;
+    }
+
+    // 发送者校验：与 router.ts 及 Python SDK 入站信任模型对齐——脚本事件默认仅放行
+    // 服务端来源（比聊天消息路径更窄），实体来源仅在发送者为 MCBEAI_TOOL 工具玩家时放行。
+    const isFromServer = event.sourceType === "Server";
+    const isFromToolPlayer =
+      event.sourceType === "Entity" && (event.sourceEntity as Player | undefined)?.name === TOOL_PLAYER_NAME;
+    if (!isFromServer && !isFromToolPlayer) {
+      console.warn(`[respSync] 忽略非法来源的 scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
       return;
     }
 
