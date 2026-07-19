@@ -1,0 +1,30 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "MCBE-WS-SDK",
+    "description": "Script bridge for MCBE-WS-SDK",
+    "uuid": "450332ea-6755-48b6-ab7f-36843065edd1",
+    "version": [
+      1,
+      0,
+      0
+    ],
+    "min_engine_version": [
+      1,
+      21,
+      80
+    ]
+  },
+  "modules": [
+    {
+      "description": "Resource Pack",
+      "type": "resources",
+      "uuid": "3b1513ae-0aa2-4ca5-bb33-4cfbac9b5870",
+      "version": [
+        1,
+        0,
+        0
+      ]
+    }
+  ]
+}

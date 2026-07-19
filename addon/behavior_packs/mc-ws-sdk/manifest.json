@@ -1,0 +1,46 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "MCBE-WS-SDK",
+    "description": "Script bridge for MCBE-WS-SDK",
+    "uuid": "60411f7f-774b-4269-b1cd-f58ebe702995",
+    "version": [
+      1,
+      0,
+      0
+    ],
+    "min_engine_version": [1, 21, 80]
+  },
+  "modules": [
+    {
+      "description": "Script resources",
+      "language": "javascript",
+      "type": "script",
+      "uuid": "6b900207-0c01-4b9f-97a9-f3f170a35768",
+      "version": [
+        1,
+        0,
+        0
+      ],
+      "entry": "scripts/main.js"
+    }
+  ],
+  "dependencies": [
+    {
+      "module_name": "@minecraft/server",
+      "version": "2.0.0"
+    },
+    {
+      "module_name": "@minecraft/server-ui",
+      "version": "2.0.0"
+    },
+    {
+      "module_name": "@minecraft/server-gametest",
+      "version": "1.0.0-beta"
+    },
+    {
+      "uuid": "450332ea-6755-48b6-ab7f-36843065edd1",
+      "version": [1, 0, 0]
+    }
+  ]
+}
