@@ -1,8 +1,8 @@
 {
-  "name": "mcbe-ai-agent-addon",
+  "name": "mcbe-ws-sdk",
   "version": "0.1.0",
-  "productName": "MCBE-AI-Agent",
-  "description": "Script bridge and in-game UI for MCBE AI Agent",
+  "productName": "MCBE-WS-SDK",
+  "description": "Script bridge for MCBE-WS-SDK",
   "private": true,
   "devDependencies": {
     "@minecraft/core-build-tasks": "^5.7.0",
