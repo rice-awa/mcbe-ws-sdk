@@ -7,7 +7,7 @@ import gc
 
 import pytest
 
-from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
+from mcbe_ws_sdk.gateway.events import EventBus, SubscriptionToken, WsEventType
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ async def test_emit_invokes_subscribed_handler(bus: EventBus) -> None:
 
 
 @pytest.mark.asyncio
-async def test_emit_concurrent_isolation(bus: EventBus) -> None:
+async def test_emit_propagates_handler_exception_after_prior_handlers_run(bus: EventBus) -> None:
     first: list[str] = []
     second: list[str] = []
 
@@ -60,20 +60,22 @@ async def test_emit_concurrent_isolation(bus: EventBus) -> None:
     bus.subscribe(WsEventType.RAW_INBOUND, a, weak=False)
     bus.subscribe(WsEventType.RAW_INBOUND, b, weak=False)
 
-    await bus.emit(WsEventType.RAW_INBOUND, "tick")
+    with pytest.raises(RuntimeError, match="boom"):
+        await bus.emit(WsEventType.RAW_INBOUND, "tick")
     assert first == ["tick"]
     assert second == ["tick"]
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_removes_handler(bus: EventBus) -> None:
+async def test_unsubscribe_removes_exact_subscription(bus: EventBus) -> None:
     calls: list[str] = []
 
     async def h(msg: str) -> None:
         calls.append(msg)
 
-    bus.subscribe(WsEventType.CONNECTED, h, weak=False)
-    bus.unsubscribe(WsEventType.CONNECTED, h)
+    token = bus.subscribe(WsEventType.CONNECTED, h, weak=False)
+    assert bus.unsubscribe(token) is True
+    assert bus.unsubscribe(token) is False
     await bus.emit(WsEventType.CONNECTED, "x")
     assert calls == []
 
@@ -87,7 +89,8 @@ async def test_weak_subscription_dropped_after_gc(bus: EventBus) -> None:
             calls.append(msg)
 
     holder = Holder()
-    bus.subscribe(WsEventType.DISCONNECTED, holder.on)  # weak by default
+    token = bus.subscribe(WsEventType.DISCONNECTED, holder.on)  # weak by default
+    assert isinstance(token, SubscriptionToken)
     await bus.emit(WsEventType.DISCONNECTED, "a")
     assert calls == ["a"]
 
@@ -96,6 +99,39 @@ async def test_weak_subscription_dropped_after_gc(bus: EventBus) -> None:
     await bus.emit(WsEventType.DISCONNECTED, "b")
     # The weak-ref wrapper silently skips a collected handler.
     assert calls == ["a"]
+    assert bus.handler_count(WsEventType.DISCONNECTED) == 0
+
+
+@pytest.mark.asyncio
+async def test_weak_bound_handler_returns_subscription_token(bus: EventBus) -> None:
+    calls: list[str] = []
+
+    class Holder:
+        async def on(self, message: str) -> None:
+            calls.append(message)
+
+    holder = Holder()
+    token = bus.subscribe(WsEventType.CONNECTED, holder.on)
+
+    assert token.event is WsEventType.CONNECTED
+    assert bus.unsubscribe(token) is True
+    assert bus.unsubscribe(token) is False
+    assert bus.handler_count(WsEventType.CONNECTED) == 0
+
+    await bus.emit(WsEventType.CONNECTED, "ignored")
+    assert calls == []
+
+
+def test_same_strong_handler_gets_distinct_tokens(bus: EventBus) -> None:
+    async def handler() -> None:
+        return None
+
+    first = bus.subscribe(WsEventType.UI_CHAT_CHUNK, handler, weak=False)
+    second = bus.subscribe(WsEventType.UI_CHAT_CHUNK, handler, weak=False)
+
+    assert first != second
+    assert bus.unsubscribe(first) is True
+    assert bus.handler_count(WsEventType.UI_CHAT_CHUNK) == 1
 
 
 def test_handler_count(bus: EventBus) -> None:

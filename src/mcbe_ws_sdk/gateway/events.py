@@ -1,23 +1,13 @@
-"""WebSocket gateway event bus.
-
-Replaces the main repo's hard-coded ``if/elif`` response dispatch with a typed
-protocol: events are identified by :class:`WsEventType` and delivered to
-subscribers via :class:`EventBus`. Subscriptions default to weak references so a
-handler whose only reachable reference is the bus does not keep it alive; pass
-``weak=False`` for plain functions/lambdas (which cannot be weakly referenced).
-"""
+"""WebSocket gateway event bus."""
 
 from __future__ import annotations
 
-import asyncio
 import weakref
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-
-from mcbe_ws_sdk._logging import get_logger
-
-logger = get_logger(__name__)
+from uuid import UUID, uuid4
 
 Handler = Callable[..., Awaitable[None]]
 
@@ -36,97 +26,89 @@ class WsEventType(Enum):
     RAW_OUTBOUND = "raw_outbound"
 
 
+@dataclass(frozen=True, slots=True)
+class SubscriptionToken:
+    """An opaque handle for one event-bus registration."""
+
+    event: WsEventType
+    id: UUID
+
+
+@dataclass(slots=True)
+class _Subscription:
+    token: SubscriptionToken
+    weak_handler: weakref.ReferenceType[Handler] | weakref.WeakMethod[Handler] | None
+    strong_handler: Handler | None
+
+    @classmethod
+    def from_handler(
+        cls,
+        token: SubscriptionToken,
+        handler: Handler,
+        weak: bool,
+    ) -> _Subscription:
+        if not weak:
+            return cls(token=token, weak_handler=None, strong_handler=handler)
+        if hasattr(handler, "__self__") and hasattr(handler, "__func__"):
+            return cls(
+                token=token,
+                weak_handler=weakref.WeakMethod(handler),
+                strong_handler=None,
+            )
+        return cls(token=token, weak_handler=weakref.ref(handler), strong_handler=None)
+
+    def resolve(self) -> Handler | None:
+        if self.strong_handler is not None:
+            return self.strong_handler
+        if self.weak_handler is None:
+            return None
+        return self.weak_handler()
+
+
 class EventBus:
     """A typed in-process event bus keyed by :class:`WsEventType`."""
 
     def __init__(self) -> None:
-        self._subscribers: dict[WsEventType, list[Handler]] = {event: [] for event in WsEventType}
+        self._subscribers: dict[WsEventType, dict[UUID, _Subscription]] = {
+            event: {} for event in WsEventType
+        }
 
-    def subscribe(self, event: WsEventType, handler: Handler, *, weak: bool = True) -> None:
-        """Register ``handler`` for ``event``.
+    def subscribe(
+        self,
+        event: WsEventType,
+        handler: Handler,
+        *,
+        weak: bool = True,
+    ) -> SubscriptionToken:
+        """Register ``handler`` and return a token for this registration."""
+        token = SubscriptionToken(event=event, id=uuid4())
+        self._subscribers[event][token.id] = _Subscription.from_handler(token, handler, weak)
+        return token
 
-        By default the reference is held weakly so a subscriber cannot outlive
-        its owning object through the bus alone. When ``weak=False`` (e.g. for a
-        module-level or ``lambda`` handler) the strong reference is kept.
-        """
-        wrapped = self._wrap(handler) if weak else handler
-        self._subscribers[event].append(wrapped)
-
-    def unsubscribe(self, event: WsEventType, handler: Handler) -> int:
-        """Drop every registration (weak or strong) matching ``handler``.
-
-        Returns the number of registrations removed.
-        """
-        original = self._subscribers[event]
-        cleaned: list[Handler] = []
-        removed = 0
-        for wrapped in original:
-            if self._matches(wrapped, handler):
-                removed += 1
-                continue
-            cleaned.append(wrapped)
-        self._subscribers[event] = cleaned
-        return removed
+    def unsubscribe(self, token: SubscriptionToken) -> bool:
+        """Remove exactly the registration identified by ``token``."""
+        return self._subscribers[token.event].pop(token.id, None) is not None
 
     def handler_count(self, event: WsEventType) -> int:
-        return len(self._subscribers.get(event, ()))
+        """Return the number of live registrations for ``event``."""
+        self._prune_dead(event)
+        return len(self._subscribers[event])
 
     async def emit(self, event: WsEventType, *args: Any, **kwargs: Any) -> None:
-        """Await every subscribed handler for ``event`` concurrently.
+        """Await live handlers in subscription order."""
+        subscribers = self._subscribers[event]
+        for token_id in list(subscribers):
+            subscription = subscribers.get(token_id)
+            if subscription is None:
+                continue
+            handler = subscription.resolve()
+            if handler is None:
+                subscribers.pop(token_id, None)
+                continue
+            await handler(*args, **kwargs)
 
-        Handlers are snapshotted first so mutations during dispatch don't affect
-        the current round, and each handler is isolated: one raising won't
-        prevent the others from running.
-        """
-        handlers = list(self._subscribers.get(event, ()))
-        if not handlers:
-            return
-        results = await asyncio.gather(
-            *(self._invoke(h, event, *args, **kwargs) for h in handlers),
-            return_exceptions=True,
-        )
-        for result in results:
-            if isinstance(result, BaseException):
-                logger.error(
-                    "event_handler_failed",
-                    event_type=event.value,
-                    error=result,
-                    exc_info=result,
-                )
-
-    def _wrap(self, handler: Handler) -> Handler:
-        ref: weakref.ReferenceType[Handler] | None
-
-        if hasattr(handler, "__self__") and hasattr(handler, "__func__"):
-            obj = weakref.ref(handler.__self__)
-            func = handler.__func__
-
-            async def bound(*args: Any, **kwargs: Any) -> None:
-                resolved = obj()
-                if resolved is None:
-                    return
-                await getattr(resolved, func.__name__)(*args, **kwargs)
-
-            return bound
-
-        ref = weakref.ref(handler)
-
-        async def free(*args: Any, **kwargs: Any) -> None:
-            resolved = ref()
-            if resolved is None:
-                return
-            await resolved(*args, **kwargs)
-
-        return free
-
-    def _matches(self, wrapped: Handler, target: Handler) -> bool:
-        return getattr(wrapped, "__wrapped__", None) is target or wrapped is target
-
-    async def _invoke(
-        self,
-        handler: Handler,
-        event: WsEventType,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        await handler(*args, **kwargs)
+    def _prune_dead(self, event: WsEventType) -> None:
+        subscribers = self._subscribers[event]
+        for token_id, subscription in list(subscribers.items()):
+            if subscription.resolve() is None:
+                subscribers.pop(token_id, None)

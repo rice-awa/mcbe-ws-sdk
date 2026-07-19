@@ -15,7 +15,7 @@ from mcbe_ws_sdk.gateway.connection import (
     PlayerSession,
     SendPayload,
 )
-from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
+from mcbe_ws_sdk.gateway.events import EventBus, SubscriptionToken, WsEventType
 from mcbe_ws_sdk.gateway.handler import (
     MessageSurfaceConfig,
     MinecraftProtocolHandler,
@@ -49,6 +49,7 @@ __all__ = [
     "RouteEnvelope",
     "SendPayload",
     "SilentResponseSink",
+    "SubscriptionToken",
     "StreamChunk",
     "SystemNotification",
     "TellrawMessage",
