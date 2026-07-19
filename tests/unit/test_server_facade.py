@@ -216,11 +216,13 @@ def test_facade_has_no_inbound_capability_registry() -> None:
     inbound_param = "capabil" + "ities"
     bridge_hook_name = "on_bridge" + "_message"
     registry_export = "Capability" + "Registry"
+    deleted_package_export = "capab" + "ility"
 
     assert inbound_param not in params
     assert not hasattr(McbeServerFacade(), "_capabilities")
     assert not hasattr(NoOpHook, bridge_hook_name)
     assert not hasattr(mcbe_ws_sdk, registry_export)
+    assert deleted_package_export not in mcbe_ws_sdk.__all__
 
 
 # --------------------------------------------------------------------------- #

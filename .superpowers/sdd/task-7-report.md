@@ -184,3 +184,135 @@ Deleted:
 ## Concerns
 
 - None beyond the intentional API removal required by Task 7.
+
+## Review Follow-up: stale `__all__` export
+
+Date: 2026-07-19
+
+Review issue validated: `src/mcbe_ws_sdk/__init__.py` still advertised `"capability"` in `__all__` after the package was deleted, which left wildcard exports inconsistent with the actual public surface.
+
+### Follow-up TDD
+
+#### 1. Extended the existing public-boundary test first
+
+Updated `test_facade_has_no_inbound_capability_registry` in `tests/unit/test_server_facade.py` to assert the deleted package export is absent from `mcbe_ws_sdk.__all__`.
+
+#### 2. RED command
+
+Command:
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_server_facade.py tests/unit/test_hook.py tests/unit/test_addon_request.py tests/unit/test_addon_bridge.py -q
+```
+
+Output:
+
+```text
+F.....................................................                   [100%]
+=================================== FAILURES ===================================
+________________ test_facade_has_no_inbound_capability_registry ________________
+
+    def test_facade_has_no_inbound_capability_registry() -> None:
+        params = inspect.signature(McbeServerFacade.__init__).parameters
+        inbound_param = "capabil" + "ities"
+        bridge_hook_name = "on_bridge" + "_message"
+        registry_export = "Capability" + "Registry"
+        deleted_package_export = "capab" + "ility"
+
+        assert inbound_param not in params
+        assert not hasattr(McbeServerFacade(), "_capabilities")
+        assert not hasattr(NoOpHook, bridge_hook_name)
+        assert not hasattr(mcbe_ws_sdk, registry_export)
+>       assert deleted_package_export not in mcbe_ws_sdk.__all__
+E       AssertionError: assert 'capability' not in ['addon', 'capability', 'gateway', 'protocol', 'AddonBridgeResponse', 'MCColor', ...]
+E        +  where ['addon', 'capability', 'gateway', 'protocol', 'AddonBridgeResponse', 'MCColor', ...] = mcbe_ws_sdk.__all__
+
+tests/unit/test_server_facade.py:225: AssertionError
+----------------------------- Captured stdout call -----------------------------
+2026-07-19 19:44:12 [info     ] command_registry_loaded        alias_count=1 command_count=3
+=========================== short test summary info ============================
+FAILED tests/unit/test_server_facade.py::test_facade_has_no_inbound_capability_registry
+1 failed, 53 passed in 0.48s
+```
+
+#### 3. Minimal fix applied
+
+Removed only the stale `"capability"` entry from `mcbe_ws_sdk.__all__`.
+
+#### 4. GREEN + verification
+
+Command:
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_server_facade.py tests/unit/test_hook.py tests/unit/test_addon_request.py tests/unit/test_addon_bridge.py -q
+```
+
+Output:
+
+```text
+......................................................                   [100%]
+54 passed in 0.56s
+```
+
+Command:
+
+```bash
+rg -n 'CapabilityRegistry|CapabilityHandler|CapabilityContext|on_bridge_message|capabilities=' src tests examples
+```
+
+Output:
+
+```text
+[no output]
+```
+
+Exit code: `1` (expected no-match result)
+
+Command:
+
+```bash
+.venv/bin/python -m ruff check --no-cache src tests examples
+```
+
+Output:
+
+```text
+All checks passed!
+```
+
+Command:
+
+```bash
+.venv/bin/python -m mypy --no-incremental src
+```
+
+Output:
+
+```text
+Success: no issues found in 25 source files
+```
+
+Command:
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider -q
+```
+
+Output:
+
+```text
+................................................ [ 42%]
+........................................................................ [ 85%]
+........................                                                 [100%]
+168 passed in 1.23s
+```
+
+### Follow-up self-review
+
+- The public boundary test now covers both symbol exports and `__all__` advertisement for the removed capability surface.
+- The implementation fix is minimal and limited to the stale wildcard export entry.
+- Verification confirms the package no longer advertises deleted inbound capability APIs.
+
+### Follow-up concerns
+
+- None.
