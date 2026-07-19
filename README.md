@@ -1,5 +1,7 @@
 # mcbe-ws-sdk
 
+[![Languages](https://img.shields.io/badge/Languages-中文-blue?style=flat-square)](./README.zh.md)
+
 Generic WebSocket gateway SDK for Minecraft Bedrock Edition. The package owns the
 WS transport, packet protocol and byte-safe command chunking, and exposes a
 dual-layer interface the host drives with dependency injection: subscribe to an
