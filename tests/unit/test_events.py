@@ -45,6 +45,18 @@ async def test_emit_invokes_subscribed_handler(bus: EventBus) -> None:
 
 
 @pytest.mark.asyncio
+async def test_emit_invokes_strong_synchronous_handler(bus: EventBus) -> None:
+    seen: list[str] = []
+
+    def _append(msg: str) -> None:
+        seen.append(msg)
+
+    bus.subscribe(WsEventType.PLAYER_MESSAGE, _append, weak=False)
+    await bus.emit(WsEventType.PLAYER_MESSAGE, "hi")
+    assert seen == ["hi"]
+
+
+@pytest.mark.asyncio
 async def test_emit_propagates_handler_exception_after_prior_handlers_run(bus: EventBus) -> None:
     first: list[str] = []
     second: list[str] = []

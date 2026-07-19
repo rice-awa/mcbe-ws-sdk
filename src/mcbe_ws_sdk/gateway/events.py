@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
-Handler = Callable[..., Awaitable[None]]
+Handler = Callable[..., Awaitable[None] | None]
 
 
 class WsEventType(Enum):
@@ -105,7 +106,9 @@ class EventBus:
             if handler is None:
                 subscribers.pop(token_id, None)
                 continue
-            await handler(*args, **kwargs)
+            result = handler(*args, **kwargs)
+            if inspect.isawaitable(result):
+                await result
 
     def _prune_dead(self, event: WsEventType) -> None:
         subscribers = self._subscribers[event]
