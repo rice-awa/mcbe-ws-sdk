@@ -27,11 +27,12 @@ import structlog
 from mcbe_ws_sdk.addon.protocol import encode_bridge_request
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings
+from mcbe_ws_sdk.errors import BridgeTimeoutError
 from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
 logger = structlog.get_logger(__name__)
 
-CommandSender = Callable[[str], Awaitable[str]]
+CommandSender = Callable[[str], Awaitable[None]]
 UiChatCallback = Callable[[UUID, str, str], Awaitable[None]]
 
 
@@ -84,20 +85,16 @@ class AddonBridgeService:
             payload=payload,
             protocol=self._protocol,
         )
-
-        command_result = await send_command(command)
-        if command_result.startswith("命令执行失败") or command_result.startswith("命令执行超时"):
-            session.fail_request(request.request_id, command_result)
-            raise RuntimeError(command_result)
-
         try:
-            return await asyncio.wait_for(
-                request.future,
-                timeout=self._timeout_seconds,
-            )
+            await send_command(command)
+            try:
+                return await asyncio.wait_for(request.future, self._timeout_seconds)
+            except TimeoutError as exc:
+                raise BridgeTimeoutError(request.request_id) from exc
         except TimeoutError as exc:
-            session.fail_request(request.request_id, "Addon 桥接响应超时")
-            raise RuntimeError("Addon 桥接响应超时") from exc
+            raise BridgeTimeoutError(request.request_id) from exc
+        finally:
+            session.cancel_request(request.request_id)
 
     def is_bridge_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is an addon response fragment."""
@@ -126,13 +123,13 @@ class AddonBridgeService:
                 )
                 return AddonMessageResult(handled=True)
 
-            chunk = session.handle_chat_chunk(message)
-            return AddonMessageResult(handled=True, bridge_chunk=chunk)
+            bridge_chunk = session.handle_chat_chunk(message)
+            return AddonMessageResult(handled=True, bridge_chunk=bridge_chunk)
 
         if self.is_ui_chat_message(sender, message):
             session = self._session_for(connection_id)
 
-            chunk, ui_message = session.handle_ui_chat_chunk(message)
+            ui_chunk, ui_message = session.handle_ui_chat_chunk(message)
             if ui_message is not None and self._ui_chat_callback is not None:
                 logger.info(
                     "ui_chat_reassembled",
@@ -148,7 +145,7 @@ class AddonBridgeService:
                 )
             return AddonMessageResult(
                 handled=True,
-                ui_chunk=chunk,
+                ui_chunk=ui_chunk,
                 ui_message=ui_message,
             )
 
@@ -162,12 +159,12 @@ class AddonBridgeService:
         """Tear down the per-connection session on disconnect."""
         session = self._sessions.pop(connection_id, None)
         if session is not None:
-            session.close("Addon 桥接连接已关闭")
+            session.close()
 
     def _session_for(self, connection_id: UUID) -> AddonBridgeSession:
         session = self._sessions.get(connection_id)
         if session is None:
-            session = AddonBridgeSession(protocol=self._protocol)
+            session = AddonBridgeSession(self._settings)
             self._sessions[connection_id] = session
         return session
 

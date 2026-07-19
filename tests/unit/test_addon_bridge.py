@@ -23,8 +23,13 @@ from mcbe_ws_sdk.addon.protocol import (
 )
 from mcbe_ws_sdk.addon.service import AddonBridgeService, AddonMessageResult
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 from mcbe_ws_sdk.config import AddonBridgeSettings, AddonProtocolConfig
+from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, BridgeTimeoutError
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
+
+
+def _complete_ui_chunk(player: str, message: str) -> str:
+    return f'MCBEAI|UI_CHAT|m1|1/1|{{"player":"{player}","message":"{message}"}}'
 
 
 def test_no_module_level_singleton() -> None:
@@ -71,7 +76,7 @@ def test_reassemble_bridge_chunks_parses_json_payload() -> None:
 @pytest.mark.asyncio
 async def test_session_reassembles_bridge_response() -> None:
     protocol = AddonProtocolConfig()
-    session = AddonBridgeSession(protocol=protocol)
+    session = AddonBridgeSession(AddonBridgeSettings(protocol=protocol))
     request = session.create_request(capability="get_greeting", payload={"player": "Steve"})
 
     rid = request.request_id
@@ -86,7 +91,7 @@ async def test_session_reassembles_bridge_response() -> None:
 
 def test_session_reassembles_ui_chat() -> None:
     protocol = AddonProtocolConfig()
-    session = AddonBridgeSession(protocol=protocol)
+    session = AddonBridgeSession(AddonBridgeSettings(protocol=protocol))
 
     first_chunk, first_message = session.handle_ui_chat_chunk(
         'MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
@@ -136,6 +141,69 @@ async def test_service_request_capability_end_to_end() -> None:
     assert result == {"ok": True}
     assert len(sent) == 1
     assert sent[0].startswith("scriptevent mcbeai:bridge_request ")
+
+
+@pytest.mark.asyncio
+async def test_send_failure_cleans_pending_request() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    connection_id = UUID(int=51)
+
+    async def fail(command: str) -> None:
+        raise LookupError("send failed")
+
+    with pytest.raises(LookupError):
+        await service.request_capability(connection_id, "x", {}, fail)
+    assert service._sessions[connection_id]._pending_requests == {}
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_typed_and_cleans_pending_request() -> None:
+    service = AddonBridgeService(AddonBridgeSettings(timeout_seconds=0.01))
+    connection_id = UUID(int=53)
+
+    async def accept(command: str) -> None:
+        return None
+
+    with pytest.raises(BridgeTimeoutError):
+        await service.request_capability(connection_id, "x", {}, accept)
+    assert service._sessions[connection_id]._pending_requests == {}
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_remains_cancelled_and_cleans_pending_request() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    connection_id = UUID(int=54)
+
+    async def accept(command: str) -> None:
+        return None
+
+    task = asyncio.create_task(service.request_capability(connection_id, "x", {}, accept))
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert service._sessions[connection_id]._pending_requests == {}
+
+
+@pytest.mark.asyncio
+async def test_close_connection_finishes_pending_request_with_bridge_closed() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    connection_id = UUID(int=55)
+    session = service._session_for(connection_id)
+    request = session.create_request("x", {})
+
+    service.close_connection(connection_id)
+
+    with pytest.raises(BridgeClosedError):
+        await request.future
+
+
+def test_session_rejects_excessive_chunk_count() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings(max_chunks_per_message=2))
+    request = session.create_request("x", {})
+    with pytest.raises(BridgeLimitError):
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/3|x")
 
 
 def test_is_bridge_and_ui_chat_message() -> None:
@@ -198,3 +266,19 @@ async def test_service_handle_player_message_returns_structured_ui_result() -> N
         ui_message=UiChatMessage(msg_id="m1", player_name="Steve", message="hello"),
     )
     assert seen == [(connection_id, "Steve", "hello")]
+
+
+@pytest.mark.asyncio
+async def test_ui_callback_failure_is_awaited_and_no_task_leaks() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+
+    async def fail_callback(connection_id: UUID, player: str, message: str) -> None:
+        raise LookupError("callback failed")
+
+    service.set_ui_chat_callback(fail_callback)
+    before = set(asyncio.all_tasks())
+    with pytest.raises(LookupError, match="callback failed"):
+        await service.handle_player_message(
+            UUID(int=52), "MCBEAI_TOOL", _complete_ui_chunk("Alice", "hello")
+        )
+    assert set(asyncio.all_tasks()) == before

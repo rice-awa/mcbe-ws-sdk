@@ -1,21 +1,13 @@
-"""Addon bridge session management.
-
-Relocated from the main repo ``services/addon/session.py``.
-
-The session now receives its :class:`AddonProtocolConfig` at construction and
-threads it into every codec decode call. This removes the old implicit
-``_protocol()`` global read (which depended on a running settings singleton) and
-keeps configuration explicit and per-session.
-"""
+"""Addon bridge session management."""
 
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Generic, Protocol, TypeVar
 from uuid import uuid4
-
-import structlog
 
 from mcbe_ws_sdk.addon.protocol import (
     decode_bridge_chat_chunk,
@@ -23,11 +15,16 @@ from mcbe_ws_sdk.addon.protocol import (
     reassemble_bridge_chunks,
     reassemble_ui_chat_chunks,
 )
-from mcbe_ws_sdk.config import AddonProtocolConfig
-from mcbe_ws_sdk.errors import ProtocolError
+from mcbe_ws_sdk.config import AddonBridgeSettings
+from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, ProtocolError
 from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
-logger = structlog.get_logger(__name__)
+
+class _ChunkWithContent(Protocol):
+    content: str
+
+
+T = TypeVar("T", bound=_ChunkWithContent)
 
 
 @dataclass
@@ -40,14 +37,29 @@ class PendingAddonRequest:
     future: asyncio.Future[dict[str, Any]]
 
 
+@dataclass
+class ChunkBuffer(Generic[T]):
+    total_chunks: int
+    chunks: dict[int, T]
+    byte_size: int
+    updated_at: float
+
+
 class AddonBridgeSession:
     """Maintain bridge requests and fragment buffers for one connection."""
 
-    def __init__(self, protocol: AddonProtocolConfig | None = None) -> None:
-        self._protocol = protocol if protocol is not None else AddonProtocolConfig()
+    def __init__(
+        self,
+        settings: AddonBridgeSettings,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._settings = settings
+        self._protocol = settings.protocol
+        self._clock = clock
         self._pending_requests: dict[str, PendingAddonRequest] = {}
-        self._chunk_buffers: dict[str, dict[int, AddonBridgeChunk]] = {}
-        self._ui_chat_chunk_buffers: dict[str, dict[int, UiChatChunk]] = {}
+        self._chunk_buffers: dict[str, ChunkBuffer[AddonBridgeChunk]] = {}
+        self._ui_chat_chunk_buffers: dict[str, ChunkBuffer[UiChatChunk]] = {}
 
     def create_request(
         self,
@@ -55,7 +67,12 @@ class AddonBridgeSession:
         payload: dict[str, Any],
     ) -> PendingAddonRequest:
         """Create and register a pending request."""
-        loop = asyncio.get_running_loop()
+        if len(self._pending_requests) >= self._settings.max_pending_requests:
+            raise BridgeLimitError("maximum pending requests exceeded")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
         request = PendingAddonRequest(
             request_id=f"addon-{uuid4().hex}",
             capability=capability,
@@ -74,36 +91,43 @@ class AddonBridgeSession:
         if chunk.request_id not in self._pending_requests:
             return chunk
 
-        buffer = self._chunk_buffers.setdefault(chunk.request_id, {})
-        buffer[chunk.chunk_index] = chunk
-
-        if len(buffer) < chunk.total_chunks:
+        buffer = self._accept_chunk(
+            self._chunk_buffers,
+            buffer_id=chunk.request_id,
+            index=chunk.chunk_index,
+            total=chunk.total_chunks,
+            content=chunk.content,
+            item=chunk,
+        )
+        if set(buffer.chunks) != set(range(1, buffer.total_chunks + 1)):
             return chunk
 
+        complete = self._chunk_buffers.pop(chunk.request_id)
         try:
-            response = reassemble_bridge_chunks(list(buffer.values()))
+            response = reassemble_bridge_chunks(list(complete.chunks.values()))
         except ValueError as exc:
-            self._chunk_buffers.pop(chunk.request_id, None)
+            self._pending_requests.pop(chunk.request_id, None)
             raise ProtocolError(str(exc)) from exc
 
-        request = self._pending_requests.pop(chunk.request_id)
-        self._chunk_buffers.pop(chunk.request_id, None)
-        if not request.future.done():
+        request = self._pending_requests.pop(chunk.request_id, None)
+        if request is not None and not request.future.done():
             request.future.set_result(response.payload)
         return chunk
 
-    def fail_request(self, request_id: str, reason: str) -> None:
-        """Fail and drop a pending request."""
+    def cancel_request(self, request_id: str) -> None:
         request = self._pending_requests.pop(request_id, None)
         self._chunk_buffers.pop(request_id, None)
-        if request and not request.future.done():
-            request.future.set_exception(RuntimeError(reason))
+        if request is not None and not request.future.done():
+            request.future.cancel()
 
-    def close(self, reason: str) -> None:
+    def close(self) -> None:
         """Close the session, failing every pending request."""
         pending_ids = list(self._pending_requests)
         for request_id in pending_ids:
-            self.fail_request(request_id, reason)
+            request = self._pending_requests.pop(request_id, None)
+            self._chunk_buffers.pop(request_id, None)
+            if request is not None and not request.future.done():
+                request.future.set_exception(BridgeClosedError(request_id))
         self._ui_chat_chunk_buffers.clear()
 
     def handle_ui_chat_chunk(self, chunk_message: str) -> tuple[UiChatChunk, UiChatMessage | None]:
@@ -113,34 +137,89 @@ class AddonBridgeSession:
         except ValueError as exc:
             raise ProtocolError(str(exc)) from exc
 
-        buffer = self._ui_chat_chunk_buffers.setdefault(chunk.msg_id, {})
-        buffer[chunk.chunk_index] = chunk
-
-        logger.debug(
-            "ui_chat_chunk_buffered",
-            msg_id=chunk.msg_id,
-            chunk_index=chunk.chunk_index,
-            total_chunks=chunk.total_chunks,
-            buffered=len(buffer),
+        buffer = self._accept_chunk(
+            self._ui_chat_chunk_buffers,
+            buffer_id=chunk.msg_id,
+            index=chunk.chunk_index,
+            total=chunk.total_chunks,
+            content=chunk.content,
+            item=chunk,
         )
-
-        if len(buffer) < chunk.total_chunks:
+        if set(buffer.chunks) != set(range(1, buffer.total_chunks + 1)):
             return chunk, None
 
+        complete = self._ui_chat_chunk_buffers.pop(chunk.msg_id)
         try:
-            ui_msg = reassemble_ui_chat_chunks(list(buffer.values()))
-        except ValueError as e:
-            self._ui_chat_chunk_buffers.pop(chunk.msg_id, None)
-            raise ProtocolError(str(e)) from e
-        finally:
-            self._ui_chat_chunk_buffers.pop(chunk.msg_id, None)
+            ui_message = reassemble_ui_chat_chunks(list(complete.chunks.values()))
+        except ValueError as exc:
+            raise ProtocolError(str(exc)) from exc
+        return chunk, ui_message
 
-        logger.info(
-            "ui_chat_reassemble_success",
-            msg_id=ui_msg.msg_id,
-            player=ui_msg.player_name,
-            message_length=len(ui_msg.message),
+    def _accept_chunk(
+        self,
+        buffers: dict[str, ChunkBuffer[T]],
+        *,
+        buffer_id: str,
+        index: int,
+        total: int,
+        content: str,
+        item: T,
+    ) -> ChunkBuffer[T]:
+        self._prune_expired()
+        if not 1 <= index <= total <= self._settings.max_chunks_per_message:
+            raise BridgeLimitError("invalid chunk index or total")
+        encoded_size = len(content.encode("utf-8"))
+        current = buffers.get(buffer_id)
+        if current is None:
+            if self._buffer_count() >= self._settings.max_buffer_ids:
+                raise BridgeLimitError("maximum buffer ids exceeded")
+            current = ChunkBuffer(total, {}, 0, self._clock())
+            buffers[buffer_id] = current
+        elif current.total_chunks != total:
+            self._drop_buffer(buffers, buffer_id)
+            raise ProtocolError("chunk total changed")
+        existing = current.chunks.get(index)
+        if existing is not None:
+            if self._chunk_content(existing) != content:
+                self._drop_buffer(buffers, buffer_id)
+                raise ProtocolError("duplicate chunk content changed")
+            return current
+        if current.byte_size + encoded_size > self._settings.max_message_bytes:
+            self._drop_buffer(buffers, buffer_id)
+            raise BridgeLimitError("message byte limit exceeded")
+        if self._total_buffer_bytes() + encoded_size > self._settings.max_total_buffer_bytes:
+            self._drop_buffer(buffers, buffer_id)
+            raise BridgeLimitError("total buffer byte limit exceeded")
+        current.chunks[index] = item
+        current.byte_size += encoded_size
+        current.updated_at = self._clock()
+        return current
+
+    def _prune_expired(self) -> None:
+        now = self._clock()
+        ttl = self._settings.buffer_ttl_seconds
+        for buffer_id, bridge_buffer in list(self._chunk_buffers.items()):
+            if now - bridge_buffer.updated_at >= ttl:
+                self._drop_buffer(self._chunk_buffers, buffer_id)
+        for buffer_id, ui_buffer in list(self._ui_chat_chunk_buffers.items()):
+            if now - ui_buffer.updated_at >= ttl:
+                self._drop_buffer(self._ui_chat_chunk_buffers, buffer_id)
+
+    @staticmethod
+    def _drop_buffer(
+        buffers: dict[str, ChunkBuffer[T]],
+        buffer_id: str,
+    ) -> None:
+        buffers.pop(buffer_id, None)
+
+    def _buffer_count(self) -> int:
+        return len(self._chunk_buffers) + len(self._ui_chat_chunk_buffers)
+
+    def _total_buffer_bytes(self) -> int:
+        return sum(buffer.byte_size for buffer in self._chunk_buffers.values()) + sum(
+            buffer.byte_size for buffer in self._ui_chat_chunk_buffers.values()
         )
 
-        return chunk, ui_msg
-
+    @staticmethod
+    def _chunk_content(chunk: _ChunkWithContent) -> str:
+        return chunk.content

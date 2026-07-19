@@ -29,6 +29,7 @@ import pytest
 from mcbe_ws_sdk.addon.service import AddonBridgeService
 from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import AddonBridgeSettings, GatewaySettings, WebsocketTransportConfig
+from mcbe_ws_sdk.errors import FacadeLifecycleError
 from mcbe_ws_sdk.gateway import WsEventType
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import NoOpHook
@@ -39,12 +40,12 @@ from mcbe_ws_sdk.gateway.sink import (
     RouteEnvelope,
     SilentResponseSink,
 )
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
     PlayerMessageEvent,
 )
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
 # --------------------------------------------------------------------------- #
 # Shared test doubles
@@ -154,6 +155,13 @@ def _player_message_frame(sender: str, message: str) -> str:
             "header": {"eventName": "PlayerMessage", "requestId": "evt-1"},
             "body": {"sender": sender, "message": message},
         }
+    )
+
+
+def _complete_ui_player_frame(player: str, message: str) -> str:
+    return _player_message_frame(
+        "MCBEAI_TOOL",
+        f'MCBEAI|UI_CHAT|m1|1/1|{{"player":"{player}","message":"{message}"}}',
     )
 
 
@@ -370,6 +378,24 @@ async def test_malformed_ui_frame_does_not_block_following_player_frame() -> Non
     await McbeServerFacade(hook=hook, sink=RecordingSink())._on_connection(FakeWebSocket(frames))
 
     assert [event.message for event in hook.player_messages] == ["hello"]
+
+
+class FailingUiHook(RecordingHook):
+    async def on_ui_chat_reassembled(
+        self, state: ConnectionState, player_name: str, message: str,
+    ) -> None:
+        raise LookupError("callback failed")
+
+
+@pytest.mark.asyncio
+async def test_ui_callback_failure_does_not_block_following_frame() -> None:
+    hook = FailingUiHook()
+    frames = [
+        _complete_ui_player_frame("Alice", "first"),
+        _player_message_frame("Alice", "second"),
+    ]
+    await McbeServerFacade(hook=hook)._on_connection(FakeWebSocket(frames))
+    assert [event.message for event in hook.player_messages] == ["second"]
 
 
 # --------------------------------------------------------------------------- #
@@ -674,6 +700,33 @@ async def test_shutdown_all_on_stop_cancels_senders() -> None:
 
     assert facade.manager.connection_count == 0
     assert facade.manager._sender_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_facade_lifetime_is_single_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int, dict[str, object]]] = []
+
+    class FakeServerContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            return None
+
+    def fake_serve(handler: object, host: str, port: int, **kwargs: object) -> FakeServerContext:
+        calls.append((host, port, dict(kwargs)))
+        return FakeServerContext()
+
+    monkeypatch.setattr("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve)
+    facade = McbeServerFacade()
+    await facade.stop()
+    await facade.run_lifetime(host="127.0.0.1", port=0)
+    assert calls[0][0:2] == ("127.0.0.1", 0)
+    assert facade._server is None
+    with pytest.raises(FacadeLifecycleError, match="single-use"):
+        await facade.run_lifetime(host="127.0.0.1", port=0)
 
 
 # --------------------------------------------------------------------------- #

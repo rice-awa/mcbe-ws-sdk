@@ -24,9 +24,17 @@ class BridgeError(McbeWsSdkError):
 class BridgeTimeoutError(BridgeError):
     """Raised when an add-on bridge request times out."""
 
+    def __init__(self, request_id: str) -> None:
+        super().__init__(f"Bridge request timed out: {request_id}")
+        self.request_id = request_id
+
 
 class BridgeClosedError(BridgeError):
     """Raised when an add-on bridge is closed."""
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__(f"Bridge connection closed: {request_id}")
+        self.request_id = request_id
 
 
 class BridgeLimitError(ProtocolError):

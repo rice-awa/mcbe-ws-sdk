@@ -42,7 +42,7 @@ from mcbe_ws_sdk.capability import CapabilityRegistry
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import GatewaySettings
-from mcbe_ws_sdk.errors import ProtocolError
+from mcbe_ws_sdk.errors import FacadeLifecycleError, ProtocolError
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
@@ -90,6 +90,7 @@ class McbeServerFacade:
         self._manager = ConnectionManager(sink=self._sink, event_bus=EventBus())
 
         self._stopped = asyncio.Event()
+        self._lifetime_started = False
         self._server: Any = None
 
     # -- public manipulables (read-friendly; tests/asserts use these) ------------
@@ -129,32 +130,36 @@ class McbeServerFacade:
         explicit ``stop()`` returns cleanly; the outer task being cancelled also
         unwinds into :meth:`_graceful_shutdown`.
         """
+        if self._lifetime_started:
+            raise FacadeLifecycleError("McbeServerFacade is single-use")
+        self._lifetime_started = True
         serve_host = host if host is not None else self._settings.websocket.host
         serve_port = port if port is not None else self._settings.websocket.port
         transport = self._settings.websocket
 
-        async with websockets.serve(
-            self._on_connection,
-            serve_host,
-            serve_port,
-            ping_interval=transport.ping_interval,
-            ping_timeout=transport.ping_timeout,
-            close_timeout=transport.close_timeout,
-            max_size=transport.max_size,
-            max_queue=transport.max_queue,
-        ) as server:
-            self._server = server
-            logger.info(
-                "facade_listening",
-                host=serve_host,
-                port=serve_port,
-            )
-            try:
-                await self._stopped.wait()
-            finally:
-                await self._graceful_shutdown()
-
-        self._server = None
+        try:
+            async with websockets.serve(
+                self._on_connection,
+                serve_host,
+                serve_port,
+                ping_interval=transport.ping_interval,
+                ping_timeout=transport.ping_timeout,
+                close_timeout=transport.close_timeout,
+                max_size=transport.max_size,
+                max_queue=transport.max_queue,
+            ) as server:
+                self._server = server
+                logger.info(
+                    "facade_listening",
+                    host=serve_host,
+                    port=serve_port,
+                )
+                try:
+                    await self._stopped.wait()
+                finally:
+                    await self._graceful_shutdown()
+        finally:
+            self._server = None
 
     async def stop(self) -> None:
         """Signal :meth:`run_lifetime` to unwind (idempotent)."""
@@ -254,6 +259,12 @@ class McbeServerFacade:
                 )
             except ProtocolError:
                 self._log_malformed_addon_frame(event.message)
+                return
+            except Exception:
+                logger.exception(
+                    "addon_frame_handler_failed",
+                    connection_id=str(state.id),
+                )
                 return
 
             if result.bridge_chunk is not None:

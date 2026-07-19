@@ -14,7 +14,6 @@ from typing import Any
 
 from mcbe_ws_sdk import (
     CapabilityContext,
-    CapabilityHandler,
     CapabilityRegistry,
     McbeServerFacade,
     NoOpHook,
