@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
+from numbers import Real
 from typing import Literal
 
 from mcbe_ws_sdk.errors import ConfigurationError
+
+
+def _require_finite_non_negative_real(value: object, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, Real) or not isfinite(value) or value < 0:
+        raise ConfigurationError(f"legacy {field_name} must be a finite non-negative real number")
 
 
 @dataclass(frozen=True)
@@ -18,10 +25,10 @@ class LegacyMcbeAiV1Profile:
     response_prelude_delay: float = 0.5
 
     def __post_init__(self) -> None:
-        if self.response_chunk_delay < 0:
-            raise ConfigurationError("legacy response_chunk_delay must be >= 0")
-        if self.response_prelude_delay < 0:
-            raise ConfigurationError("legacy response_prelude_delay must be >= 0")
+        if self.request_version != 2:
+            raise ConfigurationError("legacy request_version must be 2")
+        _require_finite_non_negative_real(self.response_chunk_delay, "response_chunk_delay")
+        _require_finite_non_negative_real(self.response_prelude_delay, "response_prelude_delay")
 
 
 LEGACY_MCBEAI_V1 = LegacyMcbeAiV1Profile()

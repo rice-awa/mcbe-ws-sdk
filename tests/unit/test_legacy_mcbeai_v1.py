@@ -9,13 +9,17 @@ import pytest
 
 from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
+from mcbe_ws_sdk.errors import ConfigurationError
 from mcbe_ws_sdk.flow import FlowControlMiddleware
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import (
     encode_bridge_request,
     encode_legacy_response_commands,
 )
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.delivery import LegacyMcbeAiV1Delivery
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LEGACY_MCBEAI_V1
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import (
+    LEGACY_MCBEAI_V1,
+    LegacyMcbeAiV1Profile,
+)
 
 
 def test_legacy_profile_keeps_v1_wire_identifiers() -> None:
@@ -24,6 +28,32 @@ def test_legacy_profile_keeps_v1_wire_identifiers() -> None:
     assert LEGACY_MCBEAI_V1.ui_chat_prefix == "MCBEAI|UI_CHAT"
     assert LEGACY_MCBEAI_V1.bridge_sender == "MCBEAI_TOOL"
     assert LEGACY_MCBEAI_V1.response_message_id == "mcbeai:ai_resp"
+
+
+def test_legacy_profile_request_version_is_fixed_to_v2() -> None:
+    with pytest.raises(ConfigurationError, match="legacy request_version must be 2"):
+        LegacyMcbeAiV1Profile(request_version=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("response_chunk_delay", -0.1),
+        ("response_chunk_delay", True),
+        ("response_chunk_delay", float("nan")),
+        ("response_chunk_delay", float("inf")),
+        ("response_chunk_delay", "slow"),
+        ("response_prelude_delay", -0.1),
+        ("response_prelude_delay", False),
+        ("response_prelude_delay", float("nan")),
+        ("response_prelude_delay", float("-inf")),
+        ("response_prelude_delay", None),
+    ],
+)
+def test_legacy_profile_rejects_invalid_delay_values(field: str, value: object) -> None:
+    expected = f"legacy {field} must be a finite non-negative real number"
+    with pytest.raises(ConfigurationError, match=expected):
+        LegacyMcbeAiV1Profile(**{field: value})  # type: ignore[arg-type]
 
 
 def test_generic_flow_chunks_custom_framed_event() -> None:
