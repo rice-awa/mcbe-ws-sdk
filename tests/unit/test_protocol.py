@@ -8,6 +8,9 @@ from mcbe_ws_sdk.protocol.addon import (
 from mcbe_ws_sdk.protocol.minecraft import (
     MCColor,
     MCPrefix,
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    MinecraftMessage,
     MinecraftCommand,
     MinecraftSubscribe,
     PlayerMessageEvent,
@@ -98,3 +101,46 @@ def test_minecraft_command_create_tellraw_builds_valid_command():
     data = cmd.model_dump()
     assert data["body"]["commandLine"].startswith("tellraw ")
     assert "§aHello" in data["body"]["commandLine"]
+
+
+def test_wire_models_preserve_unknown_header_and_body_fields() -> None:
+    frame = MinecraftMessage.model_validate(
+        {
+            "header": {
+                "messagePurpose": "event",
+                "requestId": "r-extra",
+                "futureHeader": {"x": 1},
+            },
+            "body": {"eventName": "FutureEvent", "futureBody": [1, 2]},
+            "futureEnvelope": True,
+        }
+    )
+    dumped = frame.model_dump()
+    assert dumped["header"]["futureHeader"] == {"x": 1}
+    assert dumped["body"]["futureBody"] == [1, 2]
+    assert dumped["futureEnvelope"] is True
+
+
+def test_command_response_and_error_frame_models_allow_extension_fields() -> None:
+    response = MinecraftCommandResponse.model_validate(
+        {
+            "request_id": "r-1",
+            "body": {"statusCode": 0, "details": {"count": 2}},
+            "futureResponse": True,
+        }
+    )
+    error = MinecraftErrorFrame.model_validate(
+        {
+            "request_id": "r-2",
+            "header": {"messagePurpose": "error", "futureHeader": "ok"},
+            "body": {"statusCode": 500, "futureBody": ["x"]},
+            "futureError": {"present": True},
+        }
+    )
+
+    assert response.model_dump()["futureResponse"] is True
+    assert response.body["details"] == {"count": 2}
+    dumped_error = error.model_dump()
+    assert dumped_error["header"]["futureHeader"] == "ok"
+    assert dumped_error["body"]["futureBody"] == ["x"]
+    assert dumped_error["futureError"] == {"present": True}

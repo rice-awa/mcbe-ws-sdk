@@ -15,11 +15,15 @@ Hook return convention:
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.protocol.addon import AddonBridgeRequest
-from mcbe_ws_sdk.protocol.minecraft import PlayerMessageEvent
+from mcbe_ws_sdk.protocol.minecraft import (
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    PlayerMessageEvent,
+)
 
 
 @runtime_checkable
@@ -66,10 +70,13 @@ class ConnectionHook(Protocol):
     async def on_command_response(
         self,
         state: ConnectionState,
-        request_id: str,
-        response: dict[str, Any],
+        response: MinecraftCommandResponse,
     ) -> None:
         """Inbound ``commandResponse`` (resolves run_command futures)."""
+        ...
+
+    async def on_error(self, state: ConnectionState, error: MinecraftErrorFrame) -> None:
+        """Inbound typed ``error`` frame."""
         ...
 
 
@@ -110,7 +117,9 @@ class NoOpHook:
     async def on_command_response(
         self,
         state: ConnectionState,
-        request_id: str,
-        response: dict[str, Any],
+        response: MinecraftCommandResponse,
     ) -> None:
+        return None
+
+    async def on_error(self, state: ConnectionState, error: MinecraftErrorFrame) -> None:
         return None

@@ -9,7 +9,11 @@ import pytest
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
 from mcbe_ws_sdk.protocol.addon import AddonBridgeRequest
-from mcbe_ws_sdk.protocol.minecraft import PlayerMessageEvent
+from mcbe_ws_sdk.protocol.minecraft import (
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    PlayerMessageEvent,
+)
 
 
 def test_noop_hook_is_connection_hook() -> None:
@@ -42,7 +46,24 @@ async def test_noop_hook_defaults() -> None:
         is False
     )
     assert await hook.on_ui_chat_reassembled(state, "Steve", "hello") is None
-    assert await hook.on_command_response(state, "req-1", {"status": 0}) is None
+    assert (
+        await hook.on_command_response(
+            state,
+            MinecraftCommandResponse(request_id="req-1", body={"status": 0}),
+        )
+        is None
+    )
+    assert (
+        await hook.on_error(
+            state,
+            MinecraftErrorFrame(
+                request_id="req-2",
+                header={"messagePurpose": "error"},
+                body={"statusCode": 500},
+            ),
+        )
+        is None
+    )
 
 
 def test_custom_hook_via_implementation() -> None:

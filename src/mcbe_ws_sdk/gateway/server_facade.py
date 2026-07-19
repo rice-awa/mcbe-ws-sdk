@@ -48,6 +48,7 @@ from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolH
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
 from mcbe_ws_sdk.gateway.sink import ResponseSink, SilentResponseSink
 from mcbe_ws_sdk.protocol.addon import parse_addon_bridge_request
+from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
 
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
@@ -129,8 +130,18 @@ class McbeServerFacade:
         """
         serve_host = host if host is not None else self._settings.websocket.host
         serve_port = port if port is not None else self._settings.websocket.port
+        transport = self._settings.websocket
 
-        async with websockets.serve(self._on_connection, serve_host, serve_port) as server:
+        async with websockets.serve(
+            self._on_connection,
+            serve_host,
+            serve_port,
+            ping_interval=transport.ping_interval,
+            ping_timeout=transport.ping_timeout,
+            close_timeout=transport.close_timeout,
+            max_size=transport.max_size,
+            max_queue=transport.max_queue,
+        ) as server:
             self._server = server
             logger.info(
                 "facade_listening",
@@ -162,9 +173,9 @@ class McbeServerFacade:
         state = await self._manager.create_connection(send_payload=self._wrap_send(websocket))
 
         try:
-            # E.4: framing (``{"Result":"true"}``, subscribe, welcome) is the
-            # host's job — emitted by ``hook.on_connected``. The facade calls the
-            # hook once after the (transport-handshake-already-complete) connect.
+            assert state.send_payload is not None
+            await state.send_payload('{"Result":"true"}')
+            await state.send_payload(self._handler.create_subscribe_message())
             await self._hook.on_connected(state)
 
             async for raw in websocket:
@@ -203,12 +214,15 @@ class McbeServerFacade:
             )
             return
 
+        if self._is_error_frame(data):
+            await self._hook.on_error(state, self._extract_error_frame(data))
+            return
+
         # Branch C — commandResponse: host-side command-execution future plumbing.
         # We only detect the frame + forward to the hook; there is intentionally
         # no ``pending_command_futures`` map on the state (that is host-owned).
         if self._is_command_response(data):
-            request_id, response = self._extract_command_response(data)
-            await self._hook.on_command_response(state, request_id, response)
+            await self._hook.on_command_response(state, self._extract_command_response(data))
             return
 
         # Parse a PlayerMessage event (returns None for any other event kind).
@@ -283,15 +297,11 @@ class McbeServerFacade:
         return header.get("messagePurpose") == "commandResponse"
 
     @staticmethod
-    def _extract_command_response(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        """Return ``(request_id, response_dict)`` for a ``commandResponse`` frame.
+    def _extract_command_response(data: dict[str, Any]) -> MinecraftCommandResponse:
+        """Return a typed ``commandResponse`` frame.
 
-        The ``response`` dict mirrors the main repo ``body`` the agent's
-        ``run_command`` future is resolved with (``statusCode`` /
-        ``statusMessage``); passing the full ``body`` lets the host reconstruct
-        the success/failure string however it likes. A missing/empty
-        ``requestId`` collapses to ``""`` (still forwarded — the hook decides
-        whether to treat it as an untracked response).
+        The full ``body`` is preserved so the host can interpret both the
+        canonical fields and any future extension fields.
         """
         header = data.get("header") or {}
         if not isinstance(header, dict):
@@ -301,11 +311,28 @@ class McbeServerFacade:
         body = data.get("body") or {}
         if not isinstance(body, dict):
             body = {}
-        response: dict[str, Any] = {
-            "statusCode": body.get("statusCode"),
-            "statusMessage": body.get("statusMessage"),
-        }
-        return request_id, response
+        return MinecraftCommandResponse(request_id=request_id, body=body)
+
+    @staticmethod
+    def _is_error_frame(data: dict[str, Any]) -> bool:
+        header = data.get("header")
+        if not isinstance(header, dict):
+            return False
+        return header.get("messagePurpose") == "error"
+
+    @staticmethod
+    def _extract_error_frame(data: dict[str, Any]) -> MinecraftErrorFrame:
+        header = data.get("header") or {}
+        if not isinstance(header, dict):
+            header = {}
+        body = data.get("body") or {}
+        if not isinstance(body, dict):
+            body = {}
+        return MinecraftErrorFrame(
+            request_id=str(header.get("requestId", "")),
+            header=header,
+            body=body,
+        )
 
 
 __all__ = ["McbeServerFacade"]

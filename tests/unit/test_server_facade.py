@@ -21,13 +21,14 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import patch
 from uuid import UUID
 
 import pytest
 
 from mcbe_ws_sdk.addon.service import AddonBridgeService
 from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
-from mcbe_ws_sdk.config import AddonBridgeSettings
+from mcbe_ws_sdk.config import AddonBridgeSettings, GatewaySettings, WebsocketTransportConfig
 from mcbe_ws_sdk.gateway import WsEventType
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import NoOpHook
@@ -38,7 +39,11 @@ from mcbe_ws_sdk.gateway.sink import (
     RouteEnvelope,
     SilentResponseSink,
 )
-from mcbe_ws_sdk.protocol.minecraft import PlayerMessageEvent
+from mcbe_ws_sdk.protocol.minecraft import (
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    PlayerMessageEvent,
+)
 
 # --------------------------------------------------------------------------- #
 # Shared test doubles
@@ -85,7 +90,8 @@ class RecordingHook(NoOpHook):
         self.player_messages: list[PlayerMessageEvent] = []
         self.bridge_requests: list[str] = []
         self.ui_chat_reassembled: list[tuple[str, str]] = []
-        self.command_responses: list[tuple[str, dict[str, Any]]] = []
+        self.command_responses: list[MinecraftCommandResponse] = []
+        self.errors: list[MinecraftErrorFrame] = []
 
     async def on_connected(self, state: ConnectionState) -> None:
         self.connected.append(state.id)
@@ -109,9 +115,18 @@ class RecordingHook(NoOpHook):
         self.ui_chat_reassembled.append((player_name, message))
 
     async def on_command_response(
-        self, state: ConnectionState, request_id: str, response: dict[str, Any],
+        self,
+        state: ConnectionState,
+        response: MinecraftCommandResponse,
     ) -> None:
-        self.command_responses.append((request_id, response))
+        self.command_responses.append(response)
+
+    async def on_error(
+        self,
+        state: ConnectionState,
+        error: MinecraftErrorFrame,
+    ) -> None:
+        self.errors.append(error)
 
 
 class RecordingAddon(AddonBridgeService):
@@ -146,12 +161,25 @@ def _command_response_frame(
     *,
     status_code: int = 0,
     status_message: str = "命令执行成功",
+    extra_body: dict[str, Any] | None = None,
 ) -> str:
     """Build a ``commandResponse`` frame matching the facade's shape heuristic."""
+    body = {"statusCode": status_code, "statusMessage": status_message}
+    if extra_body is not None:
+        body.update(extra_body)
     return json.dumps(
         {
             "header": {"requestId": request_id, "messagePurpose": "commandResponse"},
-            "body": {"statusCode": status_code, "statusMessage": status_message},
+            "body": body,
+        }
+    )
+
+
+def _error_frame(request_id: str, *, body: dict[str, Any] | None = None) -> str:
+    return json.dumps(
+        {
+            "header": {"requestId": request_id, "messagePurpose": "error", "code": 500},
+            "body": body if body is not None else {"statusMessage": "boom"},
         }
     )
 
@@ -191,6 +219,56 @@ async def test_run_lifetime_binds_and_stops_cleanly() -> None:
     assert facade.manager.connection_count == 0
 
 
+@pytest.mark.asyncio
+async def test_run_lifetime_passes_transport_options_to_serve() -> None:
+    settings = GatewaySettings(
+        websocket=WebsocketTransportConfig(
+            host="127.0.0.1",
+            port=8765,
+            ping_interval=11.0,
+            ping_timeout=7.0,
+            close_timeout=5.0,
+            max_size=4096,
+            max_queue=9,
+        )
+    )
+    facade = McbeServerFacade(settings=settings, hook=RecordingHook(), sink=RecordingSink())
+    captured: dict[str, Any] = {}
+
+    class FakeServerContext:
+        sockets = [object()]
+
+        async def __aenter__(self) -> FakeServerContext:
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            return None
+
+    def fake_serve(handler: Any, host: str, port: int, **kwargs: Any) -> FakeServerContext:
+        captured["handler"] = handler
+        captured["host"] = host
+        captured["port"] = port
+        captured["kwargs"] = kwargs
+        return FakeServerContext()
+
+    with patch("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve):
+        task = asyncio.create_task(facade.run_lifetime())
+        await asyncio.sleep(0)
+        await facade.stop()
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert captured["handler"] == facade._on_connection
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8765
+    assert captured["kwargs"] == {
+        "ping_interval": 11.0,
+        "ping_timeout": 7.0,
+        "close_timeout": 5.0,
+        "max_size": 4096,
+        "max_queue": 9,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 2. on_connection emits CONNECTED then DISCONNECTS
 # --------------------------------------------------------------------------- #
@@ -217,6 +295,30 @@ async def test_on_connection_emits_connected_and_disconnects() -> None:
     assert len(hook.connected) == 1
     assert len(hook.disconnected) == 1
     assert facade.manager.connection_count == 0
+
+
+@pytest.mark.asyncio
+async def test_connection_sends_init_and_subscribe_before_hook() -> None:
+    order: list[str] = []
+
+    class Hook(RecordingHook):
+        async def on_connected(self, state: ConnectionState) -> None:
+            order.append("hook")
+
+    websocket = FakeWebSocket(frames=[])
+    facade = McbeServerFacade(hook=Hook(), sink=RecordingSink())
+    original_send = websocket.send
+
+    async def record_send(payload: str) -> None:
+        order.append(payload)
+        await original_send(payload)
+
+    websocket.send = record_send  # type: ignore[method-assign]
+    await facade._on_connection(websocket)
+
+    assert order[0] == '{"Result":"true"}'
+    assert json.loads(order[1])["header"]["messagePurpose"] == "subscribe"
+    assert order[2] == "hook"
 
 
 # --------------------------------------------------------------------------- #
@@ -300,7 +402,40 @@ async def test_command_response_calls_hook() -> None:
     frame = _command_response_frame("req-42", status_code=0, status_message="done")
     await facade._on_connection(FakeWebSocket(frames=[frame]))
 
-    assert hook.command_responses == [("req-42", {"statusCode": 0, "statusMessage": "done"})]
+    assert len(hook.command_responses) == 1
+    assert hook.command_responses[0].request_id == "req-42"
+    assert hook.command_responses[0].body == {"statusCode": 0, "statusMessage": "done"}
+
+
+@pytest.mark.asyncio
+async def test_command_response_preserves_complete_body() -> None:
+    hook = RecordingHook()
+    facade = McbeServerFacade(hook=hook, sink=RecordingSink())
+    frame = _command_response_frame(
+        "r-1",
+        status_code=0,
+        status_message="ok",
+        extra_body={"details": {"count": 2}},
+    )
+
+    await facade._on_connection(FakeWebSocket([frame]))
+
+    assert hook.command_responses[0].body["details"] == {"count": 2}
+
+
+@pytest.mark.asyncio
+async def test_error_frame_calls_typed_error_hook() -> None:
+    hook = RecordingHook()
+    facade = McbeServerFacade(hook=hook, sink=RecordingSink())
+
+    await facade._on_connection(
+        FakeWebSocket(frames=[_error_frame("err-7", body={"statusMessage": "boom", "extra": 1})])
+    )
+
+    assert len(hook.errors) == 1
+    assert hook.errors[0].request_id == "err-7"
+    assert hook.errors[0].header["code"] == 500
+    assert hook.errors[0].body == {"statusMessage": "boom", "extra": 1}
 
 
 # --------------------------------------------------------------------------- #

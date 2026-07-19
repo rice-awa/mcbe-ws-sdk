@@ -7,7 +7,7 @@ import re
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 _TELLRAW_TARGET_UNQUOTED_RE = re.compile(
     r"^(?:@[a-z](?:\[[A-Za-z0-9_.,=!:-]*\])?|[A-Za-z0-9_.-]+)$"
@@ -47,9 +47,11 @@ def sanitize_tellraw_text(message: str) -> str:
 class MinecraftHeader(BaseModel):
     """Minecraft WebSocket 消息头"""
 
+    model_config = ConfigDict(extra="allow")
+
     requestId: str = Field(default_factory=lambda: str(uuid4()))
     messagePurpose: Literal[
-        "subscribe", "commandRequest", "commandResponse", "event"
+        "subscribe", "commandRequest", "commandResponse", "event", "error"
     ] = "commandRequest"
     version: int = 1
     EventName: str | None = None
@@ -59,11 +61,15 @@ class MinecraftHeader(BaseModel):
 class MinecraftOrigin(BaseModel):
     """命令来源"""
 
+    model_config = ConfigDict(extra="allow")
+
     type: Literal["player", "say"] = "player"
 
 
 class MinecraftCommandBody(BaseModel):
     """命令请求体"""
+
+    model_config = ConfigDict(extra="allow")
 
     origin: MinecraftOrigin = Field(default_factory=MinecraftOrigin)
     commandLine: str
@@ -73,11 +79,15 @@ class MinecraftCommandBody(BaseModel):
 class MinecraftSubscribeBody(BaseModel):
     """订阅请求体"""
 
+    model_config = ConfigDict(extra="allow")
+
     eventName: str
 
 
 class MinecraftMessage(BaseModel):
     """通用 Minecraft WebSocket 消息"""
+
+    model_config = ConfigDict(extra="allow")
 
     header: MinecraftHeader
     body: dict[str, Any]
@@ -85,6 +95,8 @@ class MinecraftMessage(BaseModel):
 
 class MinecraftCommand(BaseModel):
     """Minecraft 命令消息"""
+
+    model_config = ConfigDict(extra="allow")
 
     header: MinecraftHeader = Field(
         default_factory=lambda: MinecraftHeader(
@@ -137,6 +149,8 @@ class MinecraftCommand(BaseModel):
 class MinecraftSubscribe(BaseModel):
     """Minecraft 事件订阅消息"""
 
+    model_config = ConfigDict(extra="allow")
+
     header: MinecraftHeader = Field(
         default_factory=lambda: MinecraftHeader(
             messagePurpose="subscribe",
@@ -154,6 +168,8 @@ class MinecraftSubscribe(BaseModel):
 class PlayerMessageEvent(BaseModel):
     """玩家消息事件"""
 
+    model_config = ConfigDict(extra="allow")
+
     sender: str
     message: str
     type: str | None = None
@@ -168,6 +184,21 @@ class PlayerMessageEvent(BaseModel):
             type=body.get("type"),
             receiver=body.get("receiver"),
         )
+
+
+class MinecraftCommandResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    request_id: str
+    body: dict[str, Any]
+
+
+class MinecraftErrorFrame(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    request_id: str = ""
+    header: dict[str, Any]
+    body: dict[str, Any]
 
 
 # Minecraft 颜色代码常量
