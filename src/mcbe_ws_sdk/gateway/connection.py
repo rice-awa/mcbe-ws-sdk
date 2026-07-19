@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
@@ -160,10 +161,8 @@ class ConnectionManager:
         if task is None:
             return
         task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     async def _response_sender(self, state: ConnectionState) -> None:
         """Drain ``state.response_queue`` and route each message via the sink."""

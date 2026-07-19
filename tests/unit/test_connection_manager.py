@@ -141,3 +141,23 @@ async def test_shutdown_all_drops_every_connection(
 
     await manager.shutdown_all()
     assert manager.connection_count == 0
+
+
+@pytest.mark.asyncio
+async def test_connection_shutdown_is_idempotent(manager: ConnectionManager) -> None:
+    state = await manager.create_connection(connection_id=UUID(int=42), send_payload=_send_noop)
+
+    await manager.drop_connection(state.id)
+    await manager.drop_connection(state.id)
+
+    assert manager.get_connection(state.id) is None
+    assert state.id not in manager._sender_tasks
+
+    await manager.create_connection(connection_id=UUID(int=43), send_payload=_send_noop)
+    assert manager.connection_count == 1
+
+    await manager.shutdown_all()
+    await manager.shutdown_all()
+
+    assert manager.connection_count == 0
+    assert manager._sender_tasks == {}
