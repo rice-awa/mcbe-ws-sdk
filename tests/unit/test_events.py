@@ -57,6 +57,17 @@ async def test_emit_invokes_strong_synchronous_handler(bus: EventBus) -> None:
 
 
 @pytest.mark.asyncio
+async def test_emit_rejects_synchronous_handler_return_value(bus: EventBus) -> None:
+    def _invalid_handler() -> int:
+        return 123
+
+    bus.subscribe(WsEventType.PLAYER_MESSAGE, _invalid_handler, weak=False)
+
+    with pytest.raises(TypeError, match="must return None or an awaitable"):
+        await bus.emit(WsEventType.PLAYER_MESSAGE)
+
+
+@pytest.mark.asyncio
 async def test_emit_propagates_handler_exception_after_prior_handlers_run(bus: EventBus) -> None:
     first: list[str] = []
     second: list[str] = []

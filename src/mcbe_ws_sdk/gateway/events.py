@@ -109,6 +109,12 @@ class EventBus:
             result = handler(*args, **kwargs)
             if inspect.isawaitable(result):
                 await result
+            elif result is not None:
+                handler_name = getattr(handler, "__qualname__", repr(handler))
+                raise TypeError(
+                    f"Event handler {handler_name} for {event.value!r} must return None "
+                    f"or an awaitable, got {type(result).__name__}"
+                )
 
     def _prune_dead(self, event: WsEventType) -> None:
         subscribers = self._subscribers[event]
