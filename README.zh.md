@@ -1,6 +1,6 @@
 # mcbe-ws-sdk
 
-[![Languages](https://img.shields.io/badge/Languages-中文-blue?style=flat-square)](./README.zh.md)
+[![Languages](https://img.shields.io/badge/Languages-English-blue?style=flat-square)](./README.md)
 
 面向 Minecraft Bedrock Edition 的通用 WebSocket 网关 SDK。本包拥有 WS 传输、数据包
 协议与字节安全的命令分片，并通过依赖注入暴露一个双层接口供宿主驱动：既可以订阅
