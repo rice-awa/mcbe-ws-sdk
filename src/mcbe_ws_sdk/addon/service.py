@@ -91,8 +91,6 @@ class AddonBridgeService:
                 return await asyncio.wait_for(request.future, self._timeout_seconds)
             except TimeoutError as exc:
                 raise BridgeTimeoutError(request.request_id) from exc
-        except TimeoutError as exc:
-            raise BridgeTimeoutError(request.request_id) from exc
         finally:
             session.cancel_request(request.request_id)
 

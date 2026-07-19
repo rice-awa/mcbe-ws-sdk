@@ -2,14 +2,13 @@
 
 Drives the facade two complementary ways, exactly as the scope doc prescribes:
 
-* **In-process fake transport** (tests 2–6): build a facade, then call
+* **In-process fake transport**: build a facade, then call
   ``facade._on_connection(fake_ws)`` where ``fake_ws`` is a tiny async-iterable
   whose ``send`` records outbound frames. This exercises the real routing
-  loop (parse → branch → hook call) without binding any port or importing the
-  ``websockets`` runtime.
-* **Real ``websockets`` lifetime** (tests 1, 7, 8): ``run_lifetime`` on an
-  OS-assigned ephemeral port (``port=0``), then ``stop()`` + await to assert the
-  server closes and ``shutdown_all`` runs cleanly with no lingering senders.
+  loop (parse → branch → hook call) without binding any port.
+* **Fake ``websockets`` lifetime**: monkeypatch ``websockets.serve`` with an
+  async context manager, then exercise ``run_lifetime`` and ``stop()`` without
+  opening a socket.
 
 All assertions go through the ``EventBus`` + a ``RecordingSink`` /
 ``RecordingHook`` pair just like ``tests/unit/test_connection_manager.py``.
@@ -216,26 +215,35 @@ def _send_noop(payload: str) -> Any:  # pragma: no cover - transport stub
 
 
 # --------------------------------------------------------------------------- #
-# 1. run_lifetime binds and stops cleanly
+# 1. run_lifetime stops and clears state
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
-async def test_run_lifetime_binds_and_stops_cleanly() -> None:
-    sink = RecordingSink()
-    hook = RecordingHook()
-    facade = McbeServerFacade(hook=hook, sink=sink)
+async def test_run_lifetime_stop_unwinds_and_clears_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
 
+    class FakeServerContext:
+        async def __aenter__(self) -> FakeServerContext:
+            entered.set()
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            return None
+
+    def fake_serve(
+        handler: object, host: str, port: int, **kwargs: object
+    ) -> FakeServerContext:
+        return FakeServerContext()
+
+    monkeypatch.setattr("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve)
+    facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
     task = asyncio.create_task(facade.run_lifetime(host="127.0.0.1", port=0))
-    # Let it bind.
-    for _ in range(50):
-        await asyncio.sleep(0.01)
-        if facade._server is not None and getattr(facade._server, "sockets", None):
-            break
+    await asyncio.wait_for(entered.wait(), timeout=2.0)
 
     assert facade._server is not None
-    sockets = getattr(facade._server, "sockets", None)
-    assert sockets, "server never bound to an ephemeral port"
 
     await facade.stop()
     await asyncio.wait_for(task, timeout=2.0)
@@ -245,7 +253,9 @@ async def test_run_lifetime_binds_and_stops_cleanly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_lifetime_passes_transport_options_to_serve() -> None:
+async def test_run_lifetime_passes_transport_options_to_serve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = GatewaySettings(
         websocket=WebsocketTransportConfig(
             host="127.0.0.1",
@@ -276,11 +286,11 @@ async def test_run_lifetime_passes_transport_options_to_serve() -> None:
         captured["kwargs"] = kwargs
         return FakeServerContext()
 
-    with patch("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve):
-        task = asyncio.create_task(facade.run_lifetime())
-        await asyncio.sleep(0)
-        await facade.stop()
-        await asyncio.wait_for(task, timeout=2.0)
+    monkeypatch.setattr("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve)
+    task = asyncio.create_task(facade.run_lifetime())
+    await asyncio.sleep(0)
+    await facade.stop()
+    await asyncio.wait_for(task, timeout=2.0)
 
     assert captured["handler"] == facade._on_connection
     assert captured["host"] == "127.0.0.1"

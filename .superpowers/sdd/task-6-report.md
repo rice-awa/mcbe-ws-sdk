@@ -157,3 +157,67 @@
 - The fix stays inside Task 6 session lifecycle behavior.
 - It does not alter caller cancellation semantics or facade behavior.
 - Cleanup remains limited to pending bridge requests whose raw frame still identifies the matching request id.
+
+### Transport-timeout and facade-test review fix
+
+- Added a regression test proving a `TimeoutError("transport timeout")` raised by
+  `send_command` propagates as the same exception object while pending request
+  state is still removed.
+- Removed only the outer `TimeoutError` conversion in
+  `AddonBridgeService.request_capability()`; the inner `asyncio.wait_for()`
+  timeout remains converted to `BridgeTimeoutError`.
+- Replaced `test_run_lifetime_binds_and_stops_cleanly` and its real-loopback
+  wording with a fake `websockets.serve` async context manager. The replacement
+  asserts that the server is active before `stop()`, then verifies stop unwinds,
+  `_server` clears, and `connection_count` is zero without opening a socket.
+- Standardized all Task 6 facade lifetime tests on a monkeypatched
+  `websockets.serve` boundary; transport-option and single-use assertions remain
+  in their dedicated tests.
+
+### Transport-timeout TDD evidence
+
+- RED command:
+  - `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py -q`
+  - Result before the fix: `1 failed, 24 passed in 0.32s`
+- RED failure summary:
+  - `test_send_transport_timeout_propagates_and_cleans_pending_request` received
+    `BridgeTimeoutError` instead of the original `TimeoutError("transport timeout")`
+    because the outer handler covered both `send_command()` and `wait_for()`.
+  - The failure was behavioral, not a syntax or import failure.
+- Focused GREEN after the minimal service and facade-test changes:
+  - `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py tests/unit/test_server_facade.py -q`
+  - Result: `47 passed in 0.42s`
+
+### Transport-timeout final verification
+
+- `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py tests/unit/test_server_facade.py -q`
+  - Result: `47 passed in 0.52s`
+- `.venv/bin/python -m ruff check --no-cache src tests examples`
+  - Result: `All checks passed!`
+- `.venv/bin/python -m mypy --no-incremental src`
+  - Result: `Success: no issues found in 27 source files`
+- `.venv/bin/python -m pytest -p no:cacheprovider -q`
+  - Result: `181 passed in 0.98s`
+
+### Transport-timeout files changed
+
+- `src/mcbe_ws_sdk/addon/service.py`
+- `tests/unit/test_addon_bridge.py`
+- `tests/unit/test_server_facade.py`
+- `.superpowers/sdd/task-6-report.md`
+
+### Transport-timeout self-review
+
+- The transport timeout regression checks exception identity, message, and
+  pending-state cleanup, so it cannot pass through a rewrapped bridge timeout.
+- SDK wait timeouts remain typed as `BridgeTimeoutError`, and caller cancellation
+  behavior is untouched.
+- No facade production behavior changed; only the lifetime test transport was
+  replaced, and every local lifetime test now intercepts `websockets.serve`.
+- An intermediate verification run exposed a removed `patch` import used by an
+  unrelated semantic-event test (`1 failed, 46 passed`; Ruff `F821`). The import
+  was restored before the final clean verification above.
+
+### Transport-timeout concerns
+
+- None.

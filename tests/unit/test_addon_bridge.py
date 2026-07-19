@@ -162,6 +162,21 @@ async def test_send_failure_cleans_pending_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_transport_timeout_propagates_and_cleans_pending_request() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    connection_id = UUID(int=52)
+    transport_error = TimeoutError("transport timeout")
+
+    async def timeout(command: str) -> None:
+        raise transport_error
+
+    with pytest.raises(TimeoutError, match="transport timeout") as exc_info:
+        await service.request_capability(connection_id, "x", {}, timeout)
+    assert exc_info.value is transport_error
+    assert service._sessions[connection_id]._pending_requests == {}
+
+
+@pytest.mark.asyncio
 async def test_timeout_is_typed_and_cleans_pending_request() -> None:
     service = AddonBridgeService(AddonBridgeSettings(timeout_seconds=0.01))
     connection_id = UUID(int=53)
