@@ -44,6 +44,7 @@ from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftErrorFrame,
     PlayerMessageEvent,
 )
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
 # --------------------------------------------------------------------------- #
 # Shared test doubles
@@ -136,9 +137,9 @@ class RecordingAddon(AddonBridgeService):
         super().__init__(settings if settings is not None else AddonBridgeSettings())
         self.handled: list[tuple[UUID, str, str]] = []
 
-    def handle_player_message(self, connection_id: UUID, sender: str, message: str) -> bool:
+    async def handle_player_message(self, connection_id: UUID, sender: str, message: str) -> Any:
         self.handled.append((connection_id, sender, message))
-        return super().handle_player_message(connection_id, sender, message)
+        return await super().handle_player_message(connection_id, sender, message)
 
 
 # --------------------------------------------------------------------------- #
@@ -358,6 +359,19 @@ async def test_routes_bridge_response_through_addon() -> None:
     assert hook.player_messages == []  # NOT handed to the player hook
 
 
+@pytest.mark.asyncio
+async def test_malformed_ui_frame_does_not_block_following_player_frame() -> None:
+    hook = RecordingHook()
+    frames = [
+        _player_message_frame("MCBEAI_TOOL", "MCBEAI|UI_CHAT|bad"),
+        _player_message_frame("Alice", "hello"),
+    ]
+
+    await McbeServerFacade(hook=hook, sink=RecordingSink())._on_connection(FakeWebSocket(frames))
+
+    assert [event.message for event in hook.player_messages] == ["hello"]
+
+
 # --------------------------------------------------------------------------- #
 # 4. inbound bridge capability request routes to the hook
 # --------------------------------------------------------------------------- #
@@ -403,6 +417,114 @@ async def test_routes_command_through_handler_and_hook() -> None:
     # The command is registered in the default registry.
     parsed = facade.handler.parse_typed_command("帮助 状态")
     assert parsed is not None and parsed.type == "help"
+
+
+@pytest.mark.asyncio
+async def test_facade_emits_typed_player_event() -> None:
+    facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
+    seen: list[tuple[ConnectionState, PlayerMessageEvent]] = []
+
+    async def on_player(state: ConnectionState, event: PlayerMessageEvent) -> None:
+        seen.append((state, event))
+
+    facade.manager.event_bus.subscribe(WsEventType.PLAYER_MESSAGE, on_player, weak=False)
+    await facade._on_connection(FakeWebSocket([_player_message_frame("Alice", "hello")]))
+
+    assert seen[0][1].sender == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_facade_emits_typed_error_and_command_response_events() -> None:
+    facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
+    seen_errors: list[tuple[ConnectionState, MinecraftErrorFrame]] = []
+    seen_responses: list[tuple[ConnectionState, MinecraftCommandResponse]] = []
+
+    async def on_error(state: ConnectionState, event: MinecraftErrorFrame) -> None:
+        seen_errors.append((state, event))
+
+    async def on_response(state: ConnectionState, event: MinecraftCommandResponse) -> None:
+        seen_responses.append((state, event))
+
+    facade.manager.event_bus.subscribe(WsEventType.ERROR, on_error, weak=False)
+    facade.manager.event_bus.subscribe(WsEventType.COMMAND_RESPONSE, on_response, weak=False)
+
+    await facade._on_connection(
+        FakeWebSocket(
+            [
+                _error_frame("err-1"),
+                _command_response_frame("req-1"),
+            ]
+        )
+    )
+
+    assert seen_errors[0][1].request_id == "err-1"
+    assert seen_responses[0][1].request_id == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_facade_emits_bridge_and_ui_semantic_events() -> None:
+    facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
+    bridge_chunks: list[tuple[ConnectionState, AddonBridgeChunk]] = []
+    ui_chunks: list[tuple[ConnectionState, UiChatChunk]] = []
+    ui_messages: list[tuple[ConnectionState, UiChatMessage]] = []
+
+    async def on_connected(state: ConnectionState) -> None:
+        session = facade.addon._session_for(state.id)
+        session.create_request(capability="demo", payload={"x": 1})
+
+    async def on_bridge(state: ConnectionState, chunk: AddonBridgeChunk) -> None:
+        bridge_chunks.append((state, chunk))
+
+    async def on_ui_chunk(state: ConnectionState, chunk: UiChatChunk) -> None:
+        ui_chunks.append((state, chunk))
+
+    async def on_ui_message(state: ConnectionState, message: UiChatMessage) -> None:
+        ui_messages.append((state, message))
+
+    facade.manager.event_bus.subscribe(WsEventType.CONNECTED, on_connected, weak=False)
+    facade.manager.event_bus.subscribe(WsEventType.BRIDGE_CHUNK, on_bridge, weak=False)
+    facade.manager.event_bus.subscribe(WsEventType.UI_CHAT_CHUNK, on_ui_chunk, weak=False)
+    facade.manager.event_bus.subscribe(
+        WsEventType.UI_CHAT_REASSEMBLED, on_ui_message, weak=False
+    )
+
+    with patch(
+        "mcbe_ws_sdk.addon.session.uuid4",
+        return_value=UUID("00000000-0000-0000-0000-000000000001"),
+    ):
+        await facade._on_connection(
+            FakeWebSocket(
+                [
+                    _player_message_frame(
+                        "MCBEAI_TOOL",
+                        "MCBEAI|RESP|addon-00000000000000000000000000000001|1/1|{\"ok\":true}",
+                    ),
+                    _player_message_frame(
+                        "MCBEAI_TOOL",
+                        'MCBEAI|UI_CHAT|m1|1/1|{"player":"Steve","message":"hello"}',
+                    ),
+                ]
+            )
+        )
+
+    assert bridge_chunks[0][1].request_id == "addon-00000000000000000000000000000001"
+    assert ui_chunks[0][1].msg_id == "m1"
+    assert ui_messages[0][1].message == "hello"
+
+
+@pytest.mark.asyncio
+async def test_raw_outbound_event_includes_state() -> None:
+    facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
+    seen: list[tuple[ConnectionState, str]] = []
+
+    async def on_outbound(state: ConnectionState, payload: str) -> None:
+        seen.append((state, payload))
+
+    facade.manager.event_bus.subscribe(WsEventType.RAW_OUTBOUND, on_outbound, weak=False)
+    await facade._on_connection(FakeWebSocket([]))
+
+    assert len(seen) == 2
+    assert seen[0][1] == '{"Result":"true"}'
 
 
 # --------------------------------------------------------------------------- #

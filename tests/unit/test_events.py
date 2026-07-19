@@ -26,6 +26,7 @@ def test_ws_event_type_has_core_events() -> None:
         "ui_chat_chunk",
         "ui_chat_reassembled",
         "command_response",
+        "error",
         "raw_inbound",
         "raw_outbound",
     ):

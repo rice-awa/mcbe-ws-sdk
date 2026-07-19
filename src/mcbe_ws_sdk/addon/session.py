@@ -24,7 +24,8 @@ from mcbe_ws_sdk.addon.protocol import (
     reassemble_ui_chat_chunks,
 )
 from mcbe_ws_sdk.config import AddonProtocolConfig
-from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk
+from mcbe_ws_sdk.errors import ProtocolError
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
 logger = structlog.get_logger(__name__)
 
@@ -64,29 +65,32 @@ class AddonBridgeSession:
         self._pending_requests[request.request_id] = request
         return request
 
-    def handle_chat_chunk(self, chunk_message: str) -> bool:
+    def handle_chat_chunk(self, chunk_message: str) -> AddonBridgeChunk:
         """Consume a chat fragment; resolve its request future once complete."""
-        chunk = decode_bridge_chat_chunk(chunk_message, protocol=self._protocol)
+        try:
+            chunk = decode_bridge_chat_chunk(chunk_message, protocol=self._protocol)
+        except ValueError as exc:
+            raise ProtocolError(str(exc)) from exc
         if chunk.request_id not in self._pending_requests:
-            return False
+            return chunk
 
         buffer = self._chunk_buffers.setdefault(chunk.request_id, {})
         buffer[chunk.chunk_index] = chunk
 
         if len(buffer) < chunk.total_chunks:
-            return True
+            return chunk
 
         try:
             response = reassemble_bridge_chunks(list(buffer.values()))
-        except ValueError:
+        except ValueError as exc:
             self._chunk_buffers.pop(chunk.request_id, None)
-            return True
+            raise ProtocolError(str(exc)) from exc
 
         request = self._pending_requests.pop(chunk.request_id)
         self._chunk_buffers.pop(chunk.request_id, None)
         if not request.future.done():
             request.future.set_result(response.payload)
-        return True
+        return chunk
 
     def fail_request(self, request_id: str, reason: str) -> None:
         """Fail and drop a pending request."""
@@ -102,9 +106,12 @@ class AddonBridgeSession:
             self.fail_request(request_id, reason)
         self._ui_chat_chunk_buffers.clear()
 
-    def handle_ui_chat_chunk(self, chunk_message: str) -> tuple[str, str] | None:
-        """Consume a UI chat fragment; return ``(player_name, message)`` once complete."""
-        chunk = decode_ui_chat_chunk(chunk_message, protocol=self._protocol)
+    def handle_ui_chat_chunk(self, chunk_message: str) -> tuple[UiChatChunk, UiChatMessage | None]:
+        """Consume a UI chat fragment; return the chunk and a completed message if available."""
+        try:
+            chunk = decode_ui_chat_chunk(chunk_message, protocol=self._protocol)
+        except ValueError as exc:
+            raise ProtocolError(str(exc)) from exc
 
         buffer = self._ui_chat_chunk_buffers.setdefault(chunk.msg_id, {})
         buffer[chunk.chunk_index] = chunk
@@ -118,18 +125,13 @@ class AddonBridgeSession:
         )
 
         if len(buffer) < chunk.total_chunks:
-            return None
+            return chunk, None
 
         try:
             ui_msg = reassemble_ui_chat_chunks(list(buffer.values()))
         except ValueError as e:
             self._ui_chat_chunk_buffers.pop(chunk.msg_id, None)
-            logger.warning(
-                "ui_chat_reassemble_failed",
-                msg_id=chunk.msg_id,
-                error=str(e),
-            )
-            return None
+            raise ProtocolError(str(e)) from e
         finally:
             self._ui_chat_chunk_buffers.pop(chunk.msg_id, None)
 
@@ -140,6 +142,5 @@ class AddonBridgeSession:
             message_length=len(ui_msg.message),
         )
 
-        return (ui_msg.player_name, ui_msg.message)
-
+        return chunk, ui_msg
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -26,11 +27,20 @@ import structlog
 from mcbe_ws_sdk.addon.protocol import encode_bridge_request
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 
 logger = structlog.get_logger(__name__)
 
 CommandSender = Callable[[str], Awaitable[str]]
 UiChatCallback = Callable[[UUID, str, str], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class AddonMessageResult:
+    handled: bool
+    bridge_chunk: AddonBridgeChunk | None = None
+    ui_chunk: UiChatChunk | None = None
+    ui_message: UiChatMessage | None = None
 
 
 class AddonBridgeClient(Protocol):
@@ -103,7 +113,9 @@ class AddonBridgeService:
             and message.startswith(self._protocol.ui_chat_prefix)
         )
 
-    def handle_player_message(self, connection_id: UUID, sender: str, message: str) -> bool:
+    async def handle_player_message(
+        self, connection_id: UUID, sender: str, message: str
+    ) -> AddonMessageResult:
         """Route a routed message from the simulated player."""
         if self.is_bridge_chat_message(sender, message):
             session = self._sessions.get(connection_id)
@@ -111,43 +123,36 @@ class AddonBridgeService:
                 logger.warning(
                     "bridge_chat_no_session",
                     connection_id=str(connection_id),
-                    sender=sender,
-                    message_prefix=message[:50] if message else "",
                 )
-                return False
+                return AddonMessageResult(handled=True)
 
-            return session.handle_chat_chunk(message)
+            chunk = session.handle_chat_chunk(message)
+            return AddonMessageResult(handled=True, bridge_chunk=chunk)
 
         if self.is_ui_chat_message(sender, message):
-            logger.debug(
-                "ui_chat_chunk_received",
-                connection_id=str(connection_id),
-                sender=sender,
-                message_prefix=message[:50] if message else "",
-            )
             session = self._session_for(connection_id)
 
-            result = session.handle_ui_chat_chunk(message)
-            if result is not None and self._ui_chat_callback is not None:
-                player_name, chat_message = result
+            chunk, ui_message = session.handle_ui_chat_chunk(message)
+            if ui_message is not None and self._ui_chat_callback is not None:
                 logger.info(
                     "ui_chat_reassembled",
                     connection_id=str(connection_id),
-                    player=player_name,
-                    message_length=len(chat_message),
+                    player=ui_message.player_name,
+                    message_length=len(ui_message.message),
                     callback_registered=True,
                 )
-                ui_chat_coroutine = self._ui_chat_callback(connection_id, player_name, chat_message)
-                asyncio.create_task(ui_chat_coroutine)  # type: ignore[arg-type]
-            elif result is None:
-                logger.debug(
-                    "ui_chat_chunk_buffered",
-                    connection_id=str(connection_id),
-                    message_prefix=message[:50] if message else "",
+                await self._ui_chat_callback(
+                    connection_id,
+                    ui_message.player_name,
+                    ui_message.message,
                 )
-            return True
+            return AddonMessageResult(
+                handled=True,
+                ui_chunk=chunk,
+                ui_message=ui_message,
+            )
 
-        return False
+        return AddonMessageResult(handled=False)
 
     def set_ui_chat_callback(self, callback: UiChatCallback) -> None:
         """Register the UI chat message callback."""

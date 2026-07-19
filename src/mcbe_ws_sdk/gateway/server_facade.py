@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import websockets
 
@@ -42,6 +42,7 @@ from mcbe_ws_sdk.capability import CapabilityRegistry
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import GatewaySettings
+from mcbe_ws_sdk.errors import ProtocolError
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
@@ -170,7 +171,11 @@ class McbeServerFacade:
 
     async def _on_connection(self, websocket: ServerConnection) -> None:
         """Per-connection protocol driver: handshake → message loop → teardown."""
-        state = await self._manager.create_connection(send_payload=self._wrap_send(websocket))
+        connection_id = uuid4()
+        state = await self._manager.create_connection(
+            connection_id=connection_id,
+            send_payload=self._wrap_send(websocket, connection_id=connection_id),
+        )
 
         try:
             assert state.send_payload is not None
@@ -201,7 +206,8 @@ class McbeServerFacade:
             logger.warning(
                 "invalid_json",
                 connection_id=str(state.id),
-                raw_prefix=raw[:80] if isinstance(raw, str) else None,
+                frame_type=type(raw).__name__,
+                utf8_byte_size=len(raw.encode("utf-8")) if isinstance(raw, str) else len(raw),
             )
             return
 
@@ -215,14 +221,18 @@ class McbeServerFacade:
             return
 
         if self._is_error_frame(data):
-            await self._hook.on_error(state, self._extract_error_frame(data))
+            error = self._extract_error_frame(data)
+            await self._manager.event_bus.emit(WsEventType.ERROR, state, error)
+            await self._hook.on_error(state, error)
             return
 
         # Branch C — commandResponse: host-side command-execution future plumbing.
         # We only detect the frame + forward to the hook; there is intentionally
         # no ``pending_command_futures`` map on the state (that is host-owned).
         if self._is_command_response(data):
-            await self._hook.on_command_response(state, self._extract_command_response(data))
+            response = self._extract_command_response(data)
+            await self._manager.event_bus.emit(WsEventType.COMMAND_RESPONSE, state, response)
+            await self._hook.on_command_response(state, response)
             return
 
         # Parse a PlayerMessage event (returns None for any other event kind).
@@ -236,7 +246,34 @@ class McbeServerFacade:
             self._addon.is_bridge_chat_message(event.sender, event.message)
             or self._addon.is_ui_chat_message(event.sender, event.message)
         ):
-            self._addon.handle_player_message(state.id, event.sender, event.message)
+            try:
+                result = await self._addon.handle_player_message(
+                    state.id,
+                    event.sender,
+                    event.message,
+                )
+            except ProtocolError:
+                self._log_malformed_addon_frame(event.message)
+                return
+
+            if result.bridge_chunk is not None:
+                await self._manager.event_bus.emit(
+                    WsEventType.BRIDGE_CHUNK,
+                    state,
+                    result.bridge_chunk,
+                )
+            if result.ui_chunk is not None:
+                await self._manager.event_bus.emit(
+                    WsEventType.UI_CHAT_CHUNK,
+                    state,
+                    result.ui_chunk,
+                )
+            if result.ui_message is not None:
+                await self._manager.event_bus.emit(
+                    WsEventType.UI_CHAT_REASSEMBLED,
+                    state,
+                    result.ui_message,
+                )
             return
 
         # Branch B — inbound addon capability request (``scriptevent
@@ -253,6 +290,7 @@ class McbeServerFacade:
         # Branch D — player command/chat. ``parse_typed_command`` is informational
         # (the host decides what to do via the hook).
         self._handler.parse_typed_command(event.message)
+        await self._manager.event_bus.emit(WsEventType.PLAYER_MESSAGE, state, event)
         await self._hook.on_player_message(state, event)
 
     async def _on_ui_chat_reassembled(
@@ -272,14 +310,41 @@ class McbeServerFacade:
             return
         await self._hook.on_ui_chat_reassembled(state, player_name, message)
 
-    def _wrap_send(self, websocket: ServerConnection) -> SendPayload:
+    def _wrap_send(
+        self,
+        websocket: ServerConnection,
+        *,
+        connection_id: UUID,
+    ) -> SendPayload:
         """Build the transport frame-send callable, tagging outbound frames on the bus."""
 
         async def send_payload(payload: str) -> None:
-            await self._manager.event_bus.emit(WsEventType.RAW_OUTBOUND, payload)
+            current_state = self._manager.get_connection(connection_id)
+            if current_state is not None:
+                await self._manager.event_bus.emit(
+                    WsEventType.RAW_OUTBOUND,
+                    current_state,
+                    payload,
+                )
             await websocket.send(payload)
 
         return send_payload
+
+    @staticmethod
+    def _log_malformed_addon_frame(message: str) -> None:
+        parts = message.split("|", 4)
+        message_type = "unknown"
+        message_id = None
+        if len(parts) >= 2:
+            message_type = parts[1] or "unknown"
+        if len(parts) >= 3 and parts[2]:
+            message_id = parts[2]
+        logger.warning(
+            "malformed_addon_frame",
+            addon_message_id=message_id,
+            addon_message_type=message_type,
+            utf8_byte_size=len(message.encode("utf-8")),
+        )
 
     # -- commandResponse shape detection -----------------------------------------
 

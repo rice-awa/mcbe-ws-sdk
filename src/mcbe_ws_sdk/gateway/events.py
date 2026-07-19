@@ -23,6 +23,7 @@ class WsEventType(Enum):
     UI_CHAT_CHUNK = "ui_chat_chunk"
     UI_CHAT_REASSEMBLED = "ui_chat_reassembled"
     COMMAND_RESPONSE = "command_response"
+    ERROR = "error"
     RAW_INBOUND = "raw_inbound"
     RAW_OUTBOUND = "raw_outbound"
 

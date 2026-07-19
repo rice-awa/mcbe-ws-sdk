@@ -21,8 +21,9 @@ from mcbe_ws_sdk.addon.protocol import (
     encode_bridge_request,
     reassemble_bridge_chunks,
 )
-from mcbe_ws_sdk.addon.service import AddonBridgeService
+from mcbe_ws_sdk.addon.service import AddonBridgeService, AddonMessageResult
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
+from mcbe_ws_sdk.protocol.addon import AddonBridgeChunk, UiChatChunk, UiChatMessage
 from mcbe_ws_sdk.config import AddonBridgeSettings, AddonProtocolConfig
 
 
@@ -74,9 +75,11 @@ async def test_session_reassembles_bridge_response() -> None:
     request = session.create_request(capability="get_greeting", payload={"player": "Steve"})
 
     rid = request.request_id
-    assert session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|1/2|" + '{"k":"') is True
+    first = session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|1/2|" + '{"k":"')
+    assert isinstance(first, AddonBridgeChunk)
     assert not request.future.done()
-    assert session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|2/2|" + 'v"}') is True
+    second = session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|2/2|" + 'v"}')
+    assert isinstance(second, AddonBridgeChunk)
     assert request.future.done()
     assert await request.future == {"k": "v"}
 
@@ -85,12 +88,17 @@ def test_session_reassembles_ui_chat() -> None:
     protocol = AddonProtocolConfig()
     session = AddonBridgeSession(protocol=protocol)
 
-    assert (
-        session.handle_ui_chat_chunk('MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he')
-        is None
+    first_chunk, first_message = session.handle_ui_chat_chunk(
+        'MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
     )
-    result = session.handle_ui_chat_chunk('MCBEAI|UI_CHAT|m1|2/2|llo"}')
-    assert result == ("Steve", "hello")
+    assert isinstance(first_chunk, UiChatChunk)
+    assert first_message is None
+
+    second_chunk, second_message = session.handle_ui_chat_chunk(
+        'MCBEAI|UI_CHAT|m1|2/2|llo"}'
+    )
+    assert isinstance(second_chunk, UiChatChunk)
+    assert second_message == UiChatMessage(msg_id="m1", player_name="Steve", message="hello")
 
 
 @pytest.mark.asyncio
@@ -136,3 +144,57 @@ def test_is_bridge_and_ui_chat_message() -> None:
     assert service.is_bridge_chat_message("MCBEAI_TOOL", "MCBEAI|UI_CHAT|m1|1|data") is False
     assert service.is_ui_chat_message("MCBEAI_TOOL", "MCBEAI|UI_CHAT|m1|1|data") is True
     assert service.is_ui_chat_message("RealPlayer", "MCBEAI|RESP|r1|1|data") is False
+
+
+@pytest.mark.asyncio
+async def test_service_handle_player_message_returns_structured_bridge_chunk() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    connection_id = UUID(int=11)
+    session = service._session_for(connection_id)
+    request = session.create_request(capability="demo", payload={"x": 1})
+
+    result = await service.handle_player_message(
+        connection_id,
+        "MCBEAI_TOOL",
+        f'MCBEAI|RESP|{request.request_id}|1/1|{{"ok":true}}',
+    )
+
+    assert result == AddonMessageResult(
+        handled=True,
+        bridge_chunk=AddonBridgeChunk(
+            request_id=request.request_id,
+            chunk_index=1,
+            total_chunks=1,
+            content='{"ok":true}',
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_handle_player_message_returns_structured_ui_result() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    seen: list[tuple[UUID, str, str]] = []
+
+    async def on_ui(connection_id: UUID, player_name: str, message: str) -> None:
+        seen.append((connection_id, player_name, message))
+
+    service.set_ui_chat_callback(on_ui)
+    connection_id = UUID(int=12)
+
+    result = await service.handle_player_message(
+        connection_id,
+        "MCBEAI_TOOL",
+        'MCBEAI|UI_CHAT|m1|1/1|{"player":"Steve","message":"hello"}',
+    )
+
+    assert result == AddonMessageResult(
+        handled=True,
+        ui_chunk=UiChatChunk(
+            msg_id="m1",
+            chunk_index=1,
+            total_chunks=1,
+            content='{"player":"Steve","message":"hello"}',
+        ),
+        ui_message=UiChatMessage(msg_id="m1", player_name="Steve", message="hello"),
+    )
+    assert seen == [(connection_id, "Steve", "hello")]
