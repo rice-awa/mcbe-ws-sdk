@@ -154,12 +154,12 @@ class McbeServerFacade:
                     host=serve_host,
                     port=serve_port,
                 )
-                try:
-                    await self._stopped.wait()
-                finally:
-                    await self._graceful_shutdown()
+                await self._stopped.wait()
         finally:
-            self._server = None
+            try:
+                await self._graceful_shutdown()
+            finally:
+                self._server = None
 
     async def stop(self) -> None:
         """Signal :meth:`run_lifetime` to unwind (idempotent)."""

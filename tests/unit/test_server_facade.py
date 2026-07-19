@@ -253,6 +253,44 @@ async def test_run_lifetime_stop_unwinds_and_clears_state(
 
 
 @pytest.mark.asyncio
+async def test_run_lifetime_enter_failure_cleans_manager_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enter_error = LookupError("serve enter failed")
+
+    class FailingServerContext:
+        async def __aenter__(self) -> object:
+            raise enter_error
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            return None
+
+    def fake_serve(
+        handler: object, host: str, port: int, **kwargs: object
+    ) -> FailingServerContext:
+        return FailingServerContext()
+
+    monkeypatch.setattr("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve)
+    facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
+    connection_id = UUID(int=10)
+    await facade.manager.create_connection(
+        connection_id=connection_id,
+        send_payload=_send_noop,
+    )
+    assert facade.manager._sender_tasks[connection_id].done() is False
+
+    try:
+        with pytest.raises(LookupError, match="serve enter failed") as exc_info:
+            await facade.run_lifetime(host="127.0.0.1", port=0)
+        assert exc_info.value is enter_error
+        assert facade.manager.connection_count == 0
+        assert facade.manager._sender_tasks == {}
+        assert facade._server is None
+    finally:
+        await facade.manager.shutdown_all()
+
+
+@pytest.mark.asyncio
 async def test_run_lifetime_passes_transport_options_to_serve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

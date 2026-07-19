@@ -221,3 +221,62 @@
 ### Transport-timeout concerns
 
 - None.
+
+### Facade enter-failure lifecycle review fix
+
+- Added a regression test whose fake `websockets.serve` async context manager
+  raises from `__aenter__` after a real manager connection and sender task have
+  been created.
+- Updated `McbeServerFacade.run_lifetime()` to use the Task 6 brief's exact
+  cleanup nesting: the outer `finally` always awaits `_graceful_shutdown()`, and
+  its inner `finally` always clears `_server`.
+- Preserved the original server-enter exception when cleanup succeeds and left
+  inbound CapabilityRegistry/on-bridge behavior unchanged for Task 7.
+
+### Facade enter-failure TDD evidence
+
+- RED command:
+  - `.venv/bin/python -m pytest tests/unit/test_server_facade.py::test_run_lifetime_enter_failure_cleans_manager_state -q`
+  - Result before the fix: `1 failed in 0.28s`
+- RED failure summary:
+  - The original `LookupError("serve enter failed")` propagated, but
+    `facade.manager.connection_count` remained `1` because the existing
+    `_graceful_shutdown()` call was reachable only after successful context
+    entry.
+- Focused GREEN command:
+  - `.venv/bin/python -m pytest tests/unit/test_server_facade.py::test_run_lifetime_enter_failure_cleans_manager_state -q`
+  - Result: `1 passed in 0.21s`
+
+### Facade enter-failure final verification
+
+- `.venv/bin/python -m pytest tests/unit/test_server_facade.py -q`
+  - Result: `23 passed in 0.49s`
+- `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py tests/unit/test_server_facade.py -q`
+  - Result: `48 passed in 0.63s`
+- `.venv/bin/python -m ruff check --no-cache src tests examples`
+  - Result: `All checks passed!`
+- `.venv/bin/python -m mypy --no-incremental src`
+  - Result: `Success: no issues found in 27 source files`
+- `.venv/bin/python -m pytest -p no:cacheprovider -q`
+  - Result: `182 passed in 1.24s`
+
+### Facade enter-failure files changed
+
+- `src/mcbe_ws_sdk/gateway/server_facade.py`
+- `tests/unit/test_server_facade.py`
+- `.superpowers/sdd/task-6-report.md`
+
+### Facade enter-failure self-review
+
+- The regression uses the real manager lifecycle and mocks only the server
+  context boundary; its own fallback cleanup prevents a deliberately RED run
+  from leaking a pending test task.
+- It asserts exception identity, `connection_count == 0`, an empty sender-task
+  map, and `_server is None`.
+- Stop, cancellation, normal context exit, transport options, and single-use
+  behavior continue through the same final cleanup path.
+- No Task 7 registry or inbound bridge changes were made.
+
+### Facade enter-failure concerns
+
+- None.
