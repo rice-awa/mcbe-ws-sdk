@@ -1,7 +1,7 @@
 { 
     "compilerOptions":{ 
        "target":"es6",
-       "moduleResolution":"Node",
+       "moduleResolution":"Bundler",
        "module": "ES2020",
        "declaration":false,
        "noLib":false,

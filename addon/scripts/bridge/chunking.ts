@@ -1,30 +1,14 @@
 import { BRIDGE_RESPONSE_PREFIX, BRIDGE_UI_CHAT_PREFIX } from "./constants";
 
-export function formatChunk(
-  prefix: string,
-  id: string,
-  index: number,
-  total: number,
-  content: string,
-): string {
+export function formatChunk(prefix: string, id: string, index: number, total: number, content: string): string {
   return `${prefix}|${id}|${index}/${total}|${content}`;
 }
 
-export function formatResponseChunk(
-  requestId: string,
-  index: number,
-  total: number,
-  content: string,
-): string {
+export function formatResponseChunk(requestId: string, index: number, total: number, content: string): string {
   return formatChunk(BRIDGE_RESPONSE_PREFIX, requestId, index, total, content);
 }
 
-export function chunkPayload(
-  prefix: string,
-  id: string,
-  payload: string,
-  maxChunkContentLength: number,
-): string[] {
+export function chunkPayload(prefix: string, id: string, payload: string, maxChunkContentLength: number): string[] {
   if (maxChunkContentLength <= 0) {
     throw new Error("maxChunkContentLength must be greater than 0");
   }
@@ -39,18 +23,10 @@ export function chunkPayload(
   return safeParts.map((content, idx) => formatChunk(prefix, id, idx + 1, total, content));
 }
 
-export function chunkBridgePayload(
-  requestId: string,
-  payload: string,
-  maxChunkContentLength: number,
-): string[] {
+export function chunkBridgePayload(requestId: string, payload: string, maxChunkContentLength: number): string[] {
   return chunkPayload(BRIDGE_RESPONSE_PREFIX, requestId, payload, maxChunkContentLength);
 }
 
-export function chunkUiChatPayload(
-  id: string,
-  payload: string,
-  maxChunkContentLength: number,
-): string[] {
+export function chunkUiChatPayload(id: string, payload: string, maxChunkContentLength: number): string[] {
   return chunkPayload(BRIDGE_UI_CHAT_PREFIX, id, payload, maxChunkContentLength);
 }

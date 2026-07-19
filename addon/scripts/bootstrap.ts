@@ -1,3 +1,4 @@
+import { world, system } from "@minecraft/server";
 import { registerBridgeRouter } from "./bridge/router";
 import { registerResponseSyncHandler } from "./bridge/responseSync";
 
