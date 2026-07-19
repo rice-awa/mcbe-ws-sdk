@@ -146,4 +146,61 @@ All checks passed!
 
 ### Follow-up commit SHA
 
-- `TBD after commit`
+- `fc59818` — `fix(gateway): 保留命令响应完整信封`
+
+## Follow-up fix: preserve full error envelope
+
+### Review finding addressed
+
+- `MinecraftErrorFrame` still reached `on_error()` as a reduced reconstruction containing only `request_id`, `header`, and `body`.
+- `_extract_error_frame()` dropped top-level envelope extensions before the typed hook saw the frame.
+
+### Fix implemented
+
+- Added a regression test proving an `error` frame with a top-level `futureEnvelope` extension survives end-to-end into `hook.errors[0]`.
+- Updated `MinecraftErrorFrame` with a `model_validator(mode="before")` so `request_id` is populated from `header.requestId` when validating a full wire envelope.
+- Changed `McbeServerFacade._extract_error_frame()` to validate the full error frame via `MinecraftErrorFrame.model_validate(data)` instead of reconstructing a reduced object.
+
+### Follow-up RED
+
+Command:
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_protocol.py tests/unit/test_handler.py tests/unit/test_hook.py tests/unit/test_server_facade.py -q
+```
+
+Result summary:
+
+- Exit code: `1`
+- 1 failed, 39 passed
+- Expected failure:
+  - `test_error_frame_preserves_full_envelope_extensions`
+  - `KeyError: 'futureEnvelope'`
+
+Why expected:
+
+- This proved the error path still dropped top-level envelope extensions before `on_error()` received the frame.
+
+### Follow-up GREEN
+
+Commands:
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_protocol.py tests/unit/test_handler.py tests/unit/test_hook.py tests/unit/test_server_facade.py -q
+.venv/bin/python -m ruff check src/mcbe_ws_sdk/protocol/minecraft.py src/mcbe_ws_sdk/gateway/server_facade.py tests/unit/test_protocol.py tests/unit/test_hook.py tests/unit/test_server_facade.py
+```
+
+Exact results:
+
+```text
+........................................                                 [100%]
+40 passed in 0.38s
+All checks passed!
+```
+
+### Follow-up files changed
+
+- `src/mcbe_ws_sdk/protocol/minecraft.py`
+- `src/mcbe_ws_sdk/gateway/server_facade.py`
+- `tests/unit/test_server_facade.py`
+- `.superpowers/sdd/task-4-report.md`

@@ -215,6 +215,20 @@ class MinecraftErrorFrame(BaseModel):
     header: dict[str, Any]
     body: dict[str, Any]
 
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_request_id(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if data.get("request_id"):
+            return data
+        header = data.get("header")
+        if not isinstance(header, dict):
+            return data
+        populated = dict(data)
+        populated["request_id"] = str(header.get("requestId", ""))
+        return populated
+
 
 # Minecraft 颜色代码常量
 class MCColor:

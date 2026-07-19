@@ -183,12 +183,20 @@ def _command_response_frame(
     )
 
 
-def _error_frame(request_id: str, *, body: dict[str, Any] | None = None) -> str:
+def _error_frame(
+    request_id: str,
+    *,
+    body: dict[str, Any] | None = None,
+    extra_envelope: dict[str, Any] | None = None,
+) -> str:
+    envelope: dict[str, Any] = {
+        "header": {"requestId": request_id, "messagePurpose": "error", "code": 500},
+        "body": body if body is not None else {"statusMessage": "boom"},
+    }
+    if extra_envelope is not None:
+        envelope.update(extra_envelope)
     return json.dumps(
-        {
-            "header": {"requestId": request_id, "messagePurpose": "error", "code": 500},
-            "body": body if body is not None else {"statusMessage": "boom"},
-        }
+        envelope
     )
 
 
@@ -465,6 +473,29 @@ async def test_error_frame_calls_typed_error_hook() -> None:
     assert hook.errors[0].request_id == "err-7"
     assert hook.errors[0].header["code"] == 500
     assert hook.errors[0].body == {"statusMessage": "boom", "extra": 1}
+
+
+@pytest.mark.asyncio
+async def test_error_frame_preserves_full_envelope_extensions() -> None:
+    hook = RecordingHook()
+    facade = McbeServerFacade(hook=hook, sink=RecordingSink())
+
+    await facade._on_connection(
+        FakeWebSocket(
+            frames=[
+                _error_frame(
+                    "err-8",
+                    body={"statusMessage": "boom", "extra": 2},
+                    extra_envelope={"futureEnvelope": {"x": 1}},
+                )
+            ]
+        )
+    )
+
+    error = hook.errors[0]
+    assert error.request_id == "err-8"
+    assert error.model_dump()["futureEnvelope"] == {"x": 1}
+    assert error.body["extra"] == 2
 
 
 # --------------------------------------------------------------------------- #

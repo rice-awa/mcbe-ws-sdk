@@ -314,17 +314,7 @@ class McbeServerFacade:
 
     @staticmethod
     def _extract_error_frame(data: dict[str, Any]) -> MinecraftErrorFrame:
-        header = data.get("header") or {}
-        if not isinstance(header, dict):
-            header = {}
-        body = data.get("body") or {}
-        if not isinstance(body, dict):
-            body = {}
-        return MinecraftErrorFrame(
-            request_id=str(header.get("requestId", "")),
-            header=header,
-            body=body,
-        )
+        return MinecraftErrorFrame.model_validate(data)
 
 
 __all__ = ["McbeServerFacade"]
