@@ -125,3 +125,35 @@
   - `.venv/bin/python -m ruff check --no-cache src tests examples` -> `All checks passed!`
   - `.venv/bin/python -m mypy --no-incremental src` -> `Success: no issues found in 27 source files`
   - `.venv/bin/python -m pytest -p no:cacheprovider -q` -> `179 passed in 1.04s`
+
+### Decode-stage fix notes
+
+- Fixed the remaining decode-stage malformed bridge-chunk lifecycle bug:
+  - when `decode_bridge_chat_chunk()` rejects malformed bridge metadata before `_accept_chunk()` runs, `handle_chat_chunk()` now extracts the raw `request_id` only if the frame still matches the bridge prefix shape
+  - if that `request_id` belongs to a pending request, the code routes cleanup through `_fail_bridge_request(request_id, protocol_error)` before re-raising the same typed `ProtocolError`
+  - unrelated malformed frames still raise `ProtocolError` without touching request state
+
+### Decode-stage TDD evidence
+
+- RED command:
+  - `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py -q`
+  - Result before the fix: `1 failed, 23 passed`
+- RED failure summary:
+  - `test_decode_stage_malformed_bridge_chunk_completes_pending_request` proved decode-stage metadata rejection left the request in `_pending_requests` with a pending future
+- Final verification after the decode-stage fix:
+  - `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py -q` -> `24 passed in 0.30s`
+  - `.venv/bin/python -m ruff check --no-cache src tests examples` -> `All checks passed!`
+  - `.venv/bin/python -m mypy --no-incremental src` -> `Success: no issues found in 27 source files`
+  - `.venv/bin/python -m pytest -p no:cacheprovider -q` -> `180 passed in 1.15s`
+
+### Decode-stage files changed
+
+- `src/mcbe_ws_sdk/addon/session.py`
+- `tests/unit/test_addon_bridge.py`
+- `.superpowers/sdd/task-6-report.md`
+
+### Decode-stage self-review
+
+- The fix stays inside Task 6 session lifecycle behavior.
+- It does not alter caller cancellation semantics or facade behavior.
+- Cleanup remains limited to pending bridge requests whose raw frame still identifies the matching request id.

@@ -332,6 +332,21 @@ async def test_malformed_bridge_response_completes_future_with_protocol_error() 
         await request.future
 
 
+@pytest.mark.asyncio
+async def test_decode_stage_malformed_bridge_chunk_completes_pending_request() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings())
+    request = session.create_request("x", {})
+
+    with pytest.raises(ProtocolError):
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|3/2|x")
+
+    assert request.request_id not in session._pending_requests
+    assert request.request_id not in session._chunk_buffers
+    assert request.future.done()
+    with pytest.raises(ProtocolError):
+        await request.future
+
+
 def test_is_bridge_and_ui_chat_message() -> None:
     service = AddonBridgeService(AddonBridgeSettings())
     assert service.is_bridge_chat_message("MCBEAI_TOOL", "MCBEAI|RESP|r1|1/1|data") is True

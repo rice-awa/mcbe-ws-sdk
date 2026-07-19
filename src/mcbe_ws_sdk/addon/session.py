@@ -84,7 +84,11 @@ class AddonBridgeSession:
         try:
             chunk = decode_bridge_chat_chunk(chunk_message, protocol=self._protocol)
         except ValueError as exc:
-            raise ProtocolError(str(exc)) from exc
+            protocol_error = ProtocolError(str(exc))
+            request_id = self._pending_bridge_request_id(chunk_message)
+            if request_id is not None and request_id in self._pending_requests:
+                self._fail_bridge_request(request_id, protocol_error)
+            raise protocol_error from exc
         if chunk.request_id not in self._pending_requests:
             return chunk
 
@@ -121,6 +125,19 @@ class AddonBridgeSession:
         self._chunk_buffers.pop(request_id, None)
         if request is not None and not request.future.done():
             request.future.set_exception(error)
+
+    def _pending_bridge_request_id(self, chunk_message: str) -> str | None:
+        parts = chunk_message.split("|", 4)
+        if len(parts) != 5:
+            return None
+        namespace, prefix, request_id, _, _ = parts
+        bridge_prefix = self._protocol.bridge_prefix.split("|", 1)
+        if len(bridge_prefix) != 2:
+            return None
+        expected_namespace, expected_prefix = bridge_prefix
+        if namespace != expected_namespace or prefix != expected_prefix or not request_id:
+            return None
+        return request_id
 
     def cancel_request(self, request_id: str) -> None:
         request = self._pending_requests.pop(request_id, None)
