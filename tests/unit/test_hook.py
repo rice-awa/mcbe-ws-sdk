@@ -8,7 +8,6 @@ import pytest
 
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
-from mcbe_ws_sdk.protocol.addon import AddonBridgeRequest
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -37,12 +36,6 @@ async def test_noop_hook_defaults() -> None:
     # Protocol hooks: returns False (not consumed) so default handling proceeds.
     assert (
         await hook.on_player_message(state, PlayerMessageEvent(sender="Steve", message="hi"))
-        is False
-    )
-    assert (
-        await hook.on_bridge_message(
-            state, AddonBridgeRequest(request_id="r1", capability="greet", payload={})
-        )
         is False
     )
     assert await hook.on_ui_chat_reassembled(state, "Steve", "hello") is None

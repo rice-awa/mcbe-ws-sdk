@@ -15,12 +15,6 @@ chunking are provided; the agent's LLM / message-broker concerns are the host's.
 """
 
 from mcbe_ws_sdk.addon import AddonBridgeClient, AddonBridgeService
-from mcbe_ws_sdk.capability import (
-    CapabilityContext,
-    CapabilityHandler,
-    CapabilityRegistry,
-    LoggingStubHandler,
-)
 from mcbe_ws_sdk.errors import (
     BridgeClosedError,
     BridgeError,
@@ -55,7 +49,7 @@ from mcbe_ws_sdk.gateway import (
     TellrawMessage,
     WsEventType,
 )
-from mcbe_ws_sdk.protocol.addon import AddonBridgeRequest, AddonBridgeResponse
+from mcbe_ws_sdk.protocol.addon import AddonBridgeResponse
 from mcbe_ws_sdk.protocol.minecraft import MCColor, MCPrefix, PlayerMessageEvent
 
 __version__ = "0.1.0"
@@ -66,7 +60,6 @@ __all__ = [
     "gateway",
     "protocol",
     # protocol
-    "AddonBridgeRequest",
     "AddonBridgeResponse",
     "MCColor",
     "MCPrefix",
@@ -106,9 +99,4 @@ __all__ = [
     "SystemNotification",
     "TellrawMessage",
     "WsEventType",
-    # capability
-    "CapabilityContext",
-    "CapabilityHandler",
-    "CapabilityRegistry",
-    "LoggingStubHandler",
 ]

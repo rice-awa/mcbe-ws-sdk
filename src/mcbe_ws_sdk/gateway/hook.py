@@ -8,8 +8,8 @@ defines the complete contract so a host can subclass and override only what it
 needs.
 
 Hook return convention:
-  * ``on_player_message`` / ``on_bridge_message`` return ``bool`` — ``True`` means
-    "consumed, stop the default handler"; ``False`` lets the default proceed.
+  * ``on_player_message`` returns ``bool`` — ``True`` means "consumed, stop the
+    default handler"; ``False`` lets the default proceed.
   * All other hooks return ``None`` and are purely side-effecting.
 """
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from mcbe_ws_sdk.gateway.connection import ConnectionState
-from mcbe_ws_sdk.protocol.addon import AddonBridgeRequest
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -48,14 +47,6 @@ class ConnectionHook(Protocol):
         player_event: PlayerMessageEvent,
     ) -> bool:
         """Inbound chat/scriptevent from a player. Return True to mark consumed."""
-        ...
-
-    async def on_bridge_message(
-        self,
-        state: ConnectionState,
-        request: AddonBridgeRequest,
-    ) -> bool:
-        """Inbound addon capability request (``mcbeai:bridge_request``). Return True to consume."""
         ...
 
     async def on_ui_chat_reassembled(
@@ -96,13 +87,6 @@ class NoOpHook:
         self,
         state: ConnectionState,
         player_event: PlayerMessageEvent,
-    ) -> bool:
-        return False
-
-    async def on_bridge_message(
-        self,
-        state: ConnectionState,
-        request: AddonBridgeRequest,
     ) -> bool:
         return False
 

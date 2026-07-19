@@ -17,6 +17,7 @@ All assertions go through the ``EventBus`` + a ``RecordingSink`` /
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -25,6 +26,7 @@ from uuid import UUID
 
 import pytest
 
+import mcbe_ws_sdk
 from mcbe_ws_sdk.addon.service import AddonBridgeService
 from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import AddonBridgeSettings, GatewaySettings, WebsocketTransportConfig
@@ -83,13 +85,12 @@ class RecordingSink(SilentResponseSink):
 
 
 class RecordingHook(NoOpHook):
-    """Hook that records every call; consumes bridge requests; logs commands."""
+    """Hook that records every call and logs routed player messages."""
 
     def __init__(self) -> None:
         self.connected: list[UUID] = []
         self.disconnected: list[UUID] = []
         self.player_messages: list[PlayerMessageEvent] = []
-        self.bridge_requests: list[str] = []
         self.ui_chat_reassembled: list[tuple[str, str]] = []
         self.command_responses: list[MinecraftCommandResponse] = []
         self.errors: list[MinecraftErrorFrame] = []
@@ -105,10 +106,6 @@ class RecordingHook(NoOpHook):
     ) -> bool:
         self.player_messages.append(player_event)
         return False
-
-    async def on_bridge_message(self, state: ConnectionState, request: Any) -> bool:
-        self.bridge_requests.append(request.capability)
-        return True  # consumed — mirrors a host CapabilityRegistry seam
 
     async def on_ui_chat_reassembled(
         self, state: ConnectionState, player_name: str, message: str,
@@ -212,6 +209,18 @@ def _send_noop(payload: str) -> Any:  # pragma: no cover - transport stub
     f: asyncio.Future[None] = asyncio.get_running_loop().create_future()
     f.set_result(None)
     return f
+
+
+def test_facade_has_no_inbound_capability_registry() -> None:
+    params = inspect.signature(McbeServerFacade.__init__).parameters
+    inbound_param = "capabil" + "ities"
+    bridge_hook_name = "on_bridge" + "_message"
+    registry_export = "Capability" + "Registry"
+
+    assert inbound_param not in params
+    assert not hasattr(McbeServerFacade(), "_capabilities")
+    assert not hasattr(NoOpHook, bridge_hook_name)
+    assert not hasattr(mcbe_ws_sdk, registry_export)
 
 
 # --------------------------------------------------------------------------- #
@@ -447,31 +456,7 @@ async def test_ui_callback_failure_does_not_block_following_frame() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 4. inbound bridge capability request routes to the hook
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-async def test_routes_inbound_bridge_request_to_hook() -> None:
-    hook = RecordingHook()
-    facade = McbeServerFacade(hook=hook, sink=RecordingSink())
-
-    body = _player_message_frame(
-        "Alice",
-        'scriptevent mcbeai:bridge_request {"request_id":"r1",'
-        '"capability":"greet","payload":{"name":"world"}}',
-    )
-    await facade._on_connection(FakeWebSocket(frames=[body]))
-
-    assert hook.bridge_requests == ["greet"]
-    assert hook.player_messages == []  # did NOT fall through to the player hook
-
-    # CapabilityRegistry default is wired on the facade even with NoOpHook-unused.
-    assert facade._capabilities is not None
-
-
-# --------------------------------------------------------------------------- #
-# 5. player command routes through handler + player hook
+# 4. player command routes through handler + player hook
 # --------------------------------------------------------------------------- #
 
 
@@ -487,7 +472,6 @@ async def test_routes_command_through_handler_and_hook() -> None:
     assert len(hook.player_messages) == 1
     assert hook.player_messages[0].message == "帮助 状态"
     assert hook.player_messages[0].sender == "Alice"
-    assert hook.bridge_requests == []  # not mistaken for a capability request
     # The command is registered in the default registry.
     parsed = facade.handler.parse_typed_command("帮助 状态")
     assert parsed is not None and parsed.type == "help"
@@ -784,12 +768,12 @@ async def test_facade_lifetime_is_single_use(
 
 def test_default_facade_wiring_and_default_commands() -> None:
     facade = McbeServerFacade()
-    # Constructor omits ``broker`` and includes ``capabilities``.
+    # Constructor omits the removed inbound-only seams.
     import inspect
 
     params = inspect.signature(McbeServerFacade.__init__).parameters
     assert "broker" not in params
-    assert "capabilities" in params
+    assert "capabilities" not in params
 
     # Default sink is the non-crashing SilentResponseSink.
     assert isinstance(facade.manager.sink, SilentResponseSink)

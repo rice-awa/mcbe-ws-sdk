@@ -38,7 +38,6 @@ import websockets
 
 from mcbe_ws_sdk._logging import get_logger
 from mcbe_ws_sdk.addon import AddonBridgeService
-from mcbe_ws_sdk.capability import CapabilityRegistry
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import GatewaySettings
@@ -48,7 +47,6 @@ from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
 from mcbe_ws_sdk.gateway.sink import ResponseSink, SilentResponseSink
-from mcbe_ws_sdk.protocol.addon import parse_addon_bridge_request
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
 
 if TYPE_CHECKING:
@@ -73,15 +71,11 @@ class McbeServerFacade:
         sink: ResponseSink | None = None,
         addon: AddonBridgeService | None = None,
         registry: CommandRegistry | None = None,
-        capabilities: CapabilityRegistry | None = None,
     ) -> None:
         self._settings = settings if settings is not None else GatewaySettings()
         self._hook = hook if hook is not None else NoOpHook()
         self._sink = sink if sink is not None else SilentResponseSink()
         self._registry = registry if registry is not None else CommandRegistry(DEFAULT_COMMANDS)
-        self._capabilities = (
-            capabilities if capabilities is not None else CapabilityRegistry()
-        )
 
         self._handler = MinecraftProtocolHandler(self._registry, surface=MessageSurfaceConfig())
         self._addon = addon if addon is not None else AddonBridgeService(self._settings.addon)
@@ -287,18 +281,7 @@ class McbeServerFacade:
                 )
             return
 
-        # Branch B — inbound addon capability request (``scriptevent
-        # mcbeai:bridge_request``). The hook is the host's override point; the
-        # SDK provides no built-in capability execution (E.6).
-        request = parse_addon_bridge_request(
-            event.message,
-            self._settings.addon.protocol.bridge_message_id,
-        )
-        if request is not None:
-            await self._hook.on_bridge_message(state, request)
-            return
-
-        # Branch D — player command/chat. ``parse_typed_command`` is informational
+        # Branch B — player command/chat. ``parse_typed_command`` is informational
         # (the host decides what to do via the hook).
         self._handler.parse_typed_command(event.message)
         await self._manager.event_bus.emit(WsEventType.PLAYER_MESSAGE, state, event)
