@@ -88,14 +88,18 @@ class AddonBridgeSession:
         if chunk.request_id not in self._pending_requests:
             return chunk
 
-        buffer = self._accept_chunk(
-            self._chunk_buffers,
-            buffer_id=chunk.request_id,
-            index=chunk.chunk_index,
-            total=chunk.total_chunks,
-            content=chunk.content,
-            item=chunk,
-        )
+        try:
+            buffer = self._accept_chunk(
+                self._chunk_buffers,
+                buffer_id=chunk.request_id,
+                index=chunk.chunk_index,
+                total=chunk.total_chunks,
+                content=chunk.content,
+                item=chunk,
+            )
+        except (BridgeLimitError, ProtocolError) as error:
+            self._fail_bridge_request(chunk.request_id, error)
+            raise
         if set(buffer.chunks) != set(range(1, buffer.total_chunks + 1)):
             return chunk
 
@@ -103,16 +107,20 @@ class AddonBridgeSession:
         try:
             response = reassemble_bridge_chunks(list(complete.chunks.values()))
         except ValueError as exc:
-            error = ProtocolError(str(exc))
-            request = self._pending_requests.pop(chunk.request_id, None)
-            if request is not None and not request.future.done():
-                request.future.set_exception(error)
-            raise error from exc
+            protocol_error = ProtocolError(str(exc))
+            self._fail_bridge_request(chunk.request_id, protocol_error)
+            raise protocol_error from exc
 
         request = self._pending_requests.pop(chunk.request_id, None)
         if request is not None and not request.future.done():
             request.future.set_result(response.payload)
         return chunk
+
+    def _fail_bridge_request(self, request_id: str, error: Exception) -> None:
+        request = self._pending_requests.pop(request_id, None)
+        self._chunk_buffers.pop(request_id, None)
+        if request is not None and not request.future.done():
+            request.future.set_exception(error)
 
     def cancel_request(self, request_id: str) -> None:
         request = self._pending_requests.pop(request_id, None)

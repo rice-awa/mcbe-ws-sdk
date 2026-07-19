@@ -210,6 +210,10 @@ async def test_session_rejects_excessive_chunk_count() -> None:
     request = session.create_request("x", {})
     with pytest.raises(BridgeLimitError):
         session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/3|x")
+    assert request.request_id not in session._pending_requests
+    assert request.future.done()
+    with pytest.raises(BridgeLimitError):
+        await request.future
 
 
 @pytest.mark.asyncio
@@ -257,17 +261,60 @@ async def test_session_rejects_message_byte_limit() -> None:
 
     with pytest.raises(BridgeLimitError, match="message byte limit exceeded"):
         session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|ab")
+    assert request.request_id not in session._pending_requests
+    assert request.future.done()
+    with pytest.raises(BridgeLimitError, match="message byte limit exceeded"):
+        await request.future
 
 
 @pytest.mark.asyncio
 async def test_session_rejects_total_buffer_byte_limit() -> None:
-    session = AddonBridgeSession(AddonBridgeSettings(max_total_buffer_bytes=3))
+    session = AddonBridgeSession(
+        AddonBridgeSettings(max_message_bytes=10, max_total_buffer_bytes=3)
+    )
     request = session.create_request("x", {})
 
     session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|ab")
 
     with pytest.raises(BridgeLimitError, match="total buffer byte limit exceeded"):
-        session.handle_ui_chat_chunk('MCBEAI|UI_CHAT|m1|1/2|{"player":"S","message":"x"}')
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|2/2|cd")
+    assert request.request_id not in session._pending_requests
+    assert request.request_id not in session._chunk_buffers
+    assert request.future.done()
+    with pytest.raises(BridgeLimitError, match="total buffer byte limit exceeded"):
+        await request.future
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_changed_total_and_completes_request() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings())
+    request = session.create_request("x", {})
+
+    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+
+    with pytest.raises(ProtocolError, match="chunk total changed"):
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|2/3|b")
+    assert request.request_id not in session._pending_requests
+    assert request.request_id not in session._chunk_buffers
+    assert request.future.done()
+    with pytest.raises(ProtocolError, match="chunk total changed"):
+        await request.future
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_duplicate_changed_content_and_completes_request() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings())
+    request = session.create_request("x", {})
+
+    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+
+    with pytest.raises(ProtocolError, match="duplicate chunk content changed"):
+        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|b")
+    assert request.request_id not in session._pending_requests
+    assert request.request_id not in session._chunk_buffers
+    assert request.future.done()
+    with pytest.raises(ProtocolError, match="duplicate chunk content changed"):
+        await request.future
 
 
 @pytest.mark.asyncio

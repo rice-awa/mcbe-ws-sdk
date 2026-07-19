@@ -100,3 +100,28 @@
   - `.venv/bin/python -m ruff check --no-cache src tests examples` -> `All checks passed!`
   - `.venv/bin/python -m mypy --no-incremental src` -> `Success: no issues found in 27 source files`
   - `.venv/bin/python -m pytest -p no:cacheprovider -q` -> `177 passed in 1.06s`
+
+### Re-review fix notes
+
+- Fixed the remaining admission-stage lifecycle bug for pending bridge requests:
+  - `_accept_chunk()` failures in `handle_chat_chunk()` now flow through one `_fail_bridge_request()` helper
+  - the helper removes the pending request, drops any bridge chunk buffer for that request, and completes the future with the same typed `BridgeLimitError` or `ProtocolError` before re-raising
+- Strengthened bridge-request coverage so admission-stage failures now assert both the immediate exception and lifecycle completion for:
+  - invalid chunk count/index
+  - `max_message_bytes`
+  - `max_total_buffer_bytes`
+  - changed chunk total
+  - duplicate chunk content mismatch
+
+### Re-review TDD evidence
+
+- RED command:
+  - `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py -q`
+  - Result before the fix: `5 failed, 18 passed`
+- RED failure summary:
+  - each new admission-stage bridge-request test showed the request remained in `_pending_requests` with an unfinished future after the typed exception was raised
+- Final verification after the re-review fix:
+  - `.venv/bin/python -m pytest tests/unit/test_addon_bridge.py -q` -> `23 passed in 0.25s`
+  - `.venv/bin/python -m ruff check --no-cache src tests examples` -> `All checks passed!`
+  - `.venv/bin/python -m mypy --no-incremental src` -> `Success: no issues found in 27 source files`
+  - `.venv/bin/python -m pytest -p no:cacheprovider -q` -> `179 passed in 1.04s`
