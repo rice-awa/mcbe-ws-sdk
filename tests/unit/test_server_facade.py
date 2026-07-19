@@ -162,16 +162,24 @@ def _command_response_frame(
     status_code: int = 0,
     status_message: str = "命令执行成功",
     extra_body: dict[str, Any] | None = None,
+    extra_header: dict[str, Any] | None = None,
+    extra_envelope: dict[str, Any] | None = None,
 ) -> str:
     """Build a ``commandResponse`` frame matching the facade's shape heuristic."""
     body = {"statusCode": status_code, "statusMessage": status_message}
     if extra_body is not None:
         body.update(extra_body)
+    header = {"requestId": request_id, "messagePurpose": "commandResponse"}
+    if extra_header is not None:
+        header.update(extra_header)
+    envelope: dict[str, Any] = {
+        "header": header,
+        "body": body,
+    }
+    if extra_envelope is not None:
+        envelope.update(extra_envelope)
     return json.dumps(
-        {
-            "header": {"requestId": request_id, "messagePurpose": "commandResponse"},
-            "body": body,
-        }
+        envelope
     )
 
 
@@ -421,6 +429,27 @@ async def test_command_response_preserves_complete_body() -> None:
     await facade._on_connection(FakeWebSocket([frame]))
 
     assert hook.command_responses[0].body["details"] == {"count": 2}
+
+
+@pytest.mark.asyncio
+async def test_command_response_preserves_full_envelope_extensions() -> None:
+    hook = RecordingHook()
+    facade = McbeServerFacade(hook=hook, sink=RecordingSink())
+    frame = _command_response_frame(
+        "r-2",
+        status_code=0,
+        status_message="ok",
+        extra_body={"details": {"count": 2}},
+        extra_header={"futureHeader": {"x": 1}},
+        extra_envelope={"futureEnvelope": True},
+    )
+
+    await facade._on_connection(FakeWebSocket([frame]))
+
+    response = hook.command_responses[0]
+    assert response.header["futureHeader"] == {"x": 1}
+    assert response.model_dump()["futureEnvelope"] is True
+    assert response.body["details"] == {"count": 2}
 
 
 @pytest.mark.asyncio

@@ -300,18 +300,10 @@ class McbeServerFacade:
     def _extract_command_response(data: dict[str, Any]) -> MinecraftCommandResponse:
         """Return a typed ``commandResponse`` frame.
 
-        The full ``body`` is preserved so the host can interpret both the
-        canonical fields and any future extension fields.
+        The full envelope is preserved so the host can inspect canonical fields
+        and any future header / top-level extension fields.
         """
-        header = data.get("header") or {}
-        if not isinstance(header, dict):
-            header = {}
-        request_id = str(header.get("requestId", ""))
-
-        body = data.get("body") or {}
-        if not isinstance(body, dict):
-            body = {}
-        return MinecraftCommandResponse(request_id=request_id, body=body)
+        return MinecraftCommandResponse.model_validate(data)
 
     @staticmethod
     def _is_error_frame(data: dict[str, Any]) -> bool:

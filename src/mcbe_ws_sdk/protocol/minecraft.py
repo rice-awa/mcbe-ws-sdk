@@ -7,7 +7,7 @@ import re
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _TELLRAW_TARGET_UNQUOTED_RE = re.compile(
     r"^(?:@[a-z](?:\[[A-Za-z0-9_.,=!:-]*\])?|[A-Za-z0-9_.-]+)$"
@@ -189,8 +189,23 @@ class PlayerMessageEvent(BaseModel):
 class MinecraftCommandResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    request_id: str
+    request_id: str = ""
+    header: dict[str, Any]
     body: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_request_id(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if data.get("request_id"):
+            return data
+        header = data.get("header")
+        if not isinstance(header, dict):
+            return data
+        populated = dict(data)
+        populated["request_id"] = str(header.get("requestId", ""))
+        return populated
 
 
 class MinecraftErrorFrame(BaseModel):

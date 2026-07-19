@@ -8,10 +8,10 @@ from mcbe_ws_sdk.protocol.addon import (
 from mcbe_ws_sdk.protocol.minecraft import (
     MCColor,
     MCPrefix,
+    MinecraftCommand,
     MinecraftCommandResponse,
     MinecraftErrorFrame,
     MinecraftMessage,
-    MinecraftCommand,
     MinecraftSubscribe,
     PlayerMessageEvent,
 )
@@ -125,6 +125,7 @@ def test_command_response_and_error_frame_models_allow_extension_fields() -> Non
     response = MinecraftCommandResponse.model_validate(
         {
             "request_id": "r-1",
+            "header": {"messagePurpose": "commandResponse", "futureHeader": {"x": 1}},
             "body": {"statusCode": 0, "details": {"count": 2}},
             "futureResponse": True,
         }
@@ -139,6 +140,7 @@ def test_command_response_and_error_frame_models_allow_extension_fields() -> Non
     )
 
     assert response.model_dump()["futureResponse"] is True
+    assert response.model_dump()["header"]["futureHeader"] == {"x": 1}
     assert response.body["details"] == {"count": 2}
     dumped_error = error.model_dump()
     assert dumped_error["header"]["futureHeader"] == "ok"

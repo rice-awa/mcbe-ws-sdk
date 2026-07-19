@@ -49,7 +49,11 @@ async def test_noop_hook_defaults() -> None:
     assert (
         await hook.on_command_response(
             state,
-            MinecraftCommandResponse(request_id="req-1", body={"status": 0}),
+            MinecraftCommandResponse(
+                request_id="req-1",
+                header={"messagePurpose": "commandResponse", "requestId": "req-1"},
+                body={"status": 0},
+            ),
         )
         is None
     )
