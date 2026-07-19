@@ -288,3 +288,118 @@ Exit code: `0`
 - `LegacyMcbeAiV1Profile` now enforces `request_version == 2` and validates both delay fields as finite, non-negative real numbers without importing config helpers or creating a cycle.
 - `AddonBridgeSettings.profile` now uses the concrete `LegacyMcbeAiV1Profile` field and default factory directly.
 - `src/mcbe_ws_sdk/profiles/types.py` was deleted and the repo no longer references the old indirection symbols.
+
+---
+
+## Human Resolution
+
+Date: 2026-07-19
+
+Resolution applied: choose option 1 and prioritize core purity.
+
+### RED search evidence
+
+Command:
+
+```bash
+rg -n -i 'ai_resp|mcbeai' src/mcbe_ws_sdk/flow src/mcbe_ws_sdk/config.py
+```
+
+Exit code: `0`
+
+Observed matches:
+
+```text
+src/mcbe_ws_sdk/config.py:10:from mcbe_ws_sdk.profiles import LegacyMcbeAiV1Profile
+src/mcbe_ws_sdk/config.py:62:    profile: LegacyMcbeAiV1Profile = field(default_factory=LegacyMcbeAiV1Profile)
+```
+
+### GREEN search evidence
+
+Command:
+
+```bash
+rg -n -i 'ai_resp|mcbeai' src/mcbe_ws_sdk/flow src/mcbe_ws_sdk/config.py
+```
+
+Exit code: `1` (no matches)
+
+### Verification
+
+Command:
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_legacy_mcbeai_v1.py tests/unit/test_addon_bridge.py tests/unit/test_config.py -q
+```
+
+Exit code: `0`
+
+```text
+92 passed in 2.25s
+```
+
+Command:
+
+```bash
+rg -n -i 'ai_response|assistant|reasoning|tool_call|mcbeai' src/mcbe_ws_sdk/flow
+```
+
+Exit code: `1` (no matches)
+
+Command:
+
+```bash
+rg -n '_split_text|_chunk_by_limits|\.chunk_raw_command\([^,]+,[^)]*\)' src/mcbe_ws_sdk tests --glob '*.py'
+```
+
+Exit code: `1` (no matches)
+
+Command:
+
+```bash
+rg -n 'AddonProtocolConfig|_protocol|protocol=' src/mcbe_ws_sdk/addon src/mcbe_ws_sdk/config.py
+```
+
+Exit code: `1` (no matches)
+
+Command:
+
+```bash
+.venv/bin/python -m ruff check --no-cache src tests examples
+```
+
+Exit code: `0`
+
+```text
+All checks passed!
+```
+
+Command:
+
+```bash
+.venv/bin/python -m mypy --no-incremental src
+```
+
+Exit code: `0`
+
+```text
+Success: no issues found in 29 source files
+```
+
+Command:
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider -q
+```
+
+Exit code: `0`
+
+```text
+188 passed in 3.47s
+```
+
+### Self-review
+
+- `mcbe_ws_sdk.profiles` now re-exports the concrete `LegacyMcbeAiV1Profile` under the neutral alias `AddonBridgeProfile` without introducing a new helper type or module.
+- `config.py` now imports only `AddonBridgeProfile` and declares `profile: AddonBridgeProfile = field(default_factory=AddonBridgeProfile)`.
+- Runtime behavior remains concrete and is still proven by `tests/unit/test_config.py` asserting the default profile instance is `LegacyMcbeAiV1Profile`.
