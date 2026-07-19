@@ -1,3 +1,5 @@
+[![Languages](https://img.shields.io/badge/Languages-中文-blue?style=flat-square)](./README.zh.md)
+
 # MCBE WS Bridge Addon
 
 Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart of the
@@ -51,39 +53,37 @@ initializeAfterWorldLoad(() => { /* register handlers here */ });
 
 ```bash
 npm install
-npm run build       # tsc 类型检查门卫（中间产物输出到 lib/）+ esbuild 打包
-npm run mcaddon     # 在 build 基础上组装 .mcaddon
+npm run build       # tsc type-check gate (intermediate output to lib/) + esbuild bundle
+npm run mcaddon     # assemble .mcaddon on top of build output
 ```
 
-构建流水线分两步：
+The build pipeline has two steps:
 
-1. **`tsc` 类型检查门卫**：对源码做类型校验，中间产物输出到 `lib/`（仅用于类型检查，不是最终产物）。
-2. **esbuild `bundle` 任务**：产出真正的最终产物 `dist/scripts/main.js`，随后由 `copyArtifacts` 将 `dist/scripts` 复制进 behavior_pack，与 manifest 的 `"entry": "scripts/main.js"` 对应。
+1. **`tsc` type-check gate**: type-checks the source, emitting intermediate output to `lib/` (used for type checking only — not the final artifact).
+2. **esbuild `bundle` task**: produces the real final artifact `dist/scripts/main.js`, then `copyArtifacts` copies `dist/scripts` into the behavior pack, matching the manifest `"entry": "scripts/main.js"`.
 
-最终游戏内加载的是 `scripts/main.js`，请以此为准，而非 `lib/` 下的中间产物。
+The artifact that loads in-game is `scripts/main.js` — treat that as authoritative, not the intermediate output under `lib/`.
 
-## 内置基础能力
+## Built-in Base Capabilities
 
-Addon 内置了一套开箱即用的基础能力注册表（`scripts/bridge/capabilities/index.ts`），
-作为可运行的参考示例。当宿主未通过 `setCapabilityHandler` 注入自定义处理器时，
-`router.ts` 会回退到该注册表；一旦宿主注册了处理器，则完全覆盖默认表。
+The addon ships a ready-to-use base capability registry
+(`scripts/bridge/capabilities/index.ts`) as a runnable reference example.
+When the host has not injected a custom handler via `setCapabilityHandler`,
+`router.ts` falls back to this registry; once the host registers a handler,
+it fully overrides the defaults.
 
-| 能力名 | 文件 | 说明 |
+| Capability | File | Description |
 | --- | --- | --- |
-| `get_player_snapshot` | `getPlayerSnapshot.ts` | 获取玩家快照（名称、生命值、标签、坐标、维度、游戏模式） |
-| `get_inventory_snapshot` | `getInventorySnapshot.ts` | 获取玩家背包快照（槽位、物品 ID、数量、自定义名称） |
-| `run_world_command` | `runWorldCommand.ts` | 在世界上执行一条 MC 命令（受 `commandSafety.ts` 黑名单保护） |
+| `get_player_snapshot` | `getPlayerSnapshot.ts` | Get a player snapshot (name, health, tags, coordinates, dimension, game mode) |
+| `get_inventory_snapshot` | `getInventorySnapshot.ts` | Get a player inventory snapshot (slots, item ID, count, custom name) |
+| `run_world_command` | `runWorldCommand.ts` | Run an MC command in the world (guarded by the `commandSafety.ts` blacklist) |
 
-开发者添加自定义能力有两种方式：
+Developers have two ways to add a custom capability:
 
-1. 实现一个 `CapabilityHandler`（`(capability, payload) => { ok, payload }`），并通过
-   `setCapabilityHandler` 注册——这会覆盖默认注册表，完全由宿主接管分发。
-2. 在 `capabilities/index.ts` 的 `defaultCapabilityRegistry` 中追加新条目，
-   与内置能力共存，仍由 `router.ts` 按能力名查找调用。
+1. Implement a `CapabilityHandler` (`(capability, payload) => { ok, payload }`) and register it via `setCapabilityHandler` — this overrides the default registry and hands dispatch entirely to the host.
+2. Append a new entry to `defaultCapabilityRegistry` in `capabilities/index.ts`, coexisting with the built-in capabilities, still looked up and invoked by `router.ts` by capability name.
 
-> 注意：`find_entities` 暂未内置。当前协议中的 `scriptevent` 并不携带发起玩家的
-> 来源上下文（source-player），而实体查询需要该上下文来限定范围；一旦协议支持
-> 玩家来源的 scriptevent，该能力即会补充进来。
+> Note: `find_entities` is not yet bundled. The current protocol's `scriptevent` does not carry the source-player context, while an entity query needs that context to scope the search; once the protocol supports player-sourced scriptevents, this capability will be added.
 
 ## License
 
