@@ -1,13 +1,38 @@
-import type { Player } from "@minecraft/server";
-import { system, world } from "@minecraft/server";
+import { system } from "@minecraft/server";
 
-import { AI_RESP_MESSAGE_ID, TOOL_PLAYER_NAME } from "./constants";
+import { AI_RESP_MESSAGE_ID } from "./constants";
+import { utf8ByteLength } from "./chunking";
 
-// ── 分片缓冲区 ──
-// msg_id → Map<index, chunk payload>
-const chunkBuffers = new Map<string, Map<number, AiRespChunk>>();
+// ── Limits ──
 
-type AiRespChunk = {
+export type ResponseSyncLimits = {
+  ttlMs: number;
+  maxBuffers: number;
+  maxChunksPerMessage: number;
+  maxMessageBytes: number;
+};
+
+export const DEFAULT_RESPONSE_SYNC_LIMITS: ResponseSyncLimits = {
+  ttlMs: 30_000,
+  maxBuffers: 64,
+  maxChunksPerMessage: 128,
+  maxMessageBytes: 64 * 1024,
+};
+
+// ── Buffer state (internal) ──
+
+type BufferState = {
+  createdAt: number;
+  total: number;
+  playerName: string;
+  role: string;
+  byteLength: number;
+  chunks: Map<number, string>;
+};
+
+// ── Public types ──
+
+export type LegacyResponseChunk = {
   id: string;
   i: number;
   n: number;
@@ -16,11 +41,141 @@ type AiRespChunk = {
   c: string;
 };
 
+export type ReassembledResponse = {
+  playerName: string;
+  role: string;
+  text: string;
+};
+
 /** 重组完成后的回调签名：(playerName, role, fullText) */
 export type AiRespHandler = (playerName: string, role: string, text: string) => void;
 
+// ── Chunk parser ──
+
+export function parseLegacyResponseChunk(value: unknown): LegacyResponseChunk | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.id !== "string" || typeof item.i !== "number" ||
+    typeof item.n !== "number" || typeof item.p !== "string" ||
+    typeof item.r !== "string" || typeof item.c !== "string"
+  ) return null;
+  return { id: item.id, i: item.i, n: item.n, p: item.p, r: item.r, c: item.c };
+}
+
+// ── Bounded ResponseAssembler ──
+
+export class ResponseAssembler {
+  private readonly buffers = new Map<string, BufferState>();
+
+  constructor(
+    private readonly limits: ResponseSyncLimits = DEFAULT_RESPONSE_SYNC_LIMITS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  get bufferCount(): number {
+    return this.buffers.size;
+  }
+
+  clear(): void {
+    this.buffers.clear();
+  }
+
+  pruneExpired(): void {
+    const cutoff = this.now();
+    for (const [id, state] of this.buffers) {
+      if (cutoff - state.createdAt >= this.limits.ttlMs) {
+        this.buffers.delete(id);
+      }
+    }
+  }
+
+  push(chunk: LegacyResponseChunk): ReassembledResponse | null {
+    this.pruneExpired();
+
+    // Validate chunk metadata
+    if (
+      !chunk.id || !chunk.p || !chunk.r ||
+      !Number.isInteger(chunk.i) || !Number.isInteger(chunk.n) ||
+      chunk.i < 1 || chunk.i > chunk.n ||
+      chunk.n > this.limits.maxChunksPerMessage
+    ) {
+      return null;
+    }
+
+    let state = this.buffers.get(chunk.id);
+
+    if (!state) {
+      // New buffer entry — check maxBuffers limit
+      if (this.buffers.size >= this.limits.maxBuffers) return null;
+
+      state = {
+        createdAt: this.now(),
+        total: chunk.n,
+        playerName: chunk.p,
+        role: chunk.r,
+        byteLength: 0,
+        chunks: new Map<number, string>(),
+      };
+      this.buffers.set(chunk.id, state);
+    } else if (
+      state.total !== chunk.n ||
+      state.playerName !== chunk.p ||
+      state.role !== chunk.r
+    ) {
+      // Metadata conflict — delete buffer and return null
+      this.buffers.delete(chunk.id);
+      return null;
+    }
+
+    // Check for duplicate index
+    const existing = state.chunks.get(chunk.i);
+    if (existing !== undefined) {
+      if (existing !== chunk.c) {
+        // Conflicting content at same index — delete buffer
+        this.buffers.delete(chunk.id);
+      }
+      // Same content = idempotent; either way, no new complete response
+      return null;
+    }
+
+    // Check byte limit
+    const nextBytes = state.byteLength + utf8ByteLength(chunk.c);
+    if (nextBytes > this.limits.maxMessageBytes) {
+      this.buffers.delete(chunk.id);
+      return null;
+    }
+
+    // Store chunk
+    state.chunks.set(chunk.i, chunk.c);
+    state.byteLength = nextBytes;
+
+    // Check if all chunks received
+    if (state.chunks.size !== state.total) return null;
+
+    // Verify all indices 1..n are present
+    const ordered: string[] = [];
+    for (let index = 1; index <= state.total; index += 1) {
+      const content = state.chunks.get(index);
+      if (content === undefined) return null;
+      ordered.push(content);
+    }
+
+    // Complete — delete buffer and return result
+    this.buffers.delete(chunk.id);
+    return {
+      playerName: state.playerName,
+      role: state.role,
+      text: ordered.join(""),
+    };
+  }
+}
+
+// ── Module state ──
+
 let handler: AiRespHandler | null = null;
 let isRegistered = false;
+const assembler = new ResponseAssembler();
 
 /** 注册一个回调，在 mcbeai:ai_resp 报文重组完成后调用。 */
 export function setAiRespHandler(fn: AiRespHandler): void {
@@ -29,60 +184,42 @@ export function setAiRespHandler(fn: AiRespHandler): void {
 
 /** 注册 scriptEventReceive 订阅，监听 mcbeai:ai_resp 分片。 */
 export function registerResponseSyncHandler(): void {
-  if (isRegistered) {
-    return;
-  }
+  if (isRegistered) return;
   isRegistered = true;
 
   system.afterEvents.scriptEventReceive.subscribe((event) => {
-    if (event.id !== AI_RESP_MESSAGE_ID) {
+    if (event.id !== AI_RESP_MESSAGE_ID) return;
+
+    // Server-only source; no Entity/tool-player fallback
+    if (event.sourceType !== "Server") {
+      console.warn(
+        `[respSync] ignoring non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`,
+      );
       return;
     }
 
-    // 发送者校验：与 router.ts 及 Python SDK 入站信任模型对齐——脚本事件默认仅放行
-    // 服务端来源（比聊天消息路径更窄），实体来源仅在发送者为 MCBEAI_TOOL 工具玩家时放行。
-    const isFromServer = event.sourceType === "Server";
-    const isFromToolPlayer =
-      event.sourceType === "Entity" && (event.sourceEntity as Player | undefined)?.name === TOOL_PLAYER_NAME;
-    if (!isFromServer && !isFromToolPlayer) {
-      console.warn(`[respSync] 忽略非法来源的 scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
-      return;
-    }
-
+    let parsed: unknown;
     try {
-      const chunk = JSON.parse(event.message) as AiRespChunk;
-      handleChunk(chunk);
+      parsed = JSON.parse(event.message);
     } catch {
-      // 忽略解析错误
+      return;
+    }
+
+    const chunk = parseLegacyResponseChunk(parsed);
+    if (!chunk) return;
+
+    const result = assembler.push(chunk);
+    if (result && handler) {
+      handler(result.playerName, result.role, result.text);
     }
   });
 }
 
-function handleChunk(chunk: AiRespChunk): void {
-  const { id, i, n, p: playerName, r: role, c: content } = chunk;
+// ── Internal testing helpers ──
 
-  if (!id || i <= 0 || n <= 0 || i > n) {
-    return;
-  }
-
-  let buffer = chunkBuffers.get(id);
-  if (!buffer) {
-    buffer = new Map<number, AiRespChunk>();
-    chunkBuffers.set(id, buffer);
-  }
-
-  buffer.set(i, chunk);
-
-  if (buffer.size < n) {
-    return;
-  }
-
-  const sortedChunks = [...buffer.values()].sort((a, b) => a.i - b.i);
-  const fullText = sortedChunks.map((c) => c.c).join("");
-
-  chunkBuffers.delete(id);
-
-  if (handler) {
-    handler(playerName, role, fullText);
-  }
+/** @internal */
+export function _testingReset(): void {
+  handler = null;
+  isRegistered = false;
+  assembler.clear();
 }
