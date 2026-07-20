@@ -5,16 +5,16 @@
   "description": "Script bridge for MCBE-WS-SDK",
   "private": true,
   "devDependencies": {
-    "@minecraft/core-build-tasks": "^5.7.0",
-    "@types/node": "^22.10.1",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
-    "eslint-plugin-minecraft-linting": "^2.0.1",
-    "prettier": "^3.9.5",
-    "source-map": "^0.7.4",
-    "ts-node": "^10.9.1",
-    "typescript": "^5.5.4",
-    "vitest": "^2.1.8"
+    "@minecraft/core-build-tasks": "5.7.0",
+    "@types/node": "22.10.1",
+    "@typescript-eslint/eslint-plugin": "8.0.0",
+    "@typescript-eslint/parser": "8.0.0",
+    "eslint-plugin-minecraft-linting": "2.0.1",
+    "prettier": "3.9.5",
+    "source-map": "0.7.4",
+    "ts-node": "10.9.1",
+    "typescript": "5.5.4",
+    "vitest": "2.1.9"
   },
   "scripts": {
     "lint": "just-scripts lint",
@@ -25,12 +25,13 @@
     "mcaddon": "just-scripts mcaddon",
     "mcaddon:production": "just-scripts mcaddon --production",
     "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "enablemcloopback": "CheckNetIsolation.exe LoopbackExempt -a -p=S-1-15-2-1958404141-86561845-1752920682-3514627264-368642714-62675701-733520436",
     "enablemcpreviewloopback": "CheckNetIsolation.exe LoopbackExempt -a -p=S-1-15-2-424268864-5579737-879501358-346833251-474568803-887069379-4040235476"
   },
   "dependencies": {
-    "@minecraft/server": "^2.0.0",
+    "@minecraft/server": "2.0.0",
     "@minecraft/server-gametest": "1.0.0-beta.1.26.20-preview.28",
-    "@minecraft/server-ui": "^2.0.0"
+    "@minecraft/server-ui": "2.0.0"
   }
 }

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@minecraft/server": ["tests/__mocks__/minecraft-server.ts"],
+      "@minecraft/server-gametest": ["tests/__mocks__/minecraft-server-gametest.ts"],
+      "@minecraft/server-ui": ["tests/__mocks__/minecraft-server-ui.ts"]
+    }
+  },
+  "include": ["scripts/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+}
