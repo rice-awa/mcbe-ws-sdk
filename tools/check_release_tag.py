@@ -18,18 +18,19 @@ from pathlib import Path
 
 
 def _get_project_version() -> str:
-    """Read ``[project].version`` from ``pyproject.toml``."""
+    """Read ``[project].version`` from ``pyproject.toml``.
+
+    Raises ``ValueError`` if the file is missing or the version is invalid.
+    """
     root = Path(__file__).resolve().parent.parent
     pyproject = root / "pyproject.toml"
     if not pyproject.exists():
-        print(f"error: {pyproject} not found", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"{pyproject} not found")
     data = tomllib.loads(pyproject.read_text("utf-8"))
     project = data.get("project", {})
     version = project.get("version")
     if not isinstance(version, str) or not version.strip():
-        print("error: [project].version is missing or empty in pyproject.toml", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError("[project].version is missing or empty in pyproject.toml")
     return version.strip()
 
 
@@ -43,7 +44,12 @@ def main() -> None:
         print("error: tag is empty", file=sys.stderr)
         sys.exit(1)
 
-    version = _get_project_version()
+    try:
+        version = _get_project_version()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     expected = f"v{version}"
 
     if tag == expected:

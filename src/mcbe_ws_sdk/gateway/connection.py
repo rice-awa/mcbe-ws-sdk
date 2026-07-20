@@ -3,7 +3,7 @@
 Extends the minimal :class:`ConnectionState` foundation with the lifecycle the
 host drives through the facade: per-connection response queues, an outbound
 ``send_payload`` callable (the transport's frame send, e.g. ``websocket.send``),
-and a :class:`ConnectionManager`` that owns the response-sender coroutine and
+and a :class:`ConnectionManager` that owns the response-sender coroutine and
 emits ``CONNECTED`` / ``DISCONNECTED`` on the
 :class:`~mcbe_ws_sdk.gateway.events.EventBus`.
 

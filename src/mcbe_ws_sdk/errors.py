@@ -37,7 +37,7 @@ class BridgeClosedError(BridgeError):
         self.request_id = request_id
 
 
-class BridgeLimitError(ProtocolError):
+class BridgeLimitError(BridgeError, ProtocolError):
     """Raised when an add-on bridge protocol limit is exceeded."""
 
 

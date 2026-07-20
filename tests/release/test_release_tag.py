@@ -7,7 +7,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
+
+
+def _project_version() -> str:
+    """Read the current version from pyproject.toml."""
+    pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text("utf-8"))
+    return data["project"]["version"]
 
 
 def _run_tag_check(tag: str) -> subprocess.CompletedProcess[str]:
@@ -22,8 +30,9 @@ def _run_tag_check(tag: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_tag_matches_package_version() -> None:
-    """v0.1.0 matches the current pyproject.toml version."""
-    result = _run_tag_check("v0.1.0")
+    """The current package version tag matches pyproject.toml."""
+    tag = f"v{_project_version()}"
+    result = _run_tag_check(tag)
     assert result.returncode == 0, result.stderr
 
 

@@ -189,9 +189,18 @@ class McbeServerFacade:
             logger.exception("connection_error", connection_id=str(state.id))
         finally:
             if self._addon is not None:
-                self._addon.close_connection(state.id)
-            await self._manager.drop_connection(state.id)
-            await self._hook.on_disconnected(state)
+                try:
+                    self._addon.close_connection(state.id)
+                except Exception:
+                    logger.exception("addon_close_connection_failed", connection_id=str(state.id))
+            try:
+                await self._manager.drop_connection(state.id)
+            except Exception:
+                logger.exception("drop_connection_failed", connection_id=str(state.id))
+            try:
+                await self._hook.on_disconnected(state)
+            except Exception:
+                logger.exception("hook_on_disconnected_failed", connection_id=str(state.id))
 
     async def _handle_raw(self, state: ConnectionState, raw: str | bytes) -> None:
         """Route one inbound WS frame to the right branch."""

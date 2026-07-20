@@ -230,6 +230,7 @@ class AddonBridgeSession:
         for buffer_id, bridge_buffer in list(self._chunk_buffers.items()):
             if now - bridge_buffer.updated_at >= ttl:
                 self._drop_buffer(self._chunk_buffers, buffer_id)
+                self._fail_bridge_request(buffer_id, BridgeLimitError("chunk buffer expired"))
         for buffer_id, ui_buffer in list(self._ui_chat_chunk_buffers.items()):
             if now - ui_buffer.updated_at >= ttl:
                 self._drop_buffer(self._ui_chat_chunk_buffers, buffer_id)
