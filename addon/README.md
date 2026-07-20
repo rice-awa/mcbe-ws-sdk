@@ -5,11 +5,11 @@
 Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart of the
 `mcbe-ws-sdk` Python package. This addon handles the protocol layer:
 
-- `constants.ts` — wire protocol constants matching Python `AddonProtocolConfig`
-- `chunking.ts` — encode/decode for `MCBEAI|RESP` and `MCBEAI|UI_CHAT` fragments
-- `router.ts` — subscribes to `mcbeai:bridge_request` scriptevents, dispatches to the
+- `constants.ts` — wire protocol constants matching Python `McbewsV1Profile`
+- `chunking.ts` — encode/decode for `MCBEWS|BRIDGE` and `MCBEWS|UI_CHAT` fragments
+- `router.ts` — subscribes to `mcbews:bridge_req` scriptevents, dispatches to the
   built-in capability registry, and ships the response back
-- `responseSync.ts` — reassembles `mcbeai:ai_resp` chunks and invokes a callback
+- `responseSync.ts` — reassembles `mcbews:text_resp` chunks and invokes a callback
 - `toolPlayer.ts` — marks a player as a towered transport per response delivery (tellraw)
 - `bootstrap.ts` — safe init lifecycle (early init → after-world-load)
 

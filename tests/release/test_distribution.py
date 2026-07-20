@@ -98,24 +98,26 @@ def _make_zip_file(members: list[tuple[str, bytes]]) -> Path:
     """Create a temporary .whl (zip) with the given members."""
     import tempfile
 
-    f = tempfile.NamedTemporaryFile(suffix=".whl", delete=False)
-    with zipfile.ZipFile(f, "w") as zf:
-        for name, content in members:
-            zf.writestr(name, content)
-    return Path(f.name)
+    with tempfile.NamedTemporaryFile(suffix=".whl", delete=False) as handle:
+        path = Path(handle.name)
+        with zipfile.ZipFile(handle, "w") as zf:
+            for name, content in members:
+                zf.writestr(name, content)
+    return path
 
 
 def _make_tar_file(members: list[tuple[str, bytes]]) -> Path:
     """Create a temporary .tar.gz with the given members."""
     import tempfile
 
-    f = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
-    with tarfile.open(f.name, "w:gz") as tf:
-        for name, content in members:
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            tf.addfile(info, io.BytesIO(content))
-    return Path(f.name)
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as handle:
+        path = Path(handle.name)
+        with tarfile.open(fileobj=handle, mode="w:gz") as tf:
+            for name, content in members:
+                info = tarfile.TarInfo(name)
+                info.size = len(content)
+                tf.addfile(info, io.BytesIO(content))
+    return path
 
 
 # ===================================================================

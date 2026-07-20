@@ -9,8 +9,8 @@
 完全属于宿主。
 
 **单向能力模型：** SDK 从 Python 宿主向 Minecraft addon 发送桥接请求并接收响应。
-SDK 不包含入站能力注册表分发 —— addon 端拥有所有能力处理逻辑。`LegacyMcbeAiV1Profile`
-是唯一内置的协议 profile。
+SDK 不包含入站能力注册表分发 —— addon 端拥有所有能力处理逻辑。`McbewsV1Profile`
+（`MCBEWS_V1`）是唯一内置的协议 profile。
 
 ## 安装
 
@@ -77,8 +77,8 @@ facade = McbeServerFacade(
 - `ResponseSink` / `DefaultResponseSink`：出站文本负载与系统通知的投递方式。
 - `AddonBridgeService` + `AddonBridgeClient`：承载结构化能力请求/响应的 ScriptEvent
   桥（无全局单例）。
-- `LegacyMcbeAiV1Profile`（模块级 `LEGACY_MCBEAI_V1`）：唯一内置的协议 profile，
-  用于与旧版 mcbeai v1 addon 的互操作。
+- `McbewsV1Profile`（模块级 `MCBEWS_V1`）：唯一内置的协议 profile，
+  用于 mcbews v1 addon 互操作（`mcbews:bridge_req` / `mcbews:text_resp`）。
 - `CommandRegistry`：协议处理器所渲染的 Minecraft 命令面（默认为空）。
 - `ConnectionManager`：持有每连接状态与玩家会话映射。
 - `MinecraftProtocolHandler`：解析入站流量并构建出站数据包。

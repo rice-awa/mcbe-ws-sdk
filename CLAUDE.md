@@ -86,7 +86,7 @@ The host implements `ConnectionHook` (6 hooks: `on_connected`, `on_disconnected`
 
 ### Protocol profiles
 
-Protocol profiles live under `profiles/` and define wire-format constants for different addon interop layers. `LegacyMcbeAiV1Profile` is the sole built-in profile (module-level singleton `LEGACY_MCBEAI_V1`). The profile controls bridge message IDs, chat prefixes, simulated player name, chunk delays, and the AI response frame format. `AddonBridgeSettings` carries the profile reference so the addon service stays parameterised.
+Protocol profiles live under `profiles/` and define wire-format constants for different addon interop layers. `McbewsV1Profile` is the sole built-in profile (module-level singleton `MCBEWS_V1`). The profile controls bridge message IDs, chat prefixes, simulated player name, chunk delays, and the text-response frame format (`mcbews:text_resp`). `AddonBridgeSettings` carries the profile reference so the addon service stays parameterised.
 
 ### Flow control — 461 B hard limit
 
@@ -98,7 +98,7 @@ Protocol profiles live under `profiles/` and define wire-format constants for di
 
 ### Addon bridge protocol
 
-The bridge carries structured capability requests/responses over `scriptevent` via a simulated "tool player" (`MCBEAI_TOOL`). Messages are piped through chat with a `namespace|prefix|request_id|index/total|content` format. `AddonBridgeSession` handles chunk reassembly with TTL-based buffer expiry, byte limits, and per-connection future management. There is no global singleton — `AddonBridgeService` instances are constructed with explicit `AddonBridgeSettings`.
+The bridge carries structured capability requests/responses over `scriptevent` via a simulated bridge player (`MCBEWS_BRIDGE`). Messages are piped through chat with a `namespace|prefix|request_id|index/total|content` format (`MCBEWS|BRIDGE`, `MCBEWS|UI_CHAT`). `AddonBridgeSession` handles chunk reassembly with TTL-based buffer expiry, byte limits, and per-connection future management. There is no global singleton — `AddonBridgeService` instances are constructed with explicit `AddonBridgeSettings`.
 
 ### No host imports
 
@@ -122,9 +122,9 @@ The SDK never imports from its parent repo. `ConnectionState.send_payload` is an
 | `src/mcbe_ws_sdk/protocol/minecraft.py` | Pydantic models: `MinecraftCommand`, `PlayerMessageEvent`, `MinecraftCommandResponse` |
 | `src/mcbe_ws_sdk/addon/service.py` | `AddonBridgeService` + `AddonBridgeClient` — bridge request/response cycle |
 | `src/mcbe_ws_sdk/addon/session.py` | `AddonBridgeSession` — per-connection pending futures + chunk buffer management |
-| `src/mcbe_ws_sdk/profiles/legacy_mcbeai_v1/profile.py` | `LegacyMcbeAiV1Profile` — wire-format constants |
-| `src/mcbe_ws_sdk/profiles/legacy_mcbeai_v1/codec.py` | Encode/decode bridge requests, UI chat chunks, legacy AI response frames |
-| `src/mcbe_ws_sdk/profiles/legacy_mcbeai_v1/delivery.py` | `LegacyMcbeAiV1Delivery` — send AI responses with prelude+chunk delays |
+| `src/mcbe_ws_sdk/profiles/mcbews_v1/profile.py` | `McbewsV1Profile` — wire-format constants |
+| `src/mcbe_ws_sdk/profiles/mcbews_v1/codec.py` | Encode/decode bridge requests, UI chat chunks, text response frames |
+| `src/mcbe_ws_sdk/profiles/mcbews_v1/delivery.py` | `McbewsV1Delivery` — send text responses with prelude+chunk delays |
 | `src/mcbe_ws_sdk/config.py` | `GatewaySettings` — all frozen dataclass settings with validation |
 | `src/mcbe_ws_sdk/errors.py` | Exception hierarchy (`McbeWsSdkError` → `ProtocolError`, `BridgeError`, `ConfigurationError`, etc.) |
 

@@ -39,7 +39,6 @@ from mcbe_ws_sdk.errors import (
     ProtocolError,
 )
 from mcbe_ws_sdk.flow import FlowControlMiddleware, FlowControlSettings
-from mcbe_ws_sdk.logging import configure_logging
 from mcbe_ws_sdk.gateway import (
     ConnectionHook,
     ConnectionManager,
@@ -60,6 +59,7 @@ from mcbe_ws_sdk.gateway import (
     WebsocketTransportConfig,
     WsEventType,
 )
+from mcbe_ws_sdk.logging import configure_logging
 from mcbe_ws_sdk.profiles import MCBEWS_V1, AddonBridgeProfile, McbewsV1Profile
 from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_text_response_commands
 from mcbe_ws_sdk.profiles.mcbews_v1.delivery import McbewsV1Delivery

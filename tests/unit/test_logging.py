@@ -10,7 +10,9 @@ import structlog
 from mcbe_ws_sdk.logging import configure_logging
 
 
-def test_configure_logging_is_compact_without_level_padding(capsys: pytest.CaptureFixture[str]) -> None:
+def test_configure_logging_is_compact_without_level_padding(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Console lines should look like ``[info] event key=value`` with no padding."""
     configure_logging("INFO", colors=False)
     logger = structlog.get_logger("test.logging")
