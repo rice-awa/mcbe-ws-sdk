@@ -16,7 +16,11 @@ from uuid import UUID
 import pytest
 
 from mcbe_ws_sdk.gateway import EventBus, WsEventType
-from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState
+from mcbe_ws_sdk.gateway.connection import (
+    ConnectionManager,
+    ConnectionState,
+    enqueue_response,
+)
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 from mcbe_ws_sdk.gateway.sink import (
     DefaultResponseSink,
@@ -162,3 +166,26 @@ async def test_connection_shutdown_is_idempotent(manager: ConnectionManager) -> 
 
     assert manager.connection_count == 0
     assert manager._sender_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_response_queue_overflow_drops_oldest(
+    bus: EventBus, sink: RecordingSink
+) -> None:
+    manager = ConnectionManager(sink=sink, event_bus=bus, response_queue_maxsize=2)
+    state = await manager.create_connection(connection_id=UUID(int=50), send_payload=_send_noop)
+    # Keep the sender from draining the queue so overflow behaviour is visible.
+    await manager._cancel_sender(state.id)
+    assert state.response_queue is not None
+    assert state.response_queue.maxsize == 2
+
+    enqueue_response(state, "a")
+    enqueue_response(state, "b")
+    enqueue_response(state, "c")  # drops oldest ("a")
+
+    remaining: list[object] = []
+    while not state.response_queue.empty():
+        remaining.append(state.response_queue.get_nowait())
+    assert remaining == ["b", "c"]
+
+    await manager.drop_connection(state.id)

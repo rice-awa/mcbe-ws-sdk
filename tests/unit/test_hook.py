@@ -29,13 +29,12 @@ def test_noop_hook_is_protocol() -> None:
 async def test_noop_hook_defaults() -> None:
     state = ConnectionState()
     hook = NoOpHook()
-    # Pre-auth hooks return None.
+    # All hooks are purely side-effecting and return None.
     assert await hook.on_connected(state) is None
     assert await hook.on_disconnected(state) is None
-    # Protocol hooks: returns False (not consumed) so default handling proceeds.
     assert (
         await hook.on_player_message(state, PlayerMessageEvent(sender="Steve", message="hi"))
-        is False
+        is None
     )
     assert await hook.on_ui_chat_reassembled(state, "Steve", "hello") is None
     assert (

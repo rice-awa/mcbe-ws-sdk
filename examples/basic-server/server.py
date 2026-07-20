@@ -34,7 +34,8 @@ from mcbe_ws_sdk import (
     WebsocketTransportConfig,
     configure_logging,
 )
-from mcbe_ws_sdk.gateway.connection import ConnectionState
+from mcbe_ws_sdk.command.registry import ParsedCommand
+from mcbe_ws_sdk.gateway.connection import ConnectionState, enqueue_response
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -82,9 +83,8 @@ class ExampleHook(NoOpHook):
     """Log lifecycle events and echo each player's chat message."""
 
     @staticmethod
-    async def _put(state: ConnectionState, message: object) -> None:
-        if state.response_queue is not None:
-            await state.response_queue.put(message)
+    def _put(state: ConnectionState, message: object) -> None:
+        enqueue_response(state, message)
 
     async def on_connected(self, state: ConnectionState) -> None:
         logger.info(
@@ -92,7 +92,7 @@ class ExampleHook(NoOpHook):
             connection_id=str(state.id),
             subscribed_events=["PlayerMessage"],
         )
-        await self._put(
+        self._put(
             state,
             SystemNotification(
                 level="info",
@@ -107,7 +107,8 @@ class ExampleHook(NoOpHook):
         self,
         state: ConnectionState,
         player_event: PlayerMessageEvent,
-    ) -> bool:
+        parsed: ParsedCommand | None = None,
+    ) -> None:
         # Ignore Bedrock's tellraw echo so we don't treat our own outbound text
         # as an inbound player message (and don't reply to ourselves).
         if player_event.sender in _EXTERNAL_ECHO_SENDERS:
@@ -117,11 +118,11 @@ class ExampleHook(NoOpHook):
                 sender=player_event.sender,
                 length=len(player_event.message),
             )
-            return False
+            return
 
         message = player_event.message.strip()
         if not message:
-            return False
+            return
 
         logger.info(
             "chat",
@@ -129,6 +130,7 @@ class ExampleHook(NoOpHook):
             sender=player_event.sender,
             message=message,
             message_type=player_event.type,
+            parsed_type=parsed.type if parsed is not None else None,
         )
         if message.lower() in {"!help", "帮助"}:
             reply = "可用示例：直接发送聊天消息，服务器会把消息回复给你。"
@@ -139,7 +141,7 @@ class ExampleHook(NoOpHook):
         # ConnectionState.player_name: one WS connection can carry many players.
         # Prefer @a for the welcome-style broadcast path; for replies, target
         # the real sender so only that player sees the echo in multiplayer.
-        await self._put(
+        self._put(
             state,
             OutboundText(
                 content=reply,
@@ -148,7 +150,6 @@ class ExampleHook(NoOpHook):
                 target=player_event.sender,
             ),
         )
-        return True
 
     async def on_command_response(
         self,

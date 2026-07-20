@@ -31,6 +31,33 @@ logger = structlog.get_logger(__name__)
 
 SendPayload = Callable[[str], Awaitable[None]]
 
+# Default matches WebsocketTransportConfig.response_queue_maxsize.
+_DEFAULT_RESPONSE_QUEUE_MAXSIZE = 256
+
+
+def enqueue_response(state: ConnectionState, message: object) -> None:
+    """Put ``message`` onto ``state.response_queue``, dropping the oldest if full.
+
+    No-ops when the connection has no queue. On overflow the oldest item is
+    discarded and a warning is logged so a slow consumer cannot back-pressure
+    the host forever.
+    """
+    queue = state.response_queue
+    if queue is None:
+        return
+    if queue.full():
+        try:
+            dropped = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            dropped = None
+        logger.warning(
+            "response_queue_overflow_drop_oldest",
+            connection_id=str(state.id),
+            dropped_type=type(dropped).__name__ if dropped is not None else None,
+            maxsize=queue.maxsize,
+        )
+    queue.put_nowait(message)
+
 
 @dataclass
 class ConnectionState:
@@ -79,9 +106,13 @@ class ConnectionManager:
         *,
         sink: ResponseSink | None = None,
         event_bus: EventBus | None = None,
+        response_queue_maxsize: int = _DEFAULT_RESPONSE_QUEUE_MAXSIZE,
     ) -> None:
+        if type(response_queue_maxsize) is not int or response_queue_maxsize <= 0:
+            raise ValueError("response_queue_maxsize must be a positive integer")
         self._sink = sink or DefaultResponseSink()
         self._bus = event_bus or EventBus()
+        self._response_queue_maxsize = response_queue_maxsize
         self._connections: dict[UUID, ConnectionState] = {}
         self._sender_tasks: dict[UUID, asyncio.Task[None]] = {}
 
@@ -101,12 +132,13 @@ class ConnectionManager:
     ) -> ConnectionState:
         """Register a new connection and start its response-sender coroutine.
 
-        The returned state carries a fresh ``response_queue``; the host posts
-        response messages to it. ``send_payload`` is the transport frame-send the
-        sink's command routes ultimately deliver through.
+        The returned state carries a fresh bounded ``response_queue``; the host
+        posts response messages to it (prefer :func:`enqueue_response` so a full
+        queue drops the oldest item instead of blocking). ``send_payload`` is the
+        transport frame-send the sink's command routes ultimately deliver through.
         """
         state = ConnectionState(id=connection_id or uuid4(), send_payload=send_payload)
-        state.response_queue = asyncio.Queue()
+        state.response_queue = asyncio.Queue(maxsize=self._response_queue_maxsize)
         self._connections[state.id] = state
         self._sender_tasks[state.id] = asyncio.create_task(self._response_sender(state))
         await self._bus.emit(WsEventType.CONNECTED, state)
@@ -116,6 +148,14 @@ class ConnectionManager:
     async def drop_connection(self, connection_id: UUID) -> None:
         """Cancel the sender coroutine, drop the connection, emit DISCONNECTED."""
         state = self._connections.pop(connection_id, None)
+        if state is not None and state.response_queue is not None:
+            discarded = state.response_queue.qsize()
+            if discarded:
+                logger.warning(
+                    "response_queue_discarded",
+                    connection_id=str(connection_id),
+                    discarded=discarded,
+                )
         await self._cancel_sender(connection_id)
         if state is not None:
             await self._bus.emit(WsEventType.DISCONNECTED, state)
@@ -151,11 +191,8 @@ class ConnectionManager:
             return
         logger.debug("response_sender_started", connection_id=str(state.id))
         try:
-            while state.id in self._connections:
-                try:
-                    message = await asyncio.wait_for(queue.get(), timeout=0.5)
-                except TimeoutError:
-                    continue
+            while True:
+                message = await queue.get()
                 try:
                     envelope = RouteEnvelope.from_message(message)
                 except TypeError:

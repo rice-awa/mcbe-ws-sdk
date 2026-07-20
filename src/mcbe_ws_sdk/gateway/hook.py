@@ -6,16 +6,16 @@ implement: prompt/context management, LLM dispatch, command routing, and addon
 linkage. ``NoOpHook`` is the gateway's built-in default — it defines the
 complete contract so a host can subclass and override only what it needs.
 
-Hook return convention:
-  * ``on_player_message`` returns ``bool`` — ``True`` means "consumed, stop the
-    default handler"; ``False`` lets the default proceed.
-  * All other hooks return ``None`` and are purely side-effecting.
+All hooks return ``None`` and are purely side-effecting. ``on_player_message``
+receives an optional pre-parsed :class:`~mcbe_ws_sdk.command.registry.ParsedCommand`
+so the host does not need to re-run the registry.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from mcbe_ws_sdk.command.registry import ParsedCommand
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
@@ -40,8 +40,13 @@ class ConnectionHook(Protocol):
         self,
         state: ConnectionState,
         player_event: PlayerMessageEvent,
-    ) -> bool:
-        """Inbound chat/scriptevent from a player. Return True to mark consumed."""
+        parsed: ParsedCommand | None = None,
+    ) -> None:
+        """Inbound chat/scriptevent from a player.
+
+        ``parsed`` is the registry match for ``player_event.message`` when one
+        exists; ``None`` means free-form chat (or no matching command prefix).
+        """
         ...
 
     async def on_ui_chat_reassembled(
@@ -67,7 +72,7 @@ class ConnectionHook(Protocol):
 
 
 class NoOpHook:
-    """Gateway default ``ConnectionHook`` — every hook is a no-op / not-consumed."""
+    """Gateway default ``ConnectionHook`` — every hook is a no-op."""
 
     async def on_connected(self, state: ConnectionState) -> None:
         return None
@@ -79,8 +84,9 @@ class NoOpHook:
         self,
         state: ConnectionState,
         player_event: PlayerMessageEvent,
-    ) -> bool:
-        return False
+        parsed: ParsedCommand | None = None,
+    ) -> None:
+        return None
 
     async def on_ui_chat_reassembled(
         self,

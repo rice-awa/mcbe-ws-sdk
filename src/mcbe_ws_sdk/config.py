@@ -95,6 +95,7 @@ class WebsocketTransportConfig:
     close_timeout: float = 15.0
     max_size: int | None = 10 * 1024 * 1024
     max_queue: int | None = 32
+    response_queue_maxsize: int = 256
 
     def __post_init__(self) -> None:
         if type(self.port) is not int or not 1 <= self.port <= 65535:
@@ -108,6 +109,7 @@ class WebsocketTransportConfig:
             value = getattr(self, name)
             if value is not None:
                 _require_positive_int(value, f"websocket.{name}")
+        _require_positive_int(self.response_queue_maxsize, "websocket.response_queue_maxsize")
 
 
 @dataclass(frozen=True, slots=True)

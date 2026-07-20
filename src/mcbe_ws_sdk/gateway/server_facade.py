@@ -81,7 +81,11 @@ class McbeServerFacade:
         self._addon = addon if addon is not None else AddonBridgeService(self._settings.addon)
         self._addon.set_ui_chat_callback(self._on_ui_chat_reassembled)
 
-        self._manager = ConnectionManager(sink=self._sink, event_bus=EventBus())
+        self._manager = ConnectionManager(
+            sink=self._sink,
+            event_bus=EventBus(),
+            response_queue_maxsize=self._settings.websocket.response_queue_maxsize,
+        )
 
         self._stopped = asyncio.Event()
         self._lifetime_started = False
@@ -234,18 +238,44 @@ class McbeServerFacade:
             return
 
         if self._is_error_frame(data):
-            error = self._extract_error_frame(data)
+            try:
+                error = self._extract_error_frame(data)
+            except Exception:
+                logger.exception(
+                    "error_frame_validate_failed",
+                    connection_id=str(state.id),
+                )
+                return
             await self._manager.event_bus.emit(WsEventType.ERROR, state, error)
-            await self._hook.on_error(state, error)
+            try:
+                await self._hook.on_error(state, error)
+            except Exception:
+                logger.exception(
+                    "hook_on_error_failed",
+                    connection_id=str(state.id),
+                )
             return
 
         # Branch C — commandResponse: host-side command-execution future plumbing.
         # We only detect the frame + forward to the hook; there is intentionally
         # no ``pending_command_futures`` map on the state (that is host-owned).
         if self._is_command_response(data):
-            response = self._extract_command_response(data)
+            try:
+                response = self._extract_command_response(data)
+            except Exception:
+                logger.exception(
+                    "command_response_validate_failed",
+                    connection_id=str(state.id),
+                )
+                return
             await self._manager.event_bus.emit(WsEventType.COMMAND_RESPONSE, state, response)
-            await self._hook.on_command_response(state, response)
+            try:
+                await self._hook.on_command_response(state, response)
+            except Exception:
+                logger.exception(
+                    "hook_on_command_response_failed",
+                    connection_id=str(state.id),
+                )
             return
 
         # Parse a PlayerMessage event (returns None for any other event kind).
@@ -310,11 +340,17 @@ class McbeServerFacade:
                 message_preview=event.message[:160],
             )
 
-        # Branch B — player command/chat. ``parse_typed_command`` is informational
-        # (the host decides what to do via the hook).
-        self._handler.parse_typed_command(event.message)
+        # Branch B — player command/chat. Pass the parsed command to the hook so
+        # the host does not re-run the registry (D1).
+        parsed = self._handler.parse_typed_command(event.message)
         await self._manager.event_bus.emit(WsEventType.PLAYER_MESSAGE, state, event)
-        await self._hook.on_player_message(state, event)
+        try:
+            await self._hook.on_player_message(state, event, parsed=parsed)
+        except Exception:
+            logger.exception(
+                "hook_on_player_message_failed",
+                connection_id=str(state.id),
+            )
 
     async def _on_ui_chat_reassembled(
         self,

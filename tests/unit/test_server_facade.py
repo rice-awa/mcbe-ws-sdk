@@ -94,6 +94,7 @@ class RecordingHook(NoOpHook):
         self.connected: list[UUID] = []
         self.disconnected: list[UUID] = []
         self.player_messages: list[PlayerMessageEvent] = []
+        self.parsed: list[object | None] = []
         self.ui_chat_reassembled: list[tuple[str, str]] = []
         self.command_responses: list[MinecraftCommandResponse] = []
         self.errors: list[MinecraftErrorFrame] = []
@@ -105,10 +106,13 @@ class RecordingHook(NoOpHook):
         self.disconnected.append(state.id)
 
     async def on_player_message(
-        self, state: ConnectionState, player_event: PlayerMessageEvent,
-    ) -> bool:
+        self,
+        state: ConnectionState,
+        player_event: PlayerMessageEvent,
+        parsed: object | None = None,
+    ) -> None:
         self.player_messages.append(player_event)
-        return False
+        self.parsed.append(parsed)
 
     async def on_ui_chat_reassembled(
         self, state: ConnectionState, player_name: str, message: str,
@@ -128,6 +132,25 @@ class RecordingHook(NoOpHook):
         error: MinecraftErrorFrame,
     ) -> None:
         self.errors.append(error)
+
+
+class ExplodingHook(RecordingHook):
+    """Raises on the first player message; records subsequent ones."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._seen = 0
+
+    async def on_player_message(
+        self,
+        state: ConnectionState,
+        player_event: PlayerMessageEvent,
+        parsed: object | None = None,
+    ) -> None:
+        self._seen += 1
+        if self._seen == 1:
+            raise RuntimeError("hook boom")
+        await super().on_player_message(state, player_event, parsed=parsed)
 
 
 class RecordingAddon(AddonBridgeService):
@@ -468,16 +491,45 @@ async def test_ui_callback_failure_does_not_block_following_frame() -> None:
 
 @pytest.mark.asyncio
 async def test_routes_player_message_through_handler_and_hook() -> None:
+    from mcbe_ws_sdk.command import CommandRegistry
+
     hook = RecordingHook()
+    registry = CommandRegistry({"#x": "demo"})
+    facade = McbeServerFacade(hook=hook, sink=RecordingSink(), registry=registry)
+
+    await facade._on_connection(
+        FakeWebSocket(
+            frames=[
+                _player_message_frame("Alice", "hello world"),
+                _player_message_frame("Alice", "#x payload"),
+            ]
+        ),
+    )
+
+    assert len(hook.player_messages) == 2
+    assert hook.player_messages[0].message == "hello world"
+    assert hook.player_messages[0].sender == "Alice"
+    assert hook.parsed[0] is None
+    assert hook.parsed[1] is not None
+
+
+@pytest.mark.asyncio
+async def test_hook_exception_does_not_end_connection() -> None:
+    hook = ExplodingHook()
     facade = McbeServerFacade(hook=hook, sink=RecordingSink())
 
     await facade._on_connection(
-        FakeWebSocket(frames=[_player_message_frame("Alice", "hello world")]),
+        FakeWebSocket(
+            frames=[
+                _player_message_frame("Alice", "first"),
+                _player_message_frame("Alice", "second"),
+            ]
+        ),
     )
 
-    assert len(hook.player_messages) == 1
-    assert hook.player_messages[0].message == "hello world"
-    assert hook.player_messages[0].sender == "Alice"
+    # First raises inside the hook; second must still be delivered.
+    assert [event.message for event in hook.player_messages] == ["second"]
+    assert len(hook.disconnected) == 1
 
 
 @pytest.mark.asyncio

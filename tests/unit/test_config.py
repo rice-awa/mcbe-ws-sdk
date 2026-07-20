@@ -39,6 +39,7 @@ def test_websocket_transport_defaults():
     assert t.close_timeout == 15.0
     assert t.max_size == 10 * 1024 * 1024
     assert t.max_queue == 32
+    assert t.response_queue_maxsize == 256
 
 
 def test_websocket_transport_frozen():
@@ -83,7 +84,7 @@ def test_flow_control_rejects_invalid_budget_and_delay():
         FlowControlSettings(chunk_delays={"tellraw": -0.1})
 
 
-@pytest.mark.parametrize("field", ["max_size", "max_queue"])
+@pytest.mark.parametrize("field", ["max_size", "max_queue", "response_queue_maxsize"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_websocket_transport_rejects_non_positive_maximums(field: str, value: int):
     with pytest.raises(ConfigurationError, match=f"websocket.{field}"):
@@ -160,6 +161,8 @@ def test_flow_control_rejects_invalid_delay_values(delay: object):
         ("close_timeout", None),
         ("max_size", 1.5),
         ("max_queue", True),
+        ("response_queue_maxsize", 1.5),
+        ("response_queue_maxsize", True),
     ],
 )
 def test_websocket_transport_rejects_invalid_runtime_value_types(field: str, value: object):

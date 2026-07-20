@@ -44,7 +44,8 @@ from mcbe_ws_sdk import (
     WebsocketTransportConfig,
     configure_logging,
 )
-from mcbe_ws_sdk.gateway.connection import ConnectionState
+from mcbe_ws_sdk.command.registry import ParsedCommand
+from mcbe_ws_sdk.gateway.connection import ConnectionState, enqueue_response
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -218,12 +219,11 @@ class AddonDemoHook(NoOpHook):
         self._log_raw_payloads = log_raw_payloads
 
     @staticmethod
-    async def _put(state: ConnectionState, message: object) -> None:
-        if state.response_queue is not None:
-            await state.response_queue.put(message)
+    def _put(state: ConnectionState, message: object) -> None:
+        enqueue_response(state, message)
 
-    async def _reply(self, state: ConnectionState, player_name: str, content: str) -> None:
-        await self._put(
+    def _reply(self, state: ConnectionState, player_name: str, content: str) -> None:
+        self._put(
             state,
             OutboundText(
                 content=content,
@@ -254,7 +254,7 @@ class AddonDemoHook(NoOpHook):
             connection_id=str(state.id),
             subscribed_events=["PlayerMessage"],
         )
-        await self._put(
+        self._put(
             state,
             SystemNotification(
                 level="info",
@@ -270,7 +270,8 @@ class AddonDemoHook(NoOpHook):
         self,
         state: ConnectionState,
         player_event: PlayerMessageEvent,
-    ) -> bool:
+        parsed: ParsedCommand | None = None,
+    ) -> None:
         if player_event.sender in _EXTERNAL_ECHO_SENDERS:
             logger.debug(
                 "external_echo_ignored",
@@ -278,7 +279,7 @@ class AddonDemoHook(NoOpHook):
                 sender=player_event.sender,
                 length=len(player_event.message),
             )
-            return False
+            return
 
         # Surface every non-echo PlayerMessage at INFO while diagnosing bridge
         # timeouts — includes MCBEWS_BRIDGE BRIDGE/UI_CHAT chunks if they arrive.
@@ -289,11 +290,12 @@ class AddonDemoHook(NoOpHook):
             message=player_event.message,
             message_type=player_event.type,
             receiver=player_event.receiver,
+            parsed_type=parsed.type if parsed is not None else None,
         )
 
         message = player_event.message.strip()
         if not message:
-            return False
+            return
 
         logger.info(
             "chat",
@@ -317,7 +319,6 @@ class AddonDemoHook(NoOpHook):
             name=f"addon-demo:{player_event.sender}",
         )
         task.add_done_callback(self._log_background_failure)
-        return True
 
     @staticmethod
     def _log_background_failure(task: asyncio.Task[Any]) -> None:
@@ -340,7 +341,7 @@ class AddonDemoHook(NoOpHook):
     ) -> bool:
         lower = message.lower()
         if lower in {"!help", "帮助", "help"}:
-            await self._reply(state, sender, _HELP_TEXT)
+            self._reply(state, sender, _HELP_TEXT)
             return True
 
         command, _, rest = message.partition(" ")
@@ -371,7 +372,7 @@ class AddonDemoHook(NoOpHook):
 
         if command_key in {"!cmd", "!命令"}:
             if not arg:
-                await self._reply(
+                self._reply(
                     state,
                     sender,
                     "用法：!cmd <command>  例如：!cmd time query daytime",
@@ -388,7 +389,7 @@ class AddonDemoHook(NoOpHook):
 
         if command_key in {"!wscmd", "!ws命令"}:
             if not arg:
-                await self._reply(
+                self._reply(
                     state,
                     sender,
                     "用法：!wscmd <command>  例如：!wscmd time query daytime",
@@ -397,7 +398,7 @@ class AddonDemoHook(NoOpHook):
             await self._run_ws_command(state, sender, arg)
             return True
 
-        await self._reply(
+        self._reply(
             state,
             sender,
             f"未知命令：{message}\n发送 !help 查看可用命令。",
@@ -420,7 +421,7 @@ class AddonDemoHook(NoOpHook):
             capability=capability,
             payload=payload,
         )
-        await self._reply(state, sender, f"正在请求 {label}…")
+        self._reply(state, sender, f"正在请求 {label}…")
 
         try:
             client = self._bridge_client(state)
@@ -432,7 +433,7 @@ class AddonDemoHook(NoOpHook):
                 capability=capability,
                 request_id=exc.request_id,
             )
-            await self._reply(
+            self._reply(
                 state,
                 sender,
                 f"{label} 超时。请确认世界已加载 bridge addon，且 /wsserver 仍在线。",
@@ -445,7 +446,7 @@ class AddonDemoHook(NoOpHook):
                 capability=capability,
                 error=str(exc),
             )
-            await self._reply(state, sender, f"{label} 失败：{exc}")
+            self._reply(state, sender, f"{label} 失败：{exc}")
             return
         except Exception as exc:
             logger.exception(
@@ -453,7 +454,7 @@ class AddonDemoHook(NoOpHook):
                 connection_id=str(state.id),
                 capability=capability,
             )
-            await self._reply(state, sender, f"{label} 异常：{exc}")
+            self._reply(state, sender, f"{label} 异常：{exc}")
             return
 
         logger.info(
@@ -463,7 +464,7 @@ class AddonDemoHook(NoOpHook):
             ok=result.get("ok") if isinstance(result, dict) else None,
             result=result,
         )
-        await self._reply(state, sender, format_capability_result(capability, result, label))
+        self._reply(state, sender, format_capability_result(capability, result, label))
 
     async def _run_ws_command(
         self,
@@ -478,7 +479,7 @@ class AddonDemoHook(NoOpHook):
             sender=sender,
             command=command,
         )
-        await self._reply(state, sender, f"正在执行 {label}…")
+        self._reply(state, sender, f"正在执行 {label}…")
 
         try:
             response = await self._ws_commands.run(state, command)
@@ -489,7 +490,7 @@ class AddonDemoHook(NoOpHook):
                 command=command,
                 error=str(exc),
             )
-            await self._reply(state, sender, f"{label} 超时：未收到 commandResponse。")
+            self._reply(state, sender, f"{label} 超时：未收到 commandResponse。")
             return
         except Exception as exc:
             logger.exception(
@@ -497,10 +498,10 @@ class AddonDemoHook(NoOpHook):
                 connection_id=str(state.id),
                 command=command,
             )
-            await self._reply(state, sender, f"{label} 异常：{exc}")
+            self._reply(state, sender, f"{label} 异常：{exc}")
             return
 
-        await self._reply(state, sender, format_ws_command_result(label, response))
+        self._reply(state, sender, format_ws_command_result(label, response))
 
     async def on_command_response(
         self,
