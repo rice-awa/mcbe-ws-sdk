@@ -96,6 +96,18 @@ mypy --no-incremental src
 pytest -p no:cacheprovider -q
 ```
 
+## 文档
+
+中英双语文档站，基于 Material for MkDocs + mkdocstrings +
+mkdocs-static-i18n 自动生成 API 参考：
+
+```bash
+pip install -e ".[docs]"
+mkdocs serve          # 英文 http://127.0.0.1:8000
+                      # 中文 http://127.0.0.1:8000/zh/
+mkdocs build --strict # 输出到 ./site
+```
+
 ## License
 
 MIT

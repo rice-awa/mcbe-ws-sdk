@@ -1,0 +1,128 @@
+site_name: mcbe-ws-sdk
+site_description: Generic WebSocket gateway SDK for Minecraft Bedrock Edition
+site_url: https://rice-awa.github.io/mcbe-ws-sdk/
+repo_url: https://github.com/rice-awa/mcbe-ws-sdk
+repo_name: rice-awa/mcbe-ws-sdk
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+strict: true
+
+# Keep internal working notes out of the published site.
+exclude_docs: |
+  PRD.md
+  reviews/**
+  plans/**
+  superpowers/**
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      # API reference is English-only (mkdocstrings). Disabling fallback avoids
+      # documenting the same objects twice under / and /zh/ (strict-mode fatal).
+      fallback_to_default: false
+      reconfigure_material: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 中文
+          build: true
+          site_description: 面向 Minecraft Bedrock Edition 的通用 WebSocket 网关 SDK
+          theme:
+            language: zh
+          # Chinese nav titles (guide pages are translated; API page is a stub
+          # pointing readers at the English auto-generated reference).
+          nav:
+            - 首页: index.md
+            - 快速开始: getting-started.md
+            - 架构: architecture.md
+            - 协议: addon-bridge-protocol.md
+            - API 参考: reference.md
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          inventories:
+            - https://docs.python.org/3/objects.inv
+            - https://docs.pydantic.dev/latest/objects.inv
+          options:
+            docstring_style: google
+            docstring_section_style: list
+            filters: ["!^_"]
+            heading_level: 2
+            merge_init_into_class: true
+            parameter_headings: true
+            separate_signature: true
+            show_root_heading: true
+            show_signature_annotations: true
+            show_source: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            summary: true
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+watch:
+  - src/mcbe_ws_sdk
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Architecture: architecture.md
+  - Protocol: addon-bridge-protocol.md
+  - API Reference: reference.md

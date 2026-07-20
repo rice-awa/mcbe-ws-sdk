@@ -1,43 +1,31 @@
 # Addon Bridge Protocol (mcbews v1)
 
-## 目标
+## Goals
 
-在 Python 宿主与 Minecraft Addon 之间建立稳定连接的桥接协议：
+A stable bridge protocol between the Python host and the Minecraft Addon:
 
-- 使用 `/scriptevent` 发起结构化请求与下行文本帧
-- 通过模拟玩家聊天分片回传 Bridge 响应与 UI 聊天
-- 命名空间统一为 `mcbews` / `MCBEWS`，语义清晰、大小写一致
+- Use `/scriptevent` for structured requests and outbound text frames
+- Return Bridge responses and UI chat via simulated-player chat chunks
+- Unify the namespace as `mcbews` / `MCBEWS` with consistent casing
 
-本协议是 `mcbe-ws-sdk` 的默认协议 profile（`McbewsV1Profile` / `MCBEWS_V1`）。
+This protocol is the default profile of `mcbe-ws-sdk`
+(`McbewsV1Profile` / `MCBEWS_V1`).
 
-## 命名规则
+## Naming rules
 
-| 场景 | 规则 | 示例 |
+| Context | Rule | Example |
 |---|---|---|
-| scriptevent messageId | 小写根 token + 通道 | `mcbews:bridge_req` |
-| 聊天分片前缀 | 大写根 token + 类型 | `MCBEWS\|BRIDGE` |
-| 模拟玩家名 | 大写根 token + 角色 | `MCBEWS_BRIDGE` |
+| scriptevent messageId | lowercase root token + channel | `mcbews:bridge_req` |
+| chat chunk prefix | UPPERCASE root token + type | `MCBEWS\|BRIDGE` |
+| simulated player name | UPPERCASE root token + role | `MCBEWS_BRIDGE` |
 
-**禁止**在 wire 值中使用 AI 品牌标识；命名空间与 delay kind 一律使用 mcbews / MCBEWS / `text_resp`（旧值对照见文末迁移表）。
+**Do not** put AI brand tokens in wire values. Namespaces and delay kinds always
+use mcbews / MCBEWS / `text_resp` (see the migration table at the end for legacy
+values).
 
-## 当前实现概览
+## Current implementation overview
 
-当前落地链路如下：
-
-```text
-Python host
-  -> AddonBridgeService
-  -> scriptevent mcbews:bridge_req <json>
-  -> Addon scriptEventReceive
-  -> capability handler
-  -> MCBEWS_BRIDGE 模拟玩家聊天分片
-  -> WebSocket PlayerMessage
-  -> Python 分片重组与 future 唤醒
-```
-
-当前实现三条独立通道：
-
-### 通道 A：Python -> Addon 能力请求（Bridge）
+End-to-end path today:
 
 ```text
 Python host
@@ -45,100 +33,122 @@ Python host
   -> scriptevent mcbews:bridge_req <json>
   -> Addon scriptEventReceive
   -> capability handler
-  -> MCBEWS_BRIDGE 模拟玩家聊天分片 (MCBEWS|BRIDGE)
+  -> MCBEWS_BRIDGE simulated-player chat chunks
   -> WebSocket PlayerMessage
-  -> Python 分片重组与 future 唤醒
+  -> Python chunk reassembly + future wake-up
 ```
 
-### 通道 B：Addon UI -> Python 自动聊天（UI Chat）
+Three independent channels:
+
+### Channel A: Python → Addon capability request (Bridge)
 
 ```text
-玩家打开 UI 面板输入消息
-  -> Addon 发送 UI Chat 分片
-  -> MCBEWS_BRIDGE 模拟玩家聊天分片 (MCBEWS|UI_CHAT)
+Python host
+  -> AddonBridgeService
+  -> scriptevent mcbews:bridge_req <json>
+  -> Addon scriptEventReceive
+  -> capability handler
+  -> MCBEWS_BRIDGE simulated-player chat chunks (MCBEWS|BRIDGE)
   -> WebSocket PlayerMessage
-  -> Python 分片重组
+  -> Python chunk reassembly + future wake-up
+```
+
+### Channel B: Addon UI → Python auto-chat (UI Chat)
+
+```text
+Player opens a UI panel and types a message
+  -> Addon emits UI Chat chunks
+  -> MCBEWS_BRIDGE simulated-player chat chunks (MCBEWS|UI_CHAT)
+  -> WebSocket PlayerMessage
+  -> Python reassembly
   -> hook.on_ui_chat_reassembled / EventBus UI_CHAT_REASSEMBLED
 ```
 
-### 通道 C：Python -> Addon 文本响应下行（Text Response）
+### Channel C: Python → Addon text response (Text Response)
 
 ```text
 Python host
   -> McbewsV1Delivery / encode_text_response_commands
   -> scriptevent mcbews:text_resp <json frame>
-  -> Addon responseSync 分片重组
-  -> UI / 宿主回调展示完整文本
+  -> Addon responseSync reassembly
+  -> UI / host callback renders full text
 ```
 
-其中：
+Notes:
 
-- Python 请求入口位于 `mcbe_ws_sdk.addon.service.AddonBridgeService`。
-- Addon 请求监听基于 `scriptEventReceive`，messageId 固定为 `mcbews:bridge_req`。
-- Addon Bridge / UI Chat 回传不是直接写回 WebSocket，而是由模拟玩家 `MCBEWS_BRIDGE` 发送聊天分片。
-- Python 侧会在 WebSocket `PlayerMessage` 流中识别并拦截这些桥接分片，不再把它们当作普通聊天消息继续处理。
-- 文本响应下行使用独立 scriptevent `mcbews:text_resp`，帧格式为 JSON（`id/i/n/p/r/c`）。
-- **UI 聊天**由 Addon UI 发起，通过模拟玩家 `MCBEWS_BRIDGE` 发送 `MCBEWS|UI_CHAT` 格式分片；Python 重组后交给宿主 hook，无需玩家在聊天框手动输入命令。
+- Python request entry: `mcbe_ws_sdk.addon.service.AddonBridgeService`.
+- Addon request listen path uses `scriptEventReceive` with fixed messageId
+  `mcbews:bridge_req`.
+- Addon Bridge / UI Chat replies are **not** written back over WebSocket
+  directly; the simulated player `MCBEWS_BRIDGE` sends chat chunks.
+- The Python side intercepts those chunks in the WebSocket `PlayerMessage`
+  stream and does **not** treat them as ordinary chat.
+- Outbound text uses the separate scriptevent `mcbews:text_resp` with JSON
+  frames (`id/i/n/p/r/c`).
+- **UI chat** is initiated by the Addon UI; the simulated player
+  `MCBEWS_BRIDGE` sends `MCBEWS|UI_CHAT` chunks. After reassembly, Python hands
+  the message to the host hook — the real player never has to type a command.
 
-## Wire 常量一览
+## Wire constants
 
-| 角色 | Profile 字段 | Wire 值 |
+| Role | Profile field | Wire value |
 |---|---|---|
-| Bridge 请求 messageId | `bridge_request_message_id` | `mcbews:bridge_req` |
-| 文本响应 messageId | `response_message_id` | `mcbews:text_resp` |
-| Bridge 响应前缀 | `bridge_response_prefix` | `MCBEWS\|BRIDGE` |
-| UI Chat 前缀 | `ui_chat_prefix` | `MCBEWS\|UI_CHAT` |
-| 模拟玩家 | `bridge_sender` | `MCBEWS_BRIDGE` |
-| 请求体版本 | `request_version` | `2` |
+| Bridge request messageId | `bridge_request_message_id` | `mcbews:bridge_req` |
+| Text response messageId | `response_message_id` | `mcbews:text_resp` |
+| Bridge response prefix | `bridge_response_prefix` | `MCBEWS\|BRIDGE` |
+| UI Chat prefix | `ui_chat_prefix` | `MCBEWS\|UI_CHAT` |
+| Simulated player | `bridge_sender` | `MCBEWS_BRIDGE` |
+| Request body version | `request_version` | `2` |
 
-Python 与 Addon 必须保持上表完全一致。仓库通过 `tools/check_protocol_names.py` 做对齐与禁用 token 扫描。
+Python and the Addon **must** stay bit-identical on this table. The repo
+enforces alignment and banned tokens via `tools/check_protocol_names.py`.
 
-## 请求格式（Python -> Addon）
+## Request format (Python → Addon)
 
-- 命令格式：`scriptevent mcbews:bridge_req <json>`
-- `message_id` 固定为 `mcbews:bridge_req`
-- `json` 结构：
-  - `v`: number（当前固定为 `2`）
+- Command: `scriptevent mcbews:bridge_req <json>`
+- `message_id` is fixed to `mcbews:bridge_req`
+- JSON shape:
+  - `v`: number (currently fixed at `2`)
   - `request_id`: string
   - `capability`: string
   - `payload`: object
 
-示例：
+Example:
 
 ```text
 scriptevent mcbews:bridge_req {"v":2,"request_id":"req-1","capability":"get_player_snapshot","payload":{"target":"@s"}}
 ```
 
-## 响应分片格式（Addon -> Python）
+## Response chunk format (Addon → Python)
 
-### Bridge 响应（Python -> Addon 请求的回复）
+### Bridge response (reply to a Python → Addon request)
 
-- 前缀：`MCBEWS|BRIDGE`
-- 单片格式：`MCBEWS|BRIDGE|<request_id>|<index>/<total>|<content>`
-- `<index>` 从 1 开始
-- `<content>` 是 JSON 响应字符串的片段
-- 分片由模拟玩家 `MCBEWS_BRIDGE` 通过聊天消息发送
+- Prefix: `MCBEWS|BRIDGE`
+- Single chunk: `MCBEWS|BRIDGE|<request_id>|<index>/<total>|<content>`
+- `<index>` starts at 1
+- `<content>` is a slice of the JSON response string
+- Chunks are sent as chat by the simulated player `MCBEWS_BRIDGE`
 
-示例：
+Example:
 
 ```text
 MCBEWS|BRIDGE|req-1|1/2|{"ok":true,
 MCBEWS|BRIDGE|req-1|2/2|"result":{"name":"Steve"}}
 ```
 
-成功响应体（重组后）约定：
+Successful reassembled body:
 
 ```json
 {"ok": true, "result": { ... }}
 ```
 
-失败响应体（重组后）约定：
+Failed reassembled body:
 
 ```json
 {"ok": false, "error": {"code": "UNSUPPORTED_CAPABILITY", "message": "..."}}
 ```
 
-Addon 侧错误码（响应 JSON 内）：
+Addon-side error codes (inside the response JSON):
 
 - `MALFORMED_JSON`
 - `INVALID_REQUEST`
@@ -146,159 +156,192 @@ Addon 侧错误码（响应 JSON 内）：
 - `UNSUPPORTED_CAPABILITY`
 - `CAPABILITY_FAILED`
 
-### UI Chat 消息（Addon UI -> Python 自动聊天）
+### UI Chat messages (Addon UI → Python auto-chat)
 
-- 前缀：`MCBEWS|UI_CHAT`
-- 单片格式：`MCBEWS|UI_CHAT|<msg_id>|<index>/<total>|<content>`
-- `<index>` 从 1 开始
-- `<content>` 是 JSON 字符串的片段，完整 JSON 结构为 `{"player": "<玩家名>", "message": "<聊天内容>"}`
-- 分片同样由模拟玩家 `MCBEWS_BRIDGE` 发送；实现上通常使用仅自己可见的 tell 包装，避免真实玩家聊天刷屏
+- Prefix: `MCBEWS|UI_CHAT`
+- Single chunk: `MCBEWS|UI_CHAT|<msg_id>|<index>/<total>|<content>`
+- `<index>` starts at 1
+- `<content>` is a slice of a JSON string whose full shape is
+  `{"player": "<player name>", "message": "<chat text>"}`
+- Also sent by the simulated player `MCBEWS_BRIDGE`; implementations usually
+  wrap with self-only tell so real player chat is not spammed
 
-示例（单分片）：
+Single-chunk example:
 
 ```text
-MCBEWS|UI_CHAT|ui-1744876800000-1|1/1|{"player":"Steve","message":"你好世界"}
+MCBEWS|UI_CHAT|ui-1744876800000-1|1/1|{"player":"Steve","message":"hello world"}
 ```
 
-示例（多分片）：
+Multi-chunk example:
 
 ```text
 MCBEWS|UI_CHAT|ui-1744876800000-1|1/2|{"player":"Steve","mes
-MCBEWS|UI_CHAT|ui-1744876800000-1|2/2|sage":"你好世界"}
+MCBEWS|UI_CHAT|ui-1744876800000-1|2/2|sage":"hello world"}
 ```
 
-## 文本响应格式（Python -> Addon）
+## Text response format (Python → Addon)
 
-- 命令格式：`scriptevent mcbews:text_resp <json>`
-- 单帧 JSON 字段：
+- Command: `scriptevent mcbews:text_resp <json>`
+- Per-frame JSON fields:
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `id` | 响应消息 ID |
-| `i` | 分片序号（从 1 开始） |
-| `n` | 分片总数 |
-| `p` | 目标玩家名 |
-| `r` | 角色（如 `assistant`） |
-| `c` | 文本内容片段 |
+| `id` | Response message id |
+| `i` | Chunk index (1-based) |
+| `n` | Total chunk count |
+| `p` | Target player name |
+| `r` | Role (e.g. `assistant`) |
+| `c` | Text content slice |
 
-示例：
+Example:
 
 ```text
-scriptevent mcbews:text_resp {"id":"resp-1","i":1,"n":2,"p":"Steve","r":"assistant","c":"你好，"}
-scriptevent mcbews:text_resp {"id":"resp-1","i":2,"n":2,"p":"Steve","r":"assistant","c":"世界"}
+scriptevent mcbews:text_resp {"id":"resp-1","i":1,"n":2,"p":"Steve","r":"assistant","c":"hello, "}
+scriptevent mcbews:text_resp {"id":"resp-1","i":2,"n":2,"p":"Steve","r":"assistant","c":"world"}
 ```
 
-Addon 按 `id` 缓存分片，收齐 `1..n` 后重组为完整文本并回调展示层。
+The Addon caches chunks by `id`, reassembles after `1..n` arrive, and hands the
+full text to the presentation layer.
 
-## 能力清单（当前基线）
+## Capability list (current baseline)
 
-Addon 默认能力注册表当前包含：
+Default Addon capability registry:
 
-- `get_player_snapshot`：获取玩家快照（位置、维度、朝向、基础状态）
-- `get_inventory_snapshot`：获取背包快照（槽位、物品、数量、附加数据）
+- `get_player_snapshot` — player snapshot (position, dimension, look, basic state)
+- `get_inventory_snapshot` — inventory snapshot (slots, items, counts, extras)
 
-另外实现了可注册模块：
+Optional registerable module:
 
-- `run_world_command`：受控执行世界命令并返回结果（需宿主/Addon 显式挂到注册表）
+- `run_world_command` — controlled world command execution with a result
+  (must be explicitly attached to the registry by host/Addon)
 
-能力集合由 Addon 拥有；Python SDK **不**内置入站能力分发器。未注册 capability 时，Addon 返回 `UNSUPPORTED_CAPABILITY`。
+The capability set is owned by the Addon; the Python SDK does **not** ship an
+inbound capability dispatcher. Unregistered capabilities return
+`UNSUPPORTED_CAPABILITY`.
 
-## 请求关联与生命周期
+## Request correlation and lifecycle
 
-- 每次 Python 发起桥接调用时，都会生成唯一 `request_id`。
-- `request_id` 会同时出现在 `/scriptevent` 请求体和 Addon 聊天分片头部，用于关联同一轮调用。
-- Python 侧按连接维度维护 pending request，并按 `request_id` 缓存分片。
-- 当同一 `request_id` 的全部分片收齐后，Python 会重组 JSON payload，唤醒对应等待中的请求 future。
-- 如果收到未知 `request_id` 的分片，当前实现会忽略，不会为其创建新请求。
-- 发送方过滤：仅当 `PlayerMessage.sender == MCBEWS_BRIDGE` 且前缀匹配时，才进入桥接/UI Chat 重组路径。
+- Every Python bridge call generates a unique `request_id`.
+- The same `request_id` appears in the `/scriptevent` body and in Addon chat
+  chunk headers, correlating one round-trip.
+- Python keeps pending requests per connection and buffers chunks by
+  `request_id`.
+- When all chunks for a `request_id` arrive, Python reassembles the JSON
+  payload and wakes the waiting future.
+- Chunks with an unknown `request_id` are ignored; they never create a new
+  pending request.
+- Sender filter: only when `PlayerMessage.sender == MCBEWS_BRIDGE` **and** the
+  prefix matches does the frame enter the bridge / UI Chat reassembly path.
 
-## 超时行为
+## Timeout behaviour
 
-- Python 侧桥接服务当前默认超时时间为 5 秒（`AddonBridgeSettings.timeout_seconds`）。
-- 如果 Python 已经发送 `/scriptevent`，但在超时窗口内没有收齐指定 `request_id` 的全部分片，请求会以“Addon 桥接响应超时”失败。
-- 如果命令发送阶段本身失败，例如 `/scriptevent` 执行返回错误，则不会进入等待分片阶段，而是直接失败。
-- 超时或失败后，Python 会清理该 `request_id` 对应的 pending request 与分片缓存。
-- 分片缓冲区另有 TTL（默认 30 秒）与字节/数量上限，防止泄漏。
+- Default Python bridge timeout is 5 seconds
+  (`AddonBridgeSettings.timeout_seconds`).
+- If `/scriptevent` was sent but not all chunks for the `request_id` arrive
+  within the window, the call fails with an addon-bridge response timeout.
+- If the command send itself fails (e.g. `/scriptevent` returns an error),
+  the call fails immediately without waiting for chunks.
+- On timeout or failure, Python clears the pending request and chunk buffer for
+  that `request_id`.
+- Chunk buffers also have a TTL (default 30s) and byte/count limits to prevent
+  leaks.
 
-## 错误语义（协议级）
+## Error semantics (protocol level)
 
-### Bridge 响应分片解码 / 重组
+### Bridge response chunk decode / reassembly
 
-Python codec 在以下情况抛出错误（`ValueError`，消息语义如下）：
+The Python codec raises `ValueError` when:
 
-- 分片字段数量错误
-- 分片命名空间 / 前缀不匹配（期望 `MCBEWS` + `BRIDGE`）
-- 分片元数据非法（索引 / 总数 / request_id）
-- 分片列表为空
-- 分片序号缺失、重复或顺序不一致
-- 同一批分片出现不同 `request_id` 或不同 `total`
-- 重组后 JSON 反序列化失败或根类型不是 object
+- Chunk field count is wrong
+- Namespace / prefix mismatch (expects `MCBEWS` + `BRIDGE`)
+- Illegal metadata (index / total / request_id)
+- Chunk list is empty
+- Missing, duplicate, or inconsistent indices
+- Mixed `request_id` or `total` within one batch
+- Reassembled JSON fails to deserialize or the root is not an object
 
-### UI Chat 分片解码 / 重组
+### UI Chat chunk decode / reassembly
 
-- 分片字段数量错误
-- 分片命名空间 / 前缀不匹配（期望 `MCBEWS` + `UI_CHAT`）
-- 分片元数据非法
-- 分片列表为空
-- 分片序号缺失、重复或顺序不一致
-- 重组后 JSON 非法
-- JSON 中缺少非空 `message` 字段
+- Wrong field count
+- Namespace / prefix mismatch (expects `MCBEWS` + `UI_CHAT`)
+- Illegal metadata
+- Empty chunk list
+- Missing / duplicate / inconsistent indices
+- Illegal reassembled JSON
+- Missing non-empty `message` field in the JSON
 
-### 诊断
+### Diagnostics
 
-若聊天内容以协议根前缀 `MCBEWS|` 开头，但因 sender 等条件未进入桥接处理，Python facade 应打出 mismatch 诊断日志（`bridge_prefix_not_matched`），避免请求静默超时且无线索。
+If chat content starts with the protocol root prefix `MCBEWS|` but does not
+enter bridge handling (e.g. sender mismatch), the Python facade should emit a
+mismatch diagnostic log (`bridge_prefix_not_matched`) so timeouts are not
+silent.
 
-## 约束与设计依据
+## Constraints and design rationale
 
-- `/scriptevent <messageId> <message>` 中 `message` 最大 2048 字符，超长消息必须分片。
-- 脚本侧可通过 `ScriptEventCommandMessageAfterEvent` 读取 `id` 与 `message`，因此保留显式命名空间路由 `mcbews:bridge_req` / `mcbews:text_resp`。
-- 当前 Addon -> Python 回传依赖聊天通道，而不是独立二进制或自定义网络通道，因此需要考虑聊天消息长度与分片顺序问题。
-- Python 侧只会在 WebSocket `PlayerMessage` 事件中拦截桥接分片，所以聊天事件订阅链路必须正常。
-- MCBE `commandLine` 实测安全字节上限为 **461**；上下行分片都必须做真实 UTF-8 字节校验。
-  - 上行（Addon -> Python，聊天包装）默认单分片内容 code-point 上限：256
-  - 下行（Python -> Addon，scriptevent/文本）默认由 `FlowControlSettings.max_chunk_content_length` 控制（默认 400）
-- 文本响应流控 delay kind 为 `text_resp`（旧 delay kind 已废弃，见文末迁移表）。
-- 由于 `@minecraft/server` API 形态限制，`run_world_command` 基于同步 `runCommand` 实现（若已注册）。
-- 本协议不绑定任何 LLM / Agent 产品语义；宿主如何解释 UI Chat 或文本响应由宿主决定。
+- `/scriptevent <messageId> <message>` caps `message` at 2048 characters —
+  longer payloads must be chunked.
+- The script side can read `id` and `message` via
+  `ScriptEventCommandMessageAfterEvent`, so explicit namespace routing
+  (`mcbews:bridge_req` / `mcbews:text_resp`) is retained.
+- Addon → Python replies currently ride the chat channel, not a private binary
+  or custom network path, so chat length and chunk order matter.
+- Python only intercepts bridge chunks on WebSocket `PlayerMessage` events, so
+  the chat subscription path must be healthy.
+- Empirically safe MCBE `commandLine` byte budget is **461**; both directions
+  must validate real UTF-8 bytes.
+  - Upstream (Addon → Python, chat-wrapped) default content code-point cap: 256
+  - Downstream (Python → Addon, scriptevent/text) default controlled by
+    `FlowControlSettings.max_chunk_content_length` (default 400)
+- Text-response flow-control delay kind is `text_resp` (legacy delay kinds are
+  deprecated; see migration table).
+- Because of `@minecraft/server` API shape, `run_world_command` is based on
+  synchronous `runCommand` when registered.
+- This protocol binds to no LLM / Agent product semantics; the host decides how
+  to interpret UI Chat and text responses.
 
-## 当前基线实现
+## Current baseline implementation
 
-### Python 侧
+### Python side
 
-- `McbewsV1Profile` / `MCBEWS_V1`：默认协议 profile
-- `encode_bridge_request`：编码 Bridge 请求命令
-- `decode_bridge_chat_chunk`：解析 Bridge 响应分片
-- `reassemble_bridge_chunks`：重组并解析 JSON payload
-- `decode_ui_chat_chunk`：解析 UI Chat 消息分片
-- `reassemble_ui_chat_chunks`：重组 UI Chat 分片并提取玩家名与消息
-- `encode_text_response_commands`：编码文本响应 scriptevent 帧列表
-- `McbewsV1Delivery`：带 prelude / chunk delay 的文本响应投递
-- `AddonBridgeService`：发送 `/scriptevent`、等待 future、处理超时、UI Chat 回调分发
-- WebSocket facade 在 `PlayerMessage` 事件流中拦截 `MCBEWS_BRIDGE` 的桥接分片与 UI Chat 消息
+- `McbewsV1Profile` / `MCBEWS_V1` — default protocol profile
+- `encode_bridge_request` — encode Bridge request commands
+- `decode_bridge_chat_chunk` — parse Bridge response chunks
+- `reassemble_bridge_chunks` — reassemble and parse JSON payload
+- `decode_ui_chat_chunk` — parse UI Chat chunks
+- `reassemble_ui_chat_chunks` — reassemble UI Chat and extract player + message
+- `encode_text_response_commands` — encode text-response scriptevent frames
+- `McbewsV1Delivery` — text response delivery with prelude / chunk delays
+- `AddonBridgeService` — send `/scriptevent`, wait on futures, timeouts, UI Chat
+  callbacks
+- WebSocket facade intercepts `MCBEWS_BRIDGE` bridge and UI Chat chunks in the
+  `PlayerMessage` stream
 
-### Addon 侧
+### Addon side
 
-- `constants.ts`：唯一 wire 常量源（messageId / 前缀 / 模拟玩家）
-- `formatChunk`：通用分片格式化（支持自定义前缀）
-- `formatResponseChunk`：格式化 Bridge 响应分片
-- `chunkPayload`：通用分片分割（支持自定义前缀）
-- `chunkBridgePayload`：按最大片段长度分割 Bridge 响应
-- `chunkUiChatPayload`：按最大片段长度分割 UI Chat 消息
-- 响应发送路径：驱动 `MCBEWS_BRIDGE` 发送 Bridge 响应分片
-- UI Chat 发送路径：驱动 `MCBEWS_BRIDGE` 发送 UI Chat 消息
-- `registerBridgeRouter`：订阅 `scriptEventReceive` 并分派 capability handler
-- `responseSync`：订阅 `mcbews:text_resp` 并重组文本响应帧
+- `constants.ts` — single source of wire constants (messageId / prefix / player)
+- `formatChunk` — generic chunk formatting (custom prefixes supported)
+- `formatResponseChunk` — format Bridge response chunks
+- `chunkPayload` — generic chunk splitting (custom prefixes supported)
+- `chunkBridgePayload` — split Bridge responses by max fragment length
+- `chunkUiChatPayload` — split UI Chat messages by max fragment length
+- Response send path: drive `MCBEWS_BRIDGE` to emit Bridge response chunks
+- UI Chat send path: drive `MCBEWS_BRIDGE` to emit UI Chat messages
+- `registerBridgeRouter` — subscribe to `scriptEventReceive` and dispatch
+  capability handlers
+- `responseSync` — subscribe to `mcbews:text_resp` and reassemble text frames
 
-## 与旧协议（mcbeai）的关系
+## Relation to the legacy protocol (mcbeai)
 
-本协议为**破坏性**替换，不提供双读兼容：
+This protocol is a **breaking** replacement with no dual-read compatibility:
 
-| 角色 | 旧值（已废弃） | 新值 |
+| Role | Legacy (deprecated) | Current |
 |---|---|---|
-| Bridge 请求 | `mcbeai:bridge_request` | `mcbews:bridge_req` |
-| 文本响应 | `mcbeai:ai_resp` | `mcbews:text_resp` |
-| Bridge 前缀 | `MCBEAI\|RESP` | `MCBEWS\|BRIDGE` |
-| UI Chat 前缀 | `MCBEAI\|UI_CHAT` | `MCBEWS\|UI_CHAT` |
-| 模拟玩家 | `MCBEAI_TOOL` | `MCBEWS_BRIDGE` |
+| Bridge request | `mcbeai:bridge_request` | `mcbews:bridge_req` |
+| Text response | `mcbeai:ai_resp` | `mcbews:text_resp` |
+| Bridge prefix | `MCBEAI\|RESP` | `MCBEWS\|BRIDGE` |
+| UI Chat prefix | `MCBEAI\|UI_CHAT` | `MCBEWS\|UI_CHAT` |
+| Simulated player | `MCBEAI_TOOL` | `MCBEWS_BRIDGE` |
 
-Python 宿主与 Addon 必须同步升级；混用旧/新命名空间会导致桥接请求超时。
+Python host and Addon must upgrade together; mixing old/new namespaces causes
+bridge request timeouts.

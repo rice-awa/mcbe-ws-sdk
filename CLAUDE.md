@@ -36,6 +36,12 @@ python -m build --sdist --wheel
 # Validate distribution
 twine check dist/*
 python tools/check_dist.py dist
+
+# Docs site (Material + mkdocstrings + static-i18n)
+# English at / ; 中文 at /zh/
+pip install -e ".[docs]"
+mkdocs serve
+mkdocs build --strict
 ```
 
 ## Architecture
@@ -134,5 +140,6 @@ The SDK never imports from its parent repo. `ConnectionState.send_payload` is an
 - **python** — pytest across Python 3.11–3.14
 - **websockets** — test facade + delivery against websockets 12, 14, 16
 - **addon** — Node.js build, test, lint, typecheck for the TypeScript addon side
+- **docs** — `mkdocs build --strict` (Material + mkdocstrings + static-i18n, EN/中文)
 - **dist** — build sdist+wheel, twine check, check_dist, verify import (gated on all prior jobs)
 - **release** — tag-triggered; verifies release tag matches package version

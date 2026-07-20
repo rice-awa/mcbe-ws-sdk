@@ -98,10 +98,22 @@ configured entirely through `AddonBridgeSettings`.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,docs]"
 ruff check --no-cache src tests examples
 mypy --no-incremental src
 pytest -p no:cacheprovider -q
+```
+
+## Docs
+
+Bilingual (English + 中文) site built with Material for MkDocs +
+mkdocstrings + mkdocs-static-i18n:
+
+```bash
+pip install -e ".[docs]"
+mkdocs serve          # EN  http://127.0.0.1:8000
+                      # 中文 http://127.0.0.1:8000/zh/
+mkdocs build --strict # writes ./site
 ```
 
 ## License

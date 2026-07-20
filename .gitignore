@@ -43,3 +43,6 @@ Thumbs.db
 
 docs/superpowers
 .firecrawl
+
+# MkDocs
+/site/
