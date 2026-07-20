@@ -15,6 +15,10 @@ def _registry() -> CommandRegistry:
     return CommandRegistry(cfg)
 
 
+def test_default_command_registry_is_empty() -> None:
+    assert CommandRegistry().list_all_commands() == []
+
+
 def test_registered_prefix_resolves_type_and_content():
     reg = _registry()
 

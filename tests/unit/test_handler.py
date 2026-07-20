@@ -49,13 +49,13 @@ def test_parse_player_message_ignores_non_player_message() -> None:
     assert MinecraftProtocolHandler.parse_player_message(data) is None
 
 
-def test_create_welcome_message_uses_help_prefix() -> None:
+def test_create_welcome_message_no_longer_references_help() -> None:
     handler = MinecraftProtocolHandler(_registry())
     welcome = handler.create_welcome_message(
         connection_id="abc12345",
     )
     assert "abc1234" in welcome  # truncated id
-    assert "帮助" in welcome
+    assert "帮助" not in welcome  # help command reference removed from template
 
 
 def test_parse_typed_command_whole_word_matching() -> None:
@@ -66,12 +66,13 @@ def test_parse_typed_command_whole_word_matching() -> None:
     assert handler.parse_typed_command("#登录密码123") is None  # no following space
 
 
-def test_get_help_text_lists_commands_and_hides_login() -> None:
+def test_get_help_text_lists_all_commands_no_hiding() -> None:
     handler = MinecraftProtocolHandler(_registry())
     help_text = handler.get_help_text()
     assert "显示帮助" in help_text
     assert "执行 Minecraft 命令" in help_text
-    assert "#登录" not in help_text
+    # login commands are no longer hidden (login hiding removed)
+    assert "#登录" in help_text
 
 
 def test_message_renderers_use_surface_prefix_and_color() -> None:

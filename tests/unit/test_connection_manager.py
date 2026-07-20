@@ -17,7 +17,7 @@ import pytest
 
 from mcbe_ws_sdk.gateway import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState
-from mcbe_ws_sdk.gateway.messages import StreamChunk, SystemNotification
+from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 from mcbe_ws_sdk.gateway.sink import (
     DefaultResponseSink,
     ResponseKind,
@@ -29,8 +29,8 @@ class RecordingSink(DefaultResponseSink):
     def __init__(self) -> None:
         self.envelopes: list[tuple[UUID, RouteEnvelope]] = []
 
-    async def on_stream_chunk(self, state: ConnectionState, chunk: StreamChunk) -> None:
-        self.envelopes.append((state.id, RouteEnvelope(ResponseKind.STREAM_CHUNK, chunk)))
+    async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
+        self.envelopes.append((state.id, RouteEnvelope(ResponseKind.OUTBOUND_TEXT, message)))
 
     async def on_system_notification(
         self, state: ConnectionState, note: SystemNotification
@@ -75,16 +75,16 @@ async def test_create_connection_emits_connected_and_installs_queue(
 
 
 @pytest.mark.asyncio
-async def test_response_sender_dispatches_stream_and_system_to_sink(
+async def test_response_sender_dispatches_outbound_and_system_to_sink(
     manager: ConnectionManager, sink: RecordingSink
 ) -> None:
     state = await manager.create_connection(connection_id=UUID(int=2), send_payload=_send_noop)
     queue = state.response_queue
     assert queue is not None
 
-    chunk = StreamChunk(chunk_type="content", content="hello", sequence=1)
+    msg = OutboundText(content="hello", sequence=1)
     note = SystemNotification(level="info", message="ready")
-    queue.put_nowait(chunk)
+    queue.put_nowait(msg)
     queue.put_nowait(note)
 
     # Yield to let the sender coroutine run.
@@ -94,7 +94,7 @@ async def test_response_sender_dispatches_stream_and_system_to_sink(
             break
 
     assert len(sink.envelopes) == 2
-    assert sink.envelopes[0][1].kind is ResponseKind.STREAM_CHUNK
+    assert sink.envelopes[0][1].kind is ResponseKind.OUTBOUND_TEXT
     assert sink.envelopes[1][1].kind is ResponseKind.SYSTEM_NOTIFICATION
 
 

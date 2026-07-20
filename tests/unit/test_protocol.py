@@ -1,5 +1,4 @@
 """Tests for the relocated MCBE protocol models."""
-
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
     AddonBridgeChunk,
     AddonBridgeResponse,
@@ -7,8 +6,6 @@ from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
     UiChatMessage,
 )
 from mcbe_ws_sdk.protocol.minecraft import (
-    MCColor,
-    MCPrefix,
     MinecraftCommand,
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -25,24 +22,10 @@ def test_minecraft_subscribe_player_message():
     assert sub.body.eventName == "PlayerMessage"
 
 
-def test_mc_color_primary_is_green_section():
-    assert MCColor.GREEN == "§a"
-    assert MCColor.YELLOW == "§e"
-    assert MCColor.RED == "§c"
-
-
 def test_minecraft_header_event_name_optional():
     # header.eventName is the lower-cased event name slot; defaults to None.
     sub = MinecraftSubscribe.player_message()
     assert sub.header.eventName is None
-
-
-def test_mc_prefix_public_members():
-    # MCPrefix only exposes public constant members.
-    assert MCPrefix.TOOL_CALL == "● "
-    assert MCPrefix.THINKING == "✻ "
-    assert MCPrefix.ERROR == "✖ "
-    assert MCPrefix.SUCCESS == "✓ "
 
 
 def test_player_message_event_from_event_body():

@@ -5,7 +5,7 @@ Drives the facade two complementary ways, exactly as the scope doc prescribes:
 * **In-process fake transport**: build a facade, then call
   ``facade._on_connection(fake_ws)`` where ``fake_ws`` is a tiny async-iterable
   whose ``send`` records outbound frames. This exercises the real routing
-  loop (parse → branch → hook call) without binding any port.
+  loop (parse -> branch -> hook call) without binding any port.
 * **Fake ``websockets`` lifetime**: monkeypatch ``websockets.serve`` with an
   async context manager, then exercise ``run_lifetime`` and ``stop()`` without
   opening a socket.
@@ -28,18 +28,17 @@ import pytest
 
 import mcbe_ws_sdk
 from mcbe_ws_sdk.addon.service import AddonBridgeService
-from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import AddonBridgeSettings, GatewaySettings, WebsocketTransportConfig
 from mcbe_ws_sdk.errors import FacadeLifecycleError
 from mcbe_ws_sdk.gateway import WsEventType
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import NoOpHook
-from mcbe_ws_sdk.gateway.messages import StreamChunk, SystemNotification
+from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.gateway.sink import (
+    DefaultResponseSink,
     ResponseKind,
     RouteEnvelope,
-    SilentResponseSink,
 )
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
     AddonBridgeChunk,
@@ -73,14 +72,14 @@ class FakeWebSocket:
         self.sent.append(payload)
 
 
-class RecordingSink(SilentResponseSink):
+class RecordingSink(DefaultResponseSink):
     """Sink that captures routed envelopes instead of only logging/raising."""
 
     def __init__(self) -> None:
         self.envelopes: list[tuple[UUID, RouteEnvelope]] = []
 
-    async def on_stream_chunk(self, state: ConnectionState, chunk: StreamChunk) -> None:
-        self.envelopes.append((state.id, RouteEnvelope(ResponseKind.STREAM_CHUNK, chunk)))
+    async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
+        self.envelopes.append((state.id, RouteEnvelope(ResponseKind.OUTBOUND_TEXT, message)))
 
     async def on_system_notification(
         self, state: ConnectionState, note: SystemNotification,
@@ -467,20 +466,17 @@ async def test_ui_callback_failure_does_not_block_following_frame() -> None:
 
 
 @pytest.mark.asyncio
-async def test_routes_command_through_handler_and_hook() -> None:
+async def test_routes_player_message_through_handler_and_hook() -> None:
     hook = RecordingHook()
     facade = McbeServerFacade(hook=hook, sink=RecordingSink())
 
     await facade._on_connection(
-        FakeWebSocket(frames=[_player_message_frame("Alice", "帮助 状态")]),
+        FakeWebSocket(frames=[_player_message_frame("Alice", "hello world")]),
     )
 
     assert len(hook.player_messages) == 1
-    assert hook.player_messages[0].message == "帮助 状态"
+    assert hook.player_messages[0].message == "hello world"
     assert hook.player_messages[0].sender == "Alice"
-    # The command is registered in the default registry.
-    parsed = facade.handler.parse_typed_command("帮助 状态")
-    assert parsed is not None and parsed.type == "help"
 
 
 @pytest.mark.asyncio
@@ -685,12 +681,12 @@ async def test_error_frame_preserves_full_envelope_extensions() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 7. outbound stream chunk reaches the provided sink over the real loop
+# 7. outbound message reaches the provided sink over the real loop
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
-async def test_sink_receives_stream_chunk() -> None:
+async def test_sink_receives_outbound_text() -> None:
     sink = RecordingSink()
     facade = McbeServerFacade(hook=RecordingHook(), sink=sink)
 
@@ -699,8 +695,8 @@ async def test_sink_receives_stream_chunk() -> None:
     )
     assert state.response_queue is not None
 
-    chunk = StreamChunk(chunk_type="content", content="hello world", sequence=1)
-    await state.response_queue.put(chunk)
+    msg = OutboundText(content="hello world", sequence=1)
+    await state.response_queue.put(msg)
 
     # Yield to let the response-sender coroutine drain the queue.
     for _ in range(30):
@@ -710,8 +706,8 @@ async def test_sink_receives_stream_chunk() -> None:
 
     assert len(sink.envelopes) == 1
     env = sink.envelopes[0][1]
-    assert env.kind is ResponseKind.STREAM_CHUNK
-    assert isinstance(env.payload, StreamChunk)
+    assert env.kind is ResponseKind.OUTBOUND_TEXT
+    assert isinstance(env.payload, OutboundText)
     assert env.payload.content == "hello world"
 
     await facade.manager.drop_connection(state.id)
@@ -781,8 +777,7 @@ def test_default_facade_wiring_and_default_commands() -> None:
     assert "broker" not in params
     assert "capabilities" not in params
 
-    # Default sink is the non-crashing SilentResponseSink.
-    assert isinstance(facade.manager.sink, SilentResponseSink)
-    # Default registry loads the canonical command table.
-    assert facade.handler.parse_typed_command("帮助") is not None
-    assert "#登录" in DEFAULT_COMMANDS
+    # Default sink is the non-crashing DefaultResponseSink.
+    assert isinstance(facade.manager.sink, DefaultResponseSink)
+    # Default registry is empty — no commands registered by default.
+    assert facade.handler.command_registry.list_all_commands() == []

@@ -31,7 +31,6 @@ async def test_noop_hook_defaults() -> None:
     hook = NoOpHook()
     # Pre-auth hooks return None.
     assert await hook.on_connected(state) is None
-    assert await hook.on_authenticated(state, "Steve") is None
     assert await hook.on_disconnected(state) is None
     # Protocol hooks: returns False (not consumed) so default handling proceeds.
     assert (

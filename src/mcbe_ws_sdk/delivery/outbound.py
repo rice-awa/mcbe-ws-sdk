@@ -8,6 +8,7 @@ from typing import Any
 from mcbe_ws_sdk._logging import get_logger
 from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.flow import FlowControlMiddleware
+from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 
 logger = get_logger(__name__)
 ws_raw_logger = get_logger("websocket.raw")
@@ -23,10 +24,12 @@ class McbeOutboundDelivery:
         connection_id: Any,
         send_payload: PayloadSender,
         settings: FlowControlSettings,
+        log_raw_payloads: bool = False,
     ) -> None:
         self.connection_id = connection_id
         self._send_payload = send_payload
         self._flow = FlowControlMiddleware(settings)
+        self._log_raw_payloads = log_raw_payloads
 
     @property
     def flow(self) -> FlowControlMiddleware:
@@ -73,6 +76,28 @@ class McbeOutboundDelivery:
         await self._send_one(payload, source)
         return request_id
 
+    async def send_outbound_text(self, message: OutboundText) -> int:
+        """Route an OutboundText message through the delivery adapter."""
+        source = f"outbound_text:{message.channel}"
+        if message.delivery == "scriptevent":
+            return await self.send_scriptevent(
+                message.content, message_id=message.message_id, source=source
+            )
+        target = message.target or message.player_name or "@a"
+        return await self.send_tellraw(
+            message.content, color="", source=source, target=target
+        )
+
+    async def send_system_notification(self, message: SystemNotification) -> int:
+        """Route a SystemNotification through the delivery adapter."""
+        colors = {"info": "§b", "warning": "§e", "error": "§c"}
+        return await self.send_tellraw(
+            message.message,
+            color=colors[message.level],
+            source="system_notification",
+            target=message.player_name or "@a",
+        )
+
     async def _send_chunked(self, payloads: list[str], delay_kind: str, source: str) -> None:
         chunk_delay = self.flow.chunk_delay_for(delay_kind)
         for idx, payload in enumerate(payloads):
@@ -88,12 +113,15 @@ class McbeOutboundDelivery:
         self._log_ws_send(payload, source)
 
     def _log_ws_send(self, payload: str, source: str) -> None:
-        command_line_bytes = 0
+        request_id = ""
+        message_purpose = ""
+        command_line = ""
         try:
             data = json.loads(payload)
-            command_line_bytes = len(
-                data.get("body", {}).get("commandLine", "").encode("utf-8")
-            )
+            header = data.get("header", {})
+            request_id = str(header.get("requestId", ""))
+            message_purpose = str(header.get("messagePurpose", ""))
+            command_line = str(data.get("body", {}).get("commandLine", ""))
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -101,9 +129,15 @@ class McbeOutboundDelivery:
             "websocket_response_sent",
             connection_id=str(self.connection_id),
             source=source,
-            payload=payload,
-            command_line_bytes=command_line_bytes,
+            request_id=request_id,
+            message_purpose=message_purpose,
+            command_type=command_line.partition(" ")[0] if command_line else "",
+            command_line_length=len(command_line),
+            command_line_bytes=len(command_line.encode("utf-8")),
         )
+
+        if self._log_raw_payloads:
+            ws_raw_logger.debug("websocket_response_payload", payload=payload)
 
 
 def _request_id_from_payload(payload: str) -> str:

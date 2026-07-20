@@ -3,22 +3,15 @@
 Extends the minimal :class:`ConnectionState` foundation with the lifecycle the
 host drives through the facade: per-connection response queues, an outbound
 ``send_payload`` callable (the transport's frame send, e.g. ``websocket.send``),
-and a :class:`ConnectionManager` that owns the response-sender coroutine and
+and a :class:`ConnectionManager`` that owns the response-sender coroutine and
 emits ``CONNECTED`` / ``DISCONNECTED`` on the
 :class:`~mcbe_ws_sdk.gateway.events.EventBus`.
-
-Multi-player isolation: a single WebSocket connection is shared by many players
-in the MCBE server model, so every per-player setting is bucketed by
-``player_name`` via :meth:`ConnectionState.get_player_session`. The top-level
-``player_name`` is ONLY a convenience pointer to "most recent speaker" and MUST
-NOT be read for routing decisions — always pull the bucket from ``player_event.sender``.
 
 The response-sender loop never builds Minecraft commands itself. It classifies
 each queued message with
 :meth:`~mcbe_ws_sdk.gateway.sink.RouteEnvelope.from_message` and forwards it to
 the shared :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink`, pushing the
-application-specific mapping (game_message / run_command / ai_response_sync)
-entirely onto the host's ``HostSink``.
+application-specific mapping entirely onto the host's ``HostSink``.
 """
 
 from __future__ import annotations
@@ -37,21 +30,10 @@ logger = get_logger(__name__)
 
 SendPayload = Callable[[str], Awaitable[None]]
 
-DEFAULT_PLAYER_KEY = "__anonymous__"
-
-
-@dataclass
-class PlayerSession:
-    """Per-player, per-connection mutable settings (multiplayer isolation bucket)."""
-
-    player_name: str
-    context_enabled: bool = True
-    custom_variables: dict[str, str] = field(default_factory=dict)
-
 
 @dataclass
 class ConnectionState:
-    """Transport-agnostic connection identity + per-player session buckets.
+    """Transport-agnostic connection identity.
 
     Host-specific / transport wiring lives on the state but typed as opaque
     callables so the gateway never imports ``websockets`` itself: the facade or
@@ -60,27 +42,9 @@ class ConnectionState:
     """
 
     id: UUID = field(default_factory=uuid4)
-    authenticated: bool = False
     player_name: str | None = None  # most-recent speaker convenience pointer only
     send_payload: SendPayload | None = None
     response_queue: asyncio.Queue[object] | None = None
-    _player_sessions: dict[str, PlayerSession] = field(default_factory=dict)
-
-    def get_player_session(self, player_name: str | None = DEFAULT_PLAYER_KEY) -> PlayerSession:
-        """Return the per-player bucket, creating a default one if missing."""
-        key = player_name or DEFAULT_PLAYER_KEY
-        session = self._player_sessions.get(key)
-        if session is None:
-            session = PlayerSession(player_name=key)
-            self._player_sessions[key] = session
-        return session
-
-    def clear_player_sessions(self) -> None:
-        """Drop every player session bucket (called on disconnect)."""
-        self._player_sessions.clear()
-
-    def all_player_sessions(self) -> list[PlayerSession]:
-        return list(self._player_sessions.values())
 
 
 class ConnectionManager:
@@ -130,11 +94,7 @@ class ConnectionManager:
         return state
 
     async def drop_connection(self, connection_id: UUID) -> None:
-        """Cancel the sender coroutine, drop the connection, emit DISCONNECTED.
-
-        Per-player session cleanup is the host's responsibility (see
-        :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook.on_disconnected`).
-        """
+        """Cancel the sender coroutine, drop the connection, emit DISCONNECTED."""
         state = self._connections.pop(connection_id, None)
         await self._cancel_sender(connection_id)
         if state is not None:

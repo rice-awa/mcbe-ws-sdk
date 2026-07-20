@@ -7,11 +7,11 @@ response-sender loops, the
 and the per-connection
 :class:`~mcbe_ws_sdk.addon.service.AddonBridgeService` sessions) but deliberately
 does NOT own any host application concern: there is no ``MessageBroker``, no LLM
-worker, no login/JWT flow, no provider selection. All of that is injected by the
+worker, no provider selection. All of that is injected by the
 host via the :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook` lifecycle hooks
 and the :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink` outbound routes — the
 same dependency-inversion the gateway already applies internally (see
-:class:`NoOpHook`, :class:`SilentResponseSink`).
+:class:`NoOpHook`, :class:`DefaultResponseSink`).
 
 It mirrors the current main-repo ``WebSocketServer`` orchestration
 (``services/websocket/server.py``) — accept → handshake → subscribe →
@@ -39,14 +39,13 @@ import websockets
 from mcbe_ws_sdk._logging import get_logger
 from mcbe_ws_sdk.addon import AddonBridgeService
 from mcbe_ws_sdk.command import CommandRegistry
-from mcbe_ws_sdk.command.registry import DEFAULT_COMMANDS
 from mcbe_ws_sdk.config import GatewaySettings
 from mcbe_ws_sdk.errors import FacadeLifecycleError, ProtocolError
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
-from mcbe_ws_sdk.gateway.sink import ResponseSink, SilentResponseSink
+from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
 
 if TYPE_CHECKING:
@@ -74,8 +73,8 @@ class McbeServerFacade:
     ) -> None:
         self._settings = settings if settings is not None else GatewaySettings()
         self._hook = hook if hook is not None else NoOpHook()
-        self._sink = sink if sink is not None else SilentResponseSink()
-        self._registry = registry if registry is not None else CommandRegistry(DEFAULT_COMMANDS)
+        self._sink = sink if sink is not None else DefaultResponseSink()
+        self._registry = registry if registry is not None else CommandRegistry()
 
         self._handler = MinecraftProtocolHandler(self._registry, surface=MessageSurfaceConfig())
         self._addon = addon if addon is not None else AddonBridgeService(self._settings.addon)
@@ -240,7 +239,7 @@ class McbeServerFacade:
             return
 
         # Branch A — addon bridge response / UI chat (both arrive from the
-        # simulated ``MCBEAI_TOOL`` player, not a real player command).
+        # simulated addon bridge tool player, not a real player command).
         if self._addon is not None and (
             self._addon.is_bridge_chat_message(event.sender, event.message)
             or self._addon.is_ui_chat_message(event.sender, event.message)

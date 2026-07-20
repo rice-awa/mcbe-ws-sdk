@@ -1,11 +1,10 @@
 """Connection lifecycle hook protocol.
 
-The host (the main repo's ``McbeHost``) implements these six / seven points to
+The host (the main repo's ``McbeHost``) implements these six points to
 inject the application-specific behaviour the gateway deliberately does NOT
-implement: login/JWT handling, prompt/context management, LLM dispatch, command
-routing, and addon linkage. ``NoOpHook`` is the gateway's built-in default — it
-defines the complete contract so a host can subclass and override only what it
-needs.
+implement: prompt/context management, LLM dispatch, command routing, and addon
+linkage. ``NoOpHook`` is the gateway's built-in default — it defines the
+complete contract so a host can subclass and override only what it needs.
 
 Hook return convention:
   * ``on_player_message`` returns ``bool`` — ``True`` means "consumed, stop the
@@ -30,11 +29,7 @@ class ConnectionHook(Protocol):
     """Lifecycle + protocol hooks the host injects into the gateway."""
 
     async def on_connected(self, state: ConnectionState) -> None:
-        """Fired after the transport connection is established (pre-auth)."""
-        ...
-
-    async def on_authenticated(self, state: ConnectionState, player: str) -> None:
-        """Fired when a player successfully authenticates on this connection."""
+        """Fired after the transport connection is established."""
         ...
 
     async def on_disconnected(self, state: ConnectionState) -> None:
@@ -75,9 +70,6 @@ class NoOpHook:
     """Gateway default ``ConnectionHook`` — every hook is a no-op / not-consumed."""
 
     async def on_connected(self, state: ConnectionState) -> None:
-        return None
-
-    async def on_authenticated(self, state: ConnectionState, player: str) -> None:
         return None
 
     async def on_disconnected(self, state: ConnectionState) -> None:

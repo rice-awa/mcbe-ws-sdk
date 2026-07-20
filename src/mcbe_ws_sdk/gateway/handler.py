@@ -3,7 +3,7 @@
 Relocated from the main repo ``services/websocket/minecraft.py``. Responsible
 for constructing subscribe messages, parsing inbound ``PlayerMessageEvent``,
 resolving typed commands, and rendering the small set of on-screen status
-messages the connection lifecycle needs (welcome / info / success / error).
+messages the connection lifecycle needs (info / success / error).
 
 Deliberately *host-config-agnostic*: presentation strings (welcome template,
 status prefixes, colors) come in through a frozen
@@ -63,11 +63,8 @@ class MessageSurfaceConfig:
         "-----------\n"
         "已连接到 MCBE WebSocket 网关\n"
         "连接 ID: {connection_id}...\n"
-        '使用 "{help_command}" 查看可用命令\n'
         "-----------"
     )
-    context_enabled_text: str = "启用"
-    context_disabled_text: str = "关闭"
     error_prefix: str = "❌ 错误: "
     info_prefix: str = "ℹ "
     success_prefix: str = "✅ "
@@ -103,10 +100,8 @@ class MinecraftProtocolHandler:
         connection_id: str,
     ) -> str:
         """Render the post-connect welcome banner (plain text; wrap a message)."""
-        help_prefix = self.command_registry.get_command_prefix("help") or "帮助"
         return self.surface.welcome_message_template.format(
             connection_id=connection_id[:8],
-            help_command=help_prefix,
         )
 
     @staticmethod
@@ -137,9 +132,7 @@ class MinecraftProtocolHandler:
     def get_help_text(self) -> str:
         """Render the in-game help listing from the command registry."""
         lines = ["可用命令:"]
-        for prefix, cmd_type, _aliases in self.command_registry.list_all_commands():
-            if cmd_type == "login":
-                continue
+        for prefix, _cmd_type, _aliases in self.command_registry.list_all_commands():
             cmd_config = self.command_registry.get_command_config(prefix)
             if cmd_config is None:
                 continue

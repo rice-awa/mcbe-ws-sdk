@@ -228,27 +228,3 @@ class MinecraftErrorFrame(BaseModel):
         populated = dict(data)
         populated["request_id"] = str(header.get("requestId", ""))
         return populated
-
-
-# Minecraft 颜色代码常量
-class MCColor:
-    """Minecraft 颜色代码常量"""
-
-    GREEN = "§a"  # LLM 主要输出内容
-    YELLOW = "§e"  # 工具调用信息
-    GRAY = "§7"  # 思考内容
-    RED = "§c"  # 错误信息
-    WHITE = "§f"  # 默认白色
-    AQUA = "§b"  # 信息提示
-    GOLD = "§6"  # 强调信息
-    DARK_GRAY = "§8"  # 次要信息
-
-
-# 消息前缀常量
-class MCPrefix:
-    """消息前缀常量"""
-
-    TOOL_CALL = "● "  # 工具调用前缀
-    THINKING = "✻ "  # 思考内容前缀
-    ERROR = "✖ "  # 错误前缀
-    SUCCESS = "✓ "  # 成功前缀

@@ -3,44 +3,18 @@
 The registry turns a ``{prefix: type | config}`` mapping into a matcher that
 resolves an inbound message to a typed command. Matching is *whole-word*: a
 prefix/alias matches only when it is the entire message or is followed by
-whitespace, so ``#登录xxx`` does NOT match the ``#登录`` prefix.
+whitespace, so ``#prefix_xyz`` does NOT match the ``#prefix`` token.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
-
-
-#: Canonical command table the facade loads into its default
-#: :class:`CommandRegistry`. Whole-word prefixes (the registry matches a prefix
-#: only when it is the entire message or followed by whitespace).
-#:
-#: This is intentionally the *neutral, transport-grade* command set — connection
-#: handshake (``#登录``, hidden from help) and the two gateway utilities the host
-#: drives via its :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook`
-#: (``运行命令`` to run a minecraft command, ``帮助`` for help). AI-specific
-#: commands (chat / script / context / model-switch) live in the *host*
-#: application's own registry, not the SDK default.
-DEFAULT_COMMANDS: dict[str, str | dict[str, Any]] = {
-    "#登录": {"type": "login", "description": "登录"},
-    "运行命令": {
-        "type": "run_command",
-        "aliases": [],
-        "description": "执行 Minecraft 命令",
-        "usage": "<命令>",
-    },
-    "帮助": {
-        "type": "help",
-        "aliases": ["?"],
-        "description": "显示帮助",
-        "usage": None,
-    },
-}
 
 
 @dataclass(frozen=True)
@@ -66,13 +40,16 @@ class ParsedCommand:
 class CommandRegistry:
     """命令注册表 - 管理命令和别名"""
 
-    def __init__(self, commands_config: dict[str, str | dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        commands_config: Mapping[str, str | Mapping[str, Any]] | None = None,
+    ) -> None:
         self._commands: dict[str, MinecraftCommandConfig] = {}
         self._alias_map: dict[str, str] = {}  # 别名 -> 主命令前缀
         self._type_to_prefix: dict[str, str] = {}  # 命令类型 -> 主命令前缀
-        self._load_commands(commands_config)
+        self._load_commands(commands_config or {})
 
-    def _load_commands(self, config: dict[str, str | dict[str, Any]]) -> None:
+    def _load_commands(self, config: Mapping[str, str | Mapping[str, Any]]) -> None:
         """加载命令配置并构建别名映射"""
         for prefix, cmd in config.items():
             if isinstance(cmd, str):

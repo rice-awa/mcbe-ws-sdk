@@ -1,8 +1,6 @@
 """Minecraft protocol message models."""
 
 from mcbe_ws_sdk.protocol.minecraft import (
-    MCColor,
-    MCPrefix,
     MinecraftCommand,
     MinecraftCommandBody,
     MinecraftCommandResponse,
@@ -16,8 +14,6 @@ from mcbe_ws_sdk.protocol.minecraft import (
 )
 
 __all__ = [
-    "MCColor",
-    "MCPrefix",
     "MinecraftCommand",
     "MinecraftCommandBody",
     "MinecraftCommandResponse",

@@ -27,7 +27,6 @@ from mcbe_ws_sdk.errors import (
     ProtocolError,
 )
 from mcbe_ws_sdk.gateway import (
-    DEFAULT_PLAYER_KEY,
     ConnectionHook,
     ConnectionManager,
     ConnectionState,
@@ -37,20 +36,18 @@ from mcbe_ws_sdk.gateway import (
     MessageSurfaceConfig,
     MinecraftProtocolHandler,
     NoOpHook,
-    PlayerSession,
+    OutboundText,
     ResponseKind,
     ResponseSink,
     RouteEnvelope,
     SendPayload,
-    SilentResponseSink,
-    StreamChunk,
     SubscriptionToken,
     SystemNotification,
     TellrawMessage,
     WsEventType,
 )
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import AddonBridgeResponse
-from mcbe_ws_sdk.protocol.minecraft import MCColor, MCPrefix, PlayerMessageEvent
+from mcbe_ws_sdk.protocol.minecraft import PlayerMessageEvent
 
 __version__ = "0.1.0"
 
@@ -60,8 +57,6 @@ __all__ = [
     "protocol",
     # protocol
     "AddonBridgeResponse",
-    "MCColor",
-    "MCPrefix",
     "PlayerMessageEvent",
     # errors
     "BridgeClosedError",
@@ -77,7 +72,6 @@ __all__ = [
     "AddonBridgeClient",
     "AddonBridgeService",
     # gateway
-    "DEFAULT_PLAYER_KEY",
     "ConnectionHook",
     "ConnectionManager",
     "ConnectionState",
@@ -87,14 +81,12 @@ __all__ = [
     "MessageSurfaceConfig",
     "MinecraftProtocolHandler",
     "NoOpHook",
-    "PlayerSession",
+    "OutboundText",
     "ResponseKind",
     "ResponseSink",
     "RouteEnvelope",
     "SendPayload",
-    "SilentResponseSink",
     "SubscriptionToken",
-    "StreamChunk",
     "SystemNotification",
     "TellrawMessage",
     "WsEventType",
