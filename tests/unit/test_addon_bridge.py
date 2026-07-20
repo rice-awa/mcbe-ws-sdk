@@ -24,23 +24,23 @@ from mcbe_ws_sdk.errors import (
     BridgeTimeoutError,
     ProtocolError,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import (
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
     AddonBridgeResponse,
     decode_bridge_chat_chunk,
     encode_bridge_request,
     reassemble_bridge_chunks,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
     AddonBridgeRequest,
     UiChatChunk,
     UiChatMessage,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
 
 
 def _complete_ui_chunk(player: str, message: str) -> str:
-    return f'MCBEAI|UI_CHAT|m1|1/1|{{"player":"{player}","message":"{message}"}}'
+    return f'MCBEWS|UI_CHAT|m1|1/1|{{"player":"{player}","message":"{message}"}}'
 
 
 def test_no_module_level_singleton() -> None:
@@ -60,9 +60,9 @@ def test_two_instances_are_independent() -> None:
 
 def test_encode_then_decode_bridge_chunk_roundtrip() -> None:
     cmd = encode_bridge_request("req-1", "get_greeting", {"player": "Steve"})
-    assert cmd.startswith("scriptevent mcbeai:bridge_request ")
+    assert cmd.startswith("scriptevent mcbews:bridge_req ")
 
-    chunk = "MCBEAI|RESP|req-1|1/2|hello"
+    chunk = "MCBEWS|BRIDGE|req-1|1/2|hello"
     parsed = decode_bridge_chat_chunk(chunk)
     assert parsed.request_id == "req-1"
     assert parsed.chunk_index == 1
@@ -73,8 +73,8 @@ def test_encode_then_decode_bridge_chunk_roundtrip() -> None:
 def test_reassemble_bridge_chunks_parses_json_payload() -> None:
     # Reassembly joins fragments BEFORE JSON parse, so boundaries may split JSON.
     chunks = [
-        decode_bridge_chat_chunk('MCBEAI|RESP|r1|1/2|{"greet":"hi, '),
-        decode_bridge_chat_chunk('MCBEAI|RESP|r1|2/2|Steve"}'),
+        decode_bridge_chat_chunk('MCBEWS|BRIDGE|r1|1/2|{"greet":"hi, '),
+        decode_bridge_chat_chunk('MCBEWS|BRIDGE|r1|2/2|Steve"}'),
     ]
     response = reassemble_bridge_chunks(chunks)
     assert isinstance(response, AddonBridgeResponse)
@@ -88,10 +88,10 @@ async def test_session_reassembles_bridge_response() -> None:
     request = session.create_request(capability="get_greeting", payload={"player": "Steve"})
 
     rid = request.request_id
-    first = session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|1/2|" + '{"k":"')
+    first = session.handle_chat_chunk(f"MCBEWS|BRIDGE|{rid}|1/2|" + '{"k":"')
     assert isinstance(first, AddonBridgeChunk)
     assert not request.future.done()
-    second = session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|2/2|" + 'v"}')
+    second = session.handle_chat_chunk(f"MCBEWS|BRIDGE|{rid}|2/2|" + 'v"}')
     assert isinstance(second, AddonBridgeChunk)
     assert request.future.done()
     assert await request.future == {"k": "v"}
@@ -101,13 +101,13 @@ def test_session_reassembles_ui_chat() -> None:
     session = AddonBridgeSession(AddonBridgeSettings())
 
     first_chunk, first_message = session.handle_ui_chat_chunk(
-        'MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
+        'MCBEWS|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
     )
     assert isinstance(first_chunk, UiChatChunk)
     assert first_message is None
 
     second_chunk, second_message = session.handle_ui_chat_chunk(
-        'MCBEAI|UI_CHAT|m1|2/2|llo"}'
+        'MCBEWS|UI_CHAT|m1|2/2|llo"}'
     )
     assert isinstance(second_chunk, UiChatChunk)
     assert second_message == UiChatMessage(msg_id="m1", player_name="Steve", message="hello")
@@ -165,7 +165,7 @@ def test_legacy_wire_models_preserve_unknown_fields() -> None:
 
 
 def test_profile_can_override_bridge_request_message_id() -> None:
-    profile = LegacyMcbeAiV1Profile(bridge_request_message_id="custom:bridge")
+    profile = McbewsV1Profile(bridge_request_message_id="custom:bridge")
     command = encode_bridge_request("r1", "ping", {}, profile=profile)
     assert command.startswith("scriptevent custom:bridge ")
 
@@ -189,7 +189,7 @@ async def test_service_request_capability_end_to_end() -> None:
             if session is not None and session._pending_requests:
                 rid = next(iter(session._pending_requests))
                 payload = '{"ok":true}'
-                session.handle_chat_chunk(f"MCBEAI|RESP|{rid}|1/1|" + payload)
+                session.handle_chat_chunk(f"MCBEWS|BRIDGE|{rid}|1/1|" + payload)
                 return
             await asyncio.sleep(0.005)
 
@@ -204,7 +204,7 @@ async def test_service_request_capability_end_to_end() -> None:
     await resolver
     assert result == {"ok": True}
     assert len(sent) == 1
-    assert sent[0].startswith("scriptevent mcbeai:bridge_request ")
+    assert sent[0].startswith("scriptevent mcbews:bridge_req ")
 
 
 @pytest.mark.asyncio
@@ -283,7 +283,7 @@ async def test_session_rejects_excessive_chunk_count() -> None:
     session = AddonBridgeSession(AddonBridgeSettings(max_chunks_per_message=2))
     request = session.create_request("x", {})
     with pytest.raises(BridgeLimitError):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/3|x")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/3|x")
     assert request.request_id not in session._pending_requests
     assert request.future.done()
     with pytest.raises(BridgeLimitError):
@@ -303,12 +303,12 @@ async def test_session_prunes_expired_buffers_before_accepting_new_chunk() -> No
     )
     request = session.create_request("x", {})
 
-    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+    session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|a")
     assert session._chunk_buffers[request.request_id].chunks.keys() == {1}
 
     now = 101.0
     chunk, ui_message = session.handle_ui_chat_chunk(
-        'MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
+        'MCBEWS|UI_CHAT|m1|1/2|{"player":"Steve","message":"he'
     )
 
     assert isinstance(chunk, UiChatChunk)
@@ -322,10 +322,10 @@ async def test_session_rejects_excessive_buffer_ids() -> None:
     session = AddonBridgeSession(AddonBridgeSettings(max_buffer_ids=1))
     request = session.create_request("x", {})
 
-    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+    session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|a")
 
     with pytest.raises(BridgeLimitError, match="maximum buffer ids exceeded"):
-        session.handle_ui_chat_chunk('MCBEAI|UI_CHAT|m1|1/2|{"player":"Steve","message":"he')
+        session.handle_ui_chat_chunk('MCBEWS|UI_CHAT|m1|1/2|{"player":"Steve","message":"he')
 
 
 @pytest.mark.asyncio
@@ -334,7 +334,7 @@ async def test_session_rejects_message_byte_limit() -> None:
     request = session.create_request("x", {})
 
     with pytest.raises(BridgeLimitError, match="message byte limit exceeded"):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|ab")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|ab")
     assert request.request_id not in session._pending_requests
     assert request.future.done()
     with pytest.raises(BridgeLimitError, match="message byte limit exceeded"):
@@ -348,10 +348,10 @@ async def test_session_rejects_total_buffer_byte_limit() -> None:
     )
     request = session.create_request("x", {})
 
-    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|ab")
+    session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|ab")
 
     with pytest.raises(BridgeLimitError, match="total buffer byte limit exceeded"):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|2/2|cd")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|2/2|cd")
     assert request.request_id not in session._pending_requests
     assert request.request_id not in session._chunk_buffers
     assert request.future.done()
@@ -364,10 +364,10 @@ async def test_session_rejects_changed_total_and_completes_request() -> None:
     session = AddonBridgeSession(AddonBridgeSettings())
     request = session.create_request("x", {})
 
-    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+    session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|a")
 
     with pytest.raises(ProtocolError, match="chunk total changed"):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|2/3|b")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|2/3|b")
     assert request.request_id not in session._pending_requests
     assert request.request_id not in session._chunk_buffers
     assert request.future.done()
@@ -380,10 +380,10 @@ async def test_session_rejects_duplicate_changed_content_and_completes_request()
     session = AddonBridgeSession(AddonBridgeSettings())
     request = session.create_request("x", {})
 
-    session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|a")
+    session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|a")
 
     with pytest.raises(ProtocolError, match="duplicate chunk content changed"):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/2|b")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/2|b")
     assert request.request_id not in session._pending_requests
     assert request.request_id not in session._chunk_buffers
     assert request.future.done()
@@ -397,7 +397,7 @@ async def test_malformed_bridge_response_completes_future_with_protocol_error() 
     request = session.create_request("x", {})
 
     with pytest.raises(ProtocolError):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|1/1|not-json")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|1/1|not-json")
 
     assert request.request_id not in session._pending_requests
     assert request.request_id not in session._chunk_buffers
@@ -412,7 +412,7 @@ async def test_decode_stage_malformed_bridge_chunk_completes_pending_request() -
     request = session.create_request("x", {})
 
     with pytest.raises(ProtocolError):
-        session.handle_chat_chunk(f"MCBEAI|RESP|{request.request_id}|3/2|x")
+        session.handle_chat_chunk(f"MCBEWS|BRIDGE|{request.request_id}|3/2|x")
 
     assert request.request_id not in session._pending_requests
     assert request.request_id not in session._chunk_buffers
@@ -423,10 +423,10 @@ async def test_decode_stage_malformed_bridge_chunk_completes_pending_request() -
 
 def test_is_bridge_and_ui_chat_message() -> None:
     service = AddonBridgeService(AddonBridgeSettings())
-    assert service.is_bridge_chat_message("MCBEAI_TOOL", "MCBEAI|RESP|r1|1/1|data") is True
-    assert service.is_bridge_chat_message("MCBEAI_TOOL", "MCBEAI|UI_CHAT|m1|1|data") is False
-    assert service.is_ui_chat_message("MCBEAI_TOOL", "MCBEAI|UI_CHAT|m1|1|data") is True
-    assert service.is_ui_chat_message("RealPlayer", "MCBEAI|RESP|r1|1|data") is False
+    assert service.is_bridge_chat_message("MCBEWS_BRIDGE", "MCBEWS|BRIDGE|r1|1/1|data") is True
+    assert service.is_bridge_chat_message("MCBEWS_BRIDGE", "MCBEWS|UI_CHAT|m1|1|data") is False
+    assert service.is_ui_chat_message("MCBEWS_BRIDGE", "MCBEWS|UI_CHAT|m1|1|data") is True
+    assert service.is_ui_chat_message("RealPlayer", "MCBEWS|BRIDGE|r1|1|data") is False
 
 
 @pytest.mark.asyncio
@@ -438,8 +438,8 @@ async def test_service_handle_player_message_returns_structured_bridge_chunk() -
 
     result = await service.handle_player_message(
         connection_id,
-        "MCBEAI_TOOL",
-        f'MCBEAI|RESP|{request.request_id}|1/1|{{"ok":true}}',
+        "MCBEWS_BRIDGE",
+        f'MCBEWS|BRIDGE|{request.request_id}|1/1|{{"ok":true}}',
     )
 
     assert result == AddonMessageResult(
@@ -466,8 +466,8 @@ async def test_service_handle_player_message_returns_structured_ui_result() -> N
 
     result = await service.handle_player_message(
         connection_id,
-        "MCBEAI_TOOL",
-        'MCBEAI|UI_CHAT|m1|1/1|{"player":"Steve","message":"hello"}',
+        "MCBEWS_BRIDGE",
+        'MCBEWS|UI_CHAT|m1|1/1|{"player":"Steve","message":"hello"}',
     )
 
     assert result == AddonMessageResult(
@@ -494,6 +494,6 @@ async def test_ui_callback_failure_is_awaited_and_no_task_leaks() -> None:
     before = set(asyncio.all_tasks())
     with pytest.raises(LookupError, match="callback failed"):
         await service.handle_player_message(
-            UUID(int=52), "MCBEAI_TOOL", _complete_ui_chunk("Alice", "hello")
+            UUID(int=52), "MCBEWS_BRIDGE", _complete_ui_chunk("Alice", "hello")
         )
     assert set(asyncio.all_tasks()) == before

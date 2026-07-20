@@ -21,7 +21,7 @@ import json
 from uuid import UUID
 
 from mcbe_ws_sdk.addon import AddonBridgeService, AddonBridgeSettings
-from mcbe_ws_sdk.profiles import LEGACY_MCBEAI_V1
+from mcbe_ws_sdk.profiles import MCBEWS_V1
 
 
 async def main() -> None:
@@ -30,7 +30,7 @@ async def main() -> None:
 
     async def send_command(command: str) -> None:
         _, message_id, encoded = command.split(" ", 2)
-        assert message_id == LEGACY_MCBEAI_V1.bridge_request_message_id
+        assert message_id == MCBEWS_V1.bridge_request_message_id
         request = json.loads(encoded)
         response = json.dumps(
             {"ok": True, "greeting": f"Hello, {request['payload']['name']}"},
@@ -38,12 +38,12 @@ async def main() -> None:
             separators=(",", ":"),
         )
         chat = (
-            f"{LEGACY_MCBEAI_V1.bridge_response_prefix}|"
+            f"{MCBEWS_V1.bridge_response_prefix}|"
             f"{request['request_id']}|1/1|{response}"
         )
         result = await service.handle_player_message(
             connection_id,
-            LEGACY_MCBEAI_V1.bridge_sender,
+            MCBEWS_V1.bridge_sender,
             chat,
         )
         assert result.handled

@@ -298,9 +298,11 @@ class McbeServerFacade:
         # Diagnostic: RESP/UI_CHAT content with the wrong sender never matches the
         # bridge filter above, so the request future times out with no clue. Surface
         # the mismatch so hosts can see what Bedrock actually delivered.
-        if event.message.startswith("MCBEAI|"):
+        profile = self._settings.addon.profile
+        root_token = profile.bridge_response_prefix.split("|", 1)[0]
+        if event.message.startswith(f"{root_token}|"):
             logger.warning(
-                "mcbeai_prefix_not_matched_as_bridge",
+                "bridge_prefix_not_matched",
                 connection_id=str(state.id),
                 sender=event.sender,
                 message_type=event.type,

@@ -40,7 +40,7 @@ from mcbe_ws_sdk.gateway.sink import (
     ResponseKind,
     RouteEnvelope,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
     UiChatChunk,
     UiChatMessage,
@@ -159,8 +159,8 @@ def _player_message_frame(sender: str, message: str) -> str:
 
 def _complete_ui_player_frame(player: str, message: str) -> str:
     return _player_message_frame(
-        "MCBEAI_TOOL",
-        f'MCBEAI|UI_CHAT|m1|1/1|{{"player":"{player}","message":"{message}"}}',
+        "MCBEWS_BRIDGE",
+        f'MCBEWS|UI_CHAT|m1|1/1|{{"player":"{player}","message":"{message}"}}',
     )
 
 
@@ -420,12 +420,12 @@ async def test_routes_bridge_response_through_addon() -> None:
     addon = RecordingAddon()
     facade = McbeServerFacade(hook=hook, sink=RecordingSink(), addon=addon)
 
-    resp = 'MCBEAI|RESP|req-7|1/1|{"ok": true}'
-    ws = FakeWebSocket(frames=[_player_message_frame("MCBEAI_TOOL", resp)])
+    resp = 'MCBEWS|BRIDGE|req-7|1/1|{"ok": true}'
+    ws = FakeWebSocket(frames=[_player_message_frame("MCBEWS_BRIDGE", resp)])
 
     await facade._on_connection(ws)
 
-    assert addon.handled and addon.handled[0][1] == "MCBEAI_TOOL"
+    assert addon.handled and addon.handled[0][1] == "MCBEWS_BRIDGE"
     assert addon.handled[0][2] == resp
     assert hook.player_messages == []  # NOT handed to the player hook
 
@@ -434,7 +434,7 @@ async def test_routes_bridge_response_through_addon() -> None:
 async def test_malformed_ui_frame_does_not_block_following_player_frame() -> None:
     hook = RecordingHook()
     frames = [
-        _player_message_frame("MCBEAI_TOOL", "MCBEAI|UI_CHAT|bad"),
+        _player_message_frame("MCBEWS_BRIDGE", "MCBEWS|UI_CHAT|bad"),
         _player_message_frame("Alice", "hello"),
     ]
 
@@ -557,12 +557,12 @@ async def test_facade_emits_bridge_and_ui_semantic_events() -> None:
             FakeWebSocket(
                 [
                     _player_message_frame(
-                        "MCBEAI_TOOL",
-                        "MCBEAI|RESP|addon-00000000000000000000000000000001|1/1|{\"ok\":true}",
+                        "MCBEWS_BRIDGE",
+                        "MCBEWS|BRIDGE|addon-00000000000000000000000000000001|1/1|{\"ok\":true}",
                     ),
                     _player_message_frame(
-                        "MCBEAI_TOOL",
-                        'MCBEAI|UI_CHAT|m1|1/1|{"player":"Steve","message":"hello"}',
+                        "MCBEWS_BRIDGE",
+                        'MCBEWS|UI_CHAT|m1|1/1|{"player":"Steve","message":"hello"}',
                     ),
                 ]
             )

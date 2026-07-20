@@ -281,7 +281,7 @@ class AddonDemoHook(NoOpHook):
             return False
 
         # Surface every non-echo PlayerMessage at INFO while diagnosing bridge
-        # timeouts — includes MCBEAI_TOOL RESP/UI_CHAT chunks if they arrive.
+        # timeouts — includes MCBEWS_BRIDGE RESP/UI_CHAT chunks if they arrive.
         logger.info(
             "player_message_raw",
             connection_id=str(state.id),
@@ -509,7 +509,7 @@ class AddonDemoHook(NoOpHook):
     ) -> None:
         # Always log the raw commandResponse while diagnosing bridge timeouts.
         # Successful tellraw/scriptevent acks are normally noise, but right now we
-        # need to see whether scriptevent mcbeai:bridge_request was accepted.
+        # need to see whether scriptevent mcbews:bridge_req was accepted.
         logger.info(
             "command_response_raw",
             connection_id=str(state.id),
