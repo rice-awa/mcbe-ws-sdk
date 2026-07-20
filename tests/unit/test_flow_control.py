@@ -50,3 +50,9 @@ def test_tellraw_long_text_chunks_within_budget():
         import json
         data = json.loads(payload)
         assert len(data["body"]["commandLine"].encode("utf-8")) <= 461
+
+
+def test_tellraw_wrapper_overflow_is_frame_too_large():
+    mid = FlowControlMiddleware(FlowControlSettings())
+    with pytest.raises(FrameTooLargeError):
+        mid.chunk_tellraw("hi", target="名" * 200)

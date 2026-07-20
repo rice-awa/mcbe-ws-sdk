@@ -87,6 +87,11 @@ def test_minecraft_command_create_tellraw_builds_valid_command():
     assert "§aHello" in data["body"]["commandLine"]
 
 
+def test_tellraw_escapes_percent():
+    cmd = MinecraftCommand.create_tellraw("100% done")
+    assert "100%%" in cmd.body.commandLine
+
+
 def test_sanitize_tellraw_target_keeps_unicode_names_unquoted() -> None:
     """Non-ASCII Bedrock names must stay unquoted or the selector fails."""
     from mcbe_ws_sdk.protocol.minecraft import sanitize_tellraw_target

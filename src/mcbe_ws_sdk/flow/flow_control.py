@@ -287,7 +287,7 @@ class FlowControlMiddleware:
                 buffer = ch
                 if self._command_part_fits(buffer, max_length, command_line_for):
                     continue
-            raise ValueError(error_message)
+            raise FrameTooLargeError(error_message)
         if buffer:
             chunks.append(buffer)
         return chunks if chunks else [""]
@@ -312,13 +312,15 @@ class FlowControlMiddleware:
         try:
             data = json.loads(payload)
             command_line = data.get("body", {}).get("commandLine", "")
-        except (json.JSONDecodeError, AttributeError):
-            return
+        except (json.JSONDecodeError, AttributeError, TypeError) as exc:
+            raise ProtocolError(
+                "chunked payload is not a valid commandRequest JSON envelope"
+            ) from exc
 
         byte_len = len(command_line.encode("utf-8"))
         budget = self._byte_budget
         if byte_len > budget:
-            raise ValueError(
+            raise FrameTooLargeError(
                 f"chunked commandLine exceeds byte budget "
                 f"({byte_len} > {budget}); "
                 "this indicates a bug in _split_by_command_fit or wrapper overhead estimate"

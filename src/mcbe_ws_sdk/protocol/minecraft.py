@@ -52,7 +52,12 @@ def _sanitize_tellraw_target(target: str) -> str:
 
 
 def sanitize_tellraw_text(message: str) -> str:
-    return message.replace('"', '\\"').replace(":", "：").replace("%", "\\%")
+    """Escape tellraw text before embedding in the rawtext JSON value.
+
+    MCBE treats ``%`` as a format placeholder inside tellraw text; double it so
+    literal percents render. Quote/backslash escaping is left to ``json.dumps``.
+    """
+    return message.replace("%", "%%")
 
 
 class MinecraftHeader(BaseModel):
@@ -125,8 +130,9 @@ class MinecraftCommand(BaseModel):
         target: str = "@a",
     ) -> MinecraftCommand:
         """创建 tellraw 命令"""
+        safe_message = sanitize_tellraw_text(message)
         rawtext = json.dumps(
-            {"rawtext": [{"text": f"{color}{message}"}]},
+            {"rawtext": [{"text": f"{color}{safe_message}"}]},
             ensure_ascii=False,
             separators=(",", ":"),
         )
