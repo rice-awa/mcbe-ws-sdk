@@ -68,21 +68,24 @@ describe("shouldHandleScriptEvent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Source rejection
+// Source acceptance
 // ---------------------------------------------------------------------------
 
-describe("source rejection", () => {
-  it("accepts only Server source", async () => {
+describe("source acceptance", () => {
+  it("accepts Entity source (WS /wsserver commandRequest path)", async () => {
     const sender = vi.fn(async (_rid: string, _body: string) => {});
     await activateBridge(sender);
 
+    // Entity-originated events must still be processed: Bedrock tags
+    // /wsserver-delivered scriptevents as Entity, not Server.
     await handleBridgeScriptEvent({
       id: BRIDGE_MESSAGE_ID,
       message: JSON.stringify({ request_id: "r1", capability: "missing", payload: {} }),
       sourceType: "Entity",
     });
 
-    expect(sender).not.toHaveBeenCalled();
+    expect(sender).toHaveBeenCalledOnce();
+    expect(sender).toHaveBeenCalledWith("r1", expect.stringContaining("UNSUPPORTED_CAPABILITY"));
   });
 
   it("processes Server source events", async () => {
@@ -335,7 +338,7 @@ describe("response sender failure handling", () => {
       expect.stringContaining("r99"),
     );
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Error"),
+      expect.stringContaining("network down"),
     );
     consoleSpy.mockRestore();
   });
@@ -464,18 +467,17 @@ describe("default capability registry", () => {
 // ---------------------------------------------------------------------------
 
 describe("edge cases", () => {
-  it("handles non-Server sourceType in enqueueOrHandle", () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
+  it("queues non-Server sourceType when bridge is not active yet", () => {
     registerBridgeRouter();
 
-    // Emit an Entity event — should be silently dropped
+    // Entity events must be queued, not dropped — WS commandRequest arrives as Entity.
     system.afterEvents.scriptEventReceive.emit({
       id: BRIDGE_MESSAGE_ID,
       message: JSON.stringify({ request_id: "rx", capability: "x", payload: {} }),
       sourceType: "Entity",
     } as ScriptEventCommandMessageAfterEvent);
 
-    expect(_testingGetQueueSize()).toBe(0);
+    expect(_testingGetQueueSize()).toBe(1);
   });
 
   it("handles empty message in handleBridgeScriptEvent gracefully", async () => {

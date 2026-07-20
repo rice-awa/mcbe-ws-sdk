@@ -144,7 +144,24 @@ function schedule(event: RouterEvent): void {
 }
 
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
-  if (!shouldHandleScriptEvent(event.id) || event.sourceType !== "Server") return;
+  if (!shouldHandleScriptEvent(event.id)) return;
+
+  // IMPORTANT: /wsserver commandRequest-scriptevent does NOT always arrive as
+  // sourceType === "Server". In practice Bedrock may tag it as Entity (bound to
+  // the connecting player). The parent MCBE-AI-Agent-addon accepts any source;
+  // filtering Server-only causes silent drops → Python 5s bridge timeout even
+  // though statusMessage says "Script event ... has been sent".
+  //
+  // We still log non-Server sources so real player-typed /scriptevent spam is
+  // visible, but we do not drop them — the request carries a random request_id
+  // and only resolves a pending Python future if it matches.
+  if (event.sourceType !== "Server") {
+    console.warn(
+      `[bridge] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}, ` +
+        `messagePreview=${event.message.slice(0, 120)}`,
+    );
+  }
+
   const snapshot: RouterEvent = {
     id: event.id,
     message: event.message,
@@ -155,9 +172,17 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
       console.warn("[bridge] pre-ready queue full: code=BRIDGE_NOT_READY_QUEUE_FULL");
       return;
     }
+    console.warn(
+      `[bridge] queue pre-ready request (bridge not active yet): queueSize=${preReadyQueue.length + 1}, ` +
+        `sourceType=${event.sourceType}`,
+    );
     preReadyQueue.push(snapshot);
     return;
   }
+  console.log(
+    `[bridge] accept scriptevent: id=${event.id}, sourceType=${event.sourceType}, ` +
+      `messagePreview=${event.message.slice(0, 120)}`,
+  );
   schedule(snapshot);
 }
 
@@ -185,7 +210,8 @@ export function setCapabilityHandler(fn: CapabilityHandler): void {
 // ---------------------------------------------------------------------------
 
 export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void> {
-  if (event.sourceType !== "Server") return;
+  // Do not re-filter sourceType here — enqueueOrHandle already decided to accept.
+  // A second Server-only gate would drop WS-originated Entity events after queueing.
 
   const parsed = parseBridgeRequest(event.message);
   if (!parsed.ok) {
@@ -239,12 +265,23 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void>
 
   if (responseSender) {
     try {
-      await responseSender(request.request_id, JSON.stringify(resultPayload));
+      const body = JSON.stringify(resultPayload);
+      console.log(
+        `[bridge] send response: requestId=${request.request_id}, capability=${request.capability}, ` +
+          `bytes=${body.length}, preview=${body.slice(0, 160)}`,
+      );
+      await responseSender(request.request_id, body);
+      console.log(`[bridge] response sent: requestId=${request.request_id}`);
     } catch (error) {
       console.error(
-        `[bridge] response sender failed for requestId=${request.request_id}: ${(error as Error).constructor.name}`
+        `[bridge] response sender failed for requestId=${request.request_id}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  } else {
+    console.warn(
+      `[bridge] no responseSender for requestId=${request.request_id}, capability=${request.capability}`,
+    );
   }
 }
 

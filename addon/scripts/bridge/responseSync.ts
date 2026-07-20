@@ -194,10 +194,12 @@ export function registerResponseSyncHandler(): void {
   system.afterEvents.scriptEventReceive.subscribe((event) => {
     if (event.id !== AI_RESP_MESSAGE_ID) return;
 
-    // Server-only source; no Entity/tool-player fallback
+    // Same as bridge router: /wsserver-delivered scriptevents may arrive as
+    // Entity rather than Server. Dropping them silently breaks AI response sync.
     if (event.sourceType !== "Server") {
-      console.warn(`[respSync] ignoring non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
-      return;
+      console.warn(
+        `[respSync] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`,
+      );
     }
 
     let parsed: unknown;

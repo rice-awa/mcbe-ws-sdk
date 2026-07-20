@@ -81,6 +81,10 @@ class MinecraftProtocolHandler:
     presentation surface) and never imports anything host-specific.
     """
 
+    # Events the facade currently subscribes to on every new connection.
+    # Keep this list in sync with :meth:`create_subscribe_message`.
+    SUBSCRIBED_EVENTS: tuple[str, ...] = ("PlayerMessage",)
+
     def __init__(
         self,
         command_registry: CommandRegistry,

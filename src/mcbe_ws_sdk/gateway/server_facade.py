@@ -180,6 +180,11 @@ class McbeServerFacade:
             assert state.send_payload is not None
             await state.send_payload('{"Result":"true"}')
             await state.send_payload(self._handler.create_subscribe_message())
+            logger.info(
+                "event_subscribed",
+                connection_id=str(state.id),
+                events=list(self._handler.SUBSCRIBED_EVENTS),
+            )
             await self._hook.on_connected(state)
 
             async for raw in websocket:
@@ -289,6 +294,19 @@ class McbeServerFacade:
                     result.ui_message,
                 )
             return
+
+        # Diagnostic: RESP/UI_CHAT content with the wrong sender never matches the
+        # bridge filter above, so the request future times out with no clue. Surface
+        # the mismatch so hosts can see what Bedrock actually delivered.
+        if event.message.startswith("MCBEAI|"):
+            logger.warning(
+                "mcbeai_prefix_not_matched_as_bridge",
+                connection_id=str(state.id),
+                sender=event.sender,
+                message_type=event.type,
+                receiver=event.receiver,
+                message_preview=event.message[:160],
+            )
 
         # Branch B — player command/chat. ``parse_typed_command`` is informational
         # (the host decides what to do via the hook).

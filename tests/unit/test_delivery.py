@@ -64,8 +64,8 @@ async def _send_noop(payload: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_delivery_log_omits_raw_text_and_command() -> None:
-    """Info log contains metadata only; no player text or command line."""
+async def test_debug_delivery_log_omits_raw_text_and_command() -> None:
+    """Per-frame send log is DEBUG metadata only; no player text or command line."""
     secret = "private-player-text"
     delivery = McbeOutboundDelivery(
         connection_id=UUID(int=71),
@@ -75,11 +75,12 @@ async def test_info_delivery_log_omits_raw_text_and_command() -> None:
     )
     with structlog.testing.capture_logs() as logs:
         await delivery.send_tellraw(secret, color="", source="test", target="Alice")
-    info = next(item for item in logs if item["event"] == "websocket_response_sent")
-    assert info["request_id"]
-    assert info["command_type"] == "tellraw"
-    assert info["command_line_length"] > 0
-    assert info["command_line_bytes"] >= info["command_line_length"]
+    debug = next(item for item in logs if item["event"] == "websocket_response_sent")
+    assert debug["log_level"] == "debug"
+    assert debug["request_id"]
+    assert debug["command_type"] == "tellraw"
+    assert debug["command_line_length"] > 0
+    assert debug["command_line_bytes"] >= debug["command_line_length"]
     assert all(secret not in str(item) for item in logs)
     assert all("tellraw Alice" not in str(item) for item in logs)
 

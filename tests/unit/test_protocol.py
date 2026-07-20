@@ -87,6 +87,23 @@ def test_minecraft_command_create_tellraw_builds_valid_command():
     assert "§aHello" in data["body"]["commandLine"]
 
 
+def test_sanitize_tellraw_target_keeps_unicode_names_unquoted() -> None:
+    """Non-ASCII Bedrock names must stay unquoted or the selector fails."""
+    from mcbe_ws_sdk.protocol.minecraft import sanitize_tellraw_target
+
+    assert sanitize_tellraw_target("玩家") == "玩家"
+    assert sanitize_tellraw_target("Steve") == "Steve"
+    assert sanitize_tellraw_target("@a") == "@a"
+    assert sanitize_tellraw_target("@p[r=3]") == "@p[r=3]"
+    # Whitespace / quotes still require quoting for command-line safety.
+    assert sanitize_tellraw_target("Player Name") == '"Player Name"'
+    assert sanitize_tellraw_target('A"B') == '"A\\"B"'
+
+    cmd = MinecraftCommand.create_tellraw("hi", color="", target="玩家")
+    assert cmd.body.commandLine.startswith('tellraw 玩家 ')
+    assert '"玩家"' not in cmd.body.commandLine
+
+
 def test_wire_models_preserve_unknown_header_and_body_fields() -> None:
     frame = MinecraftMessage.model_validate(
         {

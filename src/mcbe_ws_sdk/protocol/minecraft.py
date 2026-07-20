@@ -9,18 +9,29 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_TELLRAW_TARGET_UNQUOTED_RE = re.compile(
-    r"^(?:@[a-z](?:\[[A-Za-z0-9_.,=!:-]*\])?|[A-Za-z0-9_.-]+)$"
-)
+# Selectors stay unquoted: @a, @p[r=3], @e[type=player,c=1], ...
+_TELLRAW_SELECTOR_RE = re.compile(r"^@[a-z](?:\[[A-Za-z0-9_.,=!:-]*\])?$")
+# Characters that force a player name to be double-quoted on the command line.
+# Anything else — including non-ASCII names like "玩家" — stays unquoted.
+# Quoting Chinese / multi-byte names makes Bedrock report
+# "没有与选择器匹配的目标" even when the player is online.
+_TELLRAW_TARGET_QUOTE_CHARS = frozenset(' \t"\\')
 _SCRIPT_EVENT_MESSAGE_ID_RE = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
 
 
 def sanitize_tellraw_target(target: str) -> str:
-    """Return a command-safe tellraw target without allowing command injection."""
+    """Return a command-safe tellraw target without allowing command injection.
+
+    Player names are left unquoted whenever they contain no whitespace, quotes,
+    or backslashes. This is required for non-ASCII Bedrock names (e.g. ``玩家``):
+    wrapping them in double quotes makes the selector fail to match.
+    """
     target = target.strip() or "@a"
     if any(ord(char) < 0x20 or char == "\x7f" for char in target):
         raise ValueError("tellraw target contains control characters")
-    if _TELLRAW_TARGET_UNQUOTED_RE.fullmatch(target):
+    if _TELLRAW_SELECTOR_RE.fullmatch(target):
+        return target
+    if not any(char in _TELLRAW_TARGET_QUOTE_CHARS for char in target):
         return target
     escaped = target.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'

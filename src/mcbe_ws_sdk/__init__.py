@@ -39,6 +39,7 @@ from mcbe_ws_sdk.errors import (
     ProtocolError,
 )
 from mcbe_ws_sdk.flow import FlowControlMiddleware, FlowControlSettings
+from mcbe_ws_sdk.logging import configure_logging
 from mcbe_ws_sdk.gateway import (
     ConnectionHook,
     ConnectionManager,
@@ -118,5 +119,6 @@ __all__ = (
     "SystemNotification",
     "WebsocketTransportConfig",
     "WsEventType",
+    "configure_logging",
     "encode_legacy_response_commands",
 )

@@ -149,7 +149,7 @@ class ConnectionManager:
         queue = state.response_queue
         if queue is None:
             return
-        logger.info("response_sender_started", connection_id=str(state.id))
+        logger.debug("response_sender_started", connection_id=str(state.id))
         try:
             while state.id in self._connections:
                 try:
@@ -174,8 +174,8 @@ class ConnectionManager:
                         kind=envelope.kind.value if envelope else None,
                     )
         except asyncio.CancelledError:
-            logger.info("response_sender_cancelled", connection_id=str(state.id))
+            logger.debug("response_sender_cancelled", connection_id=str(state.id))
             raise
         except Exception:
             logger.exception("response_sender_error", connection_id=str(state.id))
-        logger.info("response_sender_stopped", connection_id=str(state.id))
+        logger.debug("response_sender_stopped", connection_id=str(state.id))

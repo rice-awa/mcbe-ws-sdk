@@ -54,13 +54,22 @@ export async function sendBridgeResponseChunks(requestId: string, payload: strin
   const toolPlayer = world.getAllPlayers().find((player) => player.name === TOOL_PLAYER_NAME);
 
   if (!toolPlayer) {
+    log(`sendBridgeResponseChunks: tool player missing for requestId=${requestId}`);
     throw new Error("Tool player is not available");
   }
 
   const chunks = chunkBridgePayload(requestId, payload);
-  for (const chunk of chunks) {
+  log(
+    `sendBridgeResponseChunks: requestId=${requestId}, chunks=${chunks.length}, payloadBytes=${payload.length}`,
+  );
+  for (const [index, chunk] of chunks.entries()) {
+    log(
+      `sendBridgeResponseChunks: tell chunk ${index + 1}/${chunks.length} ` +
+        `preview=${chunk.slice(0, 120)}`,
+    );
     await toolPlayer.runCommand(`tell @s ${chunk}`);
   }
+  log(`sendBridgeResponseChunks: done requestId=${requestId}`);
 }
 
 export function initializeToolPlayer(): void {

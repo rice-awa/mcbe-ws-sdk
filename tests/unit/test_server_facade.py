@@ -405,6 +405,7 @@ async def test_connection_sends_init_and_subscribe_before_hook() -> None:
 
     assert order[0] == '{"Result":"true"}'
     assert json.loads(order[1])["header"]["messagePurpose"] == "subscribe"
+    assert json.loads(order[1])["body"]["eventName"] == "PlayerMessage"
     assert order[2] == "hook"
 
 

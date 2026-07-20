@@ -99,7 +99,7 @@ class DefaultResponseSink:
     async def on_system_notification(
         self, state: ConnectionState, message: SystemNotification
     ) -> None:
-        logger.info(
+        logger.debug(
             "sink_system_notification",
             connection_id=str(state.id),
             message_id=str(message.id),

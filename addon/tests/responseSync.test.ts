@@ -294,11 +294,11 @@ describe("ResponseAssembler", () => {
 });
 
 // ---------------------------------------------------------------------------
-// registerResponseSyncHandler — source rejection
+// registerResponseSyncHandler — source acceptance
 // ---------------------------------------------------------------------------
 
-describe("registerResponseSyncHandler source rejection", () => {
-  it("rejects non-Server source", () => {
+describe("registerResponseSyncHandler source acceptance", () => {
+  it("accepts Entity source (WS /wsserver commandRequest path)", () => {
     const handler = vi.fn();
     setAiRespHandler(handler);
     registerResponseSyncHandler();
@@ -307,7 +307,8 @@ describe("registerResponseSyncHandler source rejection", () => {
       entityEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" })),
     );
 
-    expect(handler).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith("P", "user", "hello");
   });
 
   it("processes Server source events", () => {

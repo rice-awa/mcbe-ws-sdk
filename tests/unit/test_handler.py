@@ -31,6 +31,7 @@ def test_create_subscribe_message_is_player_message() -> None:
     payload = MinecraftProtocolHandler.create_subscribe_message()
     assert '"messagePurpose":"subscribe"' in payload.replace(" ", "")
     assert '"eventName":"PlayerMessage"' in payload.replace(" ", "")
+    assert MinecraftProtocolHandler.SUBSCRIBED_EVENTS == ("PlayerMessage",)
 
 
 def test_parse_player_message_happy_path() -> None:

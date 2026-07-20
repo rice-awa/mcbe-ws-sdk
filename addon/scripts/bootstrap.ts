@@ -23,7 +23,12 @@ export function initializeEarly(): void {
 
 /**
  * 世界加载后初始化：需要 world 状态的代码在此回调内执行。
- * 订阅 worldLoad 事件 + system.run 兜底，覆盖首次启动和 /reload 两种场景。
+ * 双重策略：
+ * 1. 订阅 worldLoad 事件 — 覆盖首次启动场景（世界尚未加载）
+ * 2. system.run 兜底 — 覆盖 /reload 场景（世界已加载，worldLoad 不再触发）
+ *
+ * onReady 仅在首次成功后标记完成；失败时保留重试机会（例如 system.run 过早、
+ * worldLoad 再触发一次）。initializeToolPlayer / activateBridge 自身也有幂等保护。
  *
  * 用法：在你的 addon main 入口中，`initializeEarly()` 之后调用 `initializeAfterWorldLoad()`。
  * 你的宿主代码在此处注册能力处理器和 AI 响应处理器。
@@ -31,18 +36,44 @@ export function initializeEarly(): void {
 export function initializeAfterWorldLoad(onReady?: () => void | Promise<void>): void {
   log("initializeAfterWorldLoad: 等待世界就绪...");
 
-  const init = async (): Promise<void> => {
+  let completed = false;
+  let inFlight = false;
+
+  const init = async (source: string): Promise<void> => {
+    if (completed) {
+      log(`initializeAfterWorldLoad: 已完成，忽略重复触发 (${source})`);
+      return;
+    }
+    if (inFlight) {
+      log(`initializeAfterWorldLoad: 初始化进行中，忽略 (${source})`);
+      return;
+    }
+
+    inFlight = true;
+    log(`initializeAfterWorldLoad: 世界就绪 (${source})`);
     try {
       await onReady?.();
+      completed = true;
+      log(`initializeAfterWorldLoad: onReady 完成 (${source})`);
     } catch (error) {
-      console.warn("[bridge] initialization failed", error);
+      // 不置 completed —— 留给另一条路径（worldLoad / 后续重试）再试
+      console.warn(
+        `[bridge] initialization failed (${source})`,
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      inFlight = false;
     }
   };
 
   world.afterEvents.worldLoad.subscribe(() => {
-    void init();
+    log("worldLoad 事件触发");
+    void init("worldLoad");
   });
+
+  // /reload 兜底：世界已加载时，system.run 在下一个 tick 尝试初始化
   system.run(() => {
-    void init();
+    log("system.run 兜底: 尝试立即初始化...");
+    void init("system.run");
   });
 }

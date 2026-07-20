@@ -88,12 +88,36 @@ class AddonBridgeService:
             payload=payload,
             profile=self._profile,
         )
+        logger.info(
+            "bridge_request_outbound",
+            connection_id=str(connection_id),
+            request_id=request.request_id,
+            capability=capability,
+            payload=payload,
+            command=command,
+            timeout_seconds=self._timeout_seconds,
+        )
         try:
             await send_command(command)
             try:
-                return await asyncio.wait_for(request.future, self._timeout_seconds)
+                result = await asyncio.wait_for(request.future, self._timeout_seconds)
             except TimeoutError as exc:
+                logger.warning(
+                    "bridge_request_timeout",
+                    connection_id=str(connection_id),
+                    request_id=request.request_id,
+                    capability=capability,
+                    timeout_seconds=self._timeout_seconds,
+                )
                 raise BridgeTimeoutError(request.request_id) from exc
+            logger.info(
+                "bridge_request_resolved",
+                connection_id=str(connection_id),
+                request_id=request.request_id,
+                capability=capability,
+                result=result,
+            )
+            return result
         finally:
             session.cancel_request(request.request_id)
 
@@ -116,6 +140,14 @@ class AddonBridgeService:
     ) -> AddonMessageResult:
         """Route a routed message from the simulated player."""
         if self.is_bridge_chat_message(sender, message):
+            # Log every RESP chunk at INFO: these never reach the host hook because
+            # the facade short-circuits bridge frames before on_player_message.
+            logger.info(
+                "bridge_chat_chunk_raw",
+                connection_id=str(connection_id),
+                sender=sender,
+                message=message,
+            )
             session = self._sessions.get(connection_id)
             if session is None:
                 logger.warning(
@@ -128,6 +160,12 @@ class AddonBridgeService:
             return AddonMessageResult(handled=True, bridge_chunk=bridge_chunk)
 
         if self.is_ui_chat_message(sender, message):
+            logger.info(
+                "ui_chat_chunk_raw",
+                connection_id=str(connection_id),
+                sender=sender,
+                message=message,
+            )
             session = self._session_for(connection_id)
 
             ui_chunk, ui_message = session.handle_ui_chat_chunk(message)

@@ -53,5 +53,6 @@ def test_public_api_snapshot() -> None:
         "SystemNotification",
         "WebsocketTransportConfig",
         "WsEventType",
+        "configure_logging",
         "encode_legacy_response_commands",
     }

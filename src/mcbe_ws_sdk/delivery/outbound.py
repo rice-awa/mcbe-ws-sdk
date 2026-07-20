@@ -126,19 +126,24 @@ class McbeOutboundDelivery:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-        ws_raw_logger.info(
+        # Per-frame send metadata is high-volume at DEBUG. When the host opts into
+        # log_raw_payloads, promote both the summary and the full payload to INFO so
+        # a normal console run (examples default to INFO) can diagnose bridge timeouts.
+        log_method = ws_raw_logger.info if self._log_raw_payloads else ws_raw_logger.debug
+        log_method(
             "websocket_response_sent",
             connection_id=str(self.connection_id),
             source=source,
             request_id=request_id,
             message_purpose=message_purpose,
             command_type=command_line.partition(" ")[0] if command_line else "",
+            command_line=command_line if self._log_raw_payloads else None,
             command_line_length=len(command_line),
             command_line_bytes=len(command_line.encode("utf-8")),
         )
 
         if self._log_raw_payloads:
-            ws_raw_logger.debug("websocket_response_payload", payload=payload)
+            log_method("websocket_response_payload", payload=payload)
 
 
 def _request_id_from_payload(payload: str) -> str:
