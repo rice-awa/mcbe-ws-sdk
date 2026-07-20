@@ -1,4 +1,40 @@
-const COMMAND_DENYLIST = ["stop", "reload", "kick", "op", "deop"];
+const COMMAND_DENYLIST = [
+  "stop",
+  "reload",
+  "kick",
+  "op",
+  "deop",
+  "execute",
+  "script",
+  "gamemode",
+  "setblock",
+  "fill",
+  "clone",
+  "function",
+  "permission",
+  "whitelist",
+  "allowlist",
+  "ban",
+  "ban-ip",
+  "pardon",
+  "pardon-ip",
+  "save",
+  "save-all",
+  "save-off",
+  "save-on",
+  "setmaxplayers",
+  "alwaysday",
+  "daylock",
+  "difficulty",
+  "gamerule",
+  "tickingarea",
+  "structure",
+  "camera",
+  "inputpermission",
+  "transfer",
+  "connect",
+  "changesetting",
+];
 
 export function extractCommandEntrypoints(command: string): string[] {
   const entrypoints: string[] = [];
@@ -29,4 +65,31 @@ export function extractCommandEntrypoints(command: string): string[] {
 export function findDeniedCommand(command: string): string | undefined {
   const entrypoints = extractCommandEntrypoints(command);
   return entrypoints.find((entrypoint) => COMMAND_DENYLIST.includes(entrypoint));
+}
+
+/**
+ * Check whether a command is allowed under the given policy.
+ *
+ * - When `allowlist` is a non-null array: every entrypoint must be in the
+ *   allowlist (case-insensitive). Denylist still wins if both would apply.
+ * - When `allowlist` is `null`: behave like denylist-only (`findDeniedCommand`).
+ *
+ * Returns the first disallowed entrypoint name, or `undefined` if allowed.
+ */
+export function findDisallowedCommand(
+  command: string,
+  allowlist: string[] | null,
+): string | undefined {
+  const denied = findDeniedCommand(command);
+  if (denied !== undefined) {
+    return denied;
+  }
+
+  if (allowlist === null) {
+    return undefined;
+  }
+
+  const allowed = new Set(allowlist.map((entry) => entry.toLowerCase()));
+  const entrypoints = extractCommandEntrypoints(command);
+  return entrypoints.find((entrypoint) => !allowed.has(entrypoint));
 }

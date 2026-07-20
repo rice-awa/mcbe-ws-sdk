@@ -77,6 +77,18 @@ Addon 内置一套开箱即用的能力注册表（`scripts/bridge/capabilities/
 > 来源上下文（source-player），而实体查询需要该上下文来限定范围；一旦协议支持
 > 玩家来源的 scriptevent，该能力即会补充进来。
 
+## 信任边界
+
+桥接层**不是**安全边界。宿主应用必须自行认证 / 授权谁可以调用能力 ——
+addon 仅在世界命令路径上提供防御性命令过滤。
+
+- `run_world_command` 故意**不**出现在 Python 默认注册表中（也不在 addon
+  默认能力注册表中）。需要该能力的宿主必须显式注册 handler。
+- 注册后，默认 allowlist 仅为 `["say"]`。危险命令 denylist
+  （`execute`、`script`、`op`、`setblock`、`fill` 等）是第二道防线，
+  即便宿主放宽 allowlist 仍然生效。
+
 ## 许可证
+
 
 MIT

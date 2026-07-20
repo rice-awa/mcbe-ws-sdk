@@ -80,6 +80,20 @@ built-in capabilities and still looked up by `router.ts` by capability name.
 
 > Note: `find_entities` is not yet bundled. The current protocol's `scriptevent` does not carry the source-player context, while an entity query needs that context to scope the search; once the protocol supports player-sourced scriptevents, this capability will be added.
 
+## Trust boundary
+
+The bridge is **not** a security boundary. The host application must authenticate
+and authorize who can call capabilities — the addon only enforces a defensive
+command filter on the world-command path.
+
+- `run_world_command` is intentionally **not** in the default Python registry
+  (and not in the addon's default capability registry either). Hosts that need
+  it must register the handler explicitly.
+- When registered, the default allowlist is `["say"]` only. A denylist of
+  dangerous commands (`execute`, `script`, `op`, `setblock`, `fill`, …) is a
+  second line of defense and still applies even if a host widens the allowlist.
+
 ## License
+
 
 MIT

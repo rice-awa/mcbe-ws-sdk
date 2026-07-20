@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultCapabilityRegistry, handleRunWorldCommand } from "../scripts/bridge/capabilities";
+import { findDeniedCommand, findDisallowedCommand } from "../scripts/bridge/capabilities/commandSafety";
 
 describe("default capability registry", () => {
   it("does not expose run_world_command by default", () => {
@@ -25,5 +26,13 @@ describe("handleRunWorldCommand export", () => {
   it("is still exported for explicit host registration", () => {
     expect(handleRunWorldCommand).toBeDefined();
     expect(typeof handleRunWorldCommand).toBe("function");
+  });
+});
+
+describe("command safety", () => {
+  it("denies execute and respects allowlist", () => {
+    expect(findDeniedCommand("execute as @a run say x")).toBe("execute");
+    expect(findDisallowedCommand("setblock ~ ~ ~ stone", ["say"])).toBe("setblock");
+    expect(findDisallowedCommand("say hi", ["say"])).toBeUndefined();
   });
 });

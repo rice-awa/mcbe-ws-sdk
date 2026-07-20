@@ -1,8 +1,14 @@
 import { world } from "@minecraft/server";
 
-import { findDeniedCommand } from "./commandSafety";
+import { findDisallowedCommand } from "./commandSafety";
 
-export function handleRunWorldCommand(payload: { command?: string }): {
+/** Default allowlist: only `say` is permitted through the bridge. */
+const DEFAULT_ALLOWLIST = ["say"];
+
+export function handleRunWorldCommand(
+  payload: { command?: string },
+  allowlist: string[] | null = DEFAULT_ALLOWLIST,
+): {
   ok: boolean;
   payload: { output: string; successCount: number };
 } {
@@ -14,11 +20,11 @@ export function handleRunWorldCommand(payload: { command?: string }): {
     };
   }
 
-  const deniedCommand = findDeniedCommand(command);
-  if (deniedCommand) {
+  const disallowedCommand = findDisallowedCommand(command, allowlist);
+  if (disallowedCommand) {
     return {
       ok: false,
-      payload: { output: `命令 ${deniedCommand} 不允许通过 addon 执行`, successCount: 0 },
+      payload: { output: `命令 ${disallowedCommand} 不允许通过 addon 执行`, successCount: 0 },
     };
   }
 
