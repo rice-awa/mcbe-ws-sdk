@@ -39,7 +39,6 @@ from mcbe_ws_sdk.errors import (
     ProtocolError,
 )
 from mcbe_ws_sdk.flow import FlowControlMiddleware, FlowControlSettings
-from mcbe_ws_sdk.logging import configure_logging
 from mcbe_ws_sdk.gateway import (
     ConnectionHook,
     ConnectionManager,
@@ -60,9 +59,10 @@ from mcbe_ws_sdk.gateway import (
     WebsocketTransportConfig,
     WsEventType,
 )
-from mcbe_ws_sdk.profiles import LEGACY_MCBEAI_V1, AddonBridgeProfile, LegacyMcbeAiV1Profile
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_legacy_response_commands
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.delivery import LegacyMcbeAiV1Delivery
+from mcbe_ws_sdk.logging import configure_logging
+from mcbe_ws_sdk.profiles import MCBEWS_V1, AddonBridgeProfile, McbewsV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_text_response_commands
+from mcbe_ws_sdk.profiles.mcbews_v1.delivery import McbewsV1Delivery
 from mcbe_ws_sdk.protocol import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -98,12 +98,12 @@ __all__ = (
     "FlowControlSettings",
     "FrameTooLargeError",
     "GatewaySettings",
-    "LEGACY_MCBEAI_V1",
-    "LegacyMcbeAiV1Delivery",
-    "LegacyMcbeAiV1Profile",
+    "MCBEWS_V1",
     "McbeOutboundDelivery",
     "McbeServerFacade",
     "McbeWsSdkError",
+    "McbewsV1Delivery",
+    "McbewsV1Profile",
     "MessageSurfaceConfig",
     "MinecraftCommandResponse",
     "MinecraftErrorFrame",
@@ -120,5 +120,5 @@ __all__ = (
     "WebsocketTransportConfig",
     "WsEventType",
     "configure_logging",
-    "encode_legacy_response_commands",
+    "encode_text_response_commands",
 )

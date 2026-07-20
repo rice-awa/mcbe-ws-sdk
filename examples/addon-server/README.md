@@ -109,7 +109,7 @@ Rebuild the addon after changing the registry. The denylist in
 player chat
   → AddonDemoHook
   → AddonBridgeService.create_client(...).request(capability, payload)
-  → McbeOutboundDelivery.send_raw_command("scriptevent mcbeai:bridge_request ...")
+  → McbeOutboundDelivery.send_raw_command("scriptevent mcbews:bridge_req ...")
   → addon router handles capability
   → bridge tool player replies via chat chunks
   → facade routes chunks into AddonBridgeService

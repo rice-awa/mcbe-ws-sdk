@@ -19,7 +19,7 @@ import {
   type ResponseSender,
 } from "../scripts/bridge/router";
 import { defaultCapabilityRegistry } from "../scripts/bridge/capabilities";
-import { BRIDGE_MESSAGE_ID } from "../scripts/bridge/constants";
+import { BRIDGE_REQUEST_MESSAGE_ID } from "../scripts/bridge/constants";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -27,7 +27,7 @@ import { BRIDGE_MESSAGE_ID } from "../scripts/bridge/constants";
 
 const vectors = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL("../../tests/fixtures/legacy_mcbeai_v1_vectors.json", import.meta.url)),
+    fileURLToPath(new URL("../../tests/fixtures/mcbews_v1_vectors.json", import.meta.url)),
     "utf-8",
   ),
 ) as { bridge_requests: Array<{ name: string; version: number; message: string }> };
@@ -38,7 +38,7 @@ const vectors = JSON.parse(
 
 function serverEvent(message: string) {
   return {
-    id: BRIDGE_MESSAGE_ID,
+    id: BRIDGE_REQUEST_MESSAGE_ID,
     message,
     sourceType: "Server" as const,
   };
@@ -59,7 +59,7 @@ beforeEach(() => {
 
 describe("shouldHandleScriptEvent", () => {
   it("returns true for bridge message ID", () => {
-    expect(shouldHandleScriptEvent(BRIDGE_MESSAGE_ID)).toBe(true);
+    expect(shouldHandleScriptEvent(BRIDGE_REQUEST_MESSAGE_ID)).toBe(true);
   });
 
   it("returns false for other message IDs", () => {
@@ -79,7 +79,7 @@ describe("source acceptance", () => {
     // Entity-originated events must still be processed: Bedrock tags
     // /wsserver-delivered scriptevents as Entity, not Server.
     await handleBridgeScriptEvent({
-      id: BRIDGE_MESSAGE_ID,
+      id: BRIDGE_REQUEST_MESSAGE_ID,
       message: JSON.stringify({ request_id: "r1", capability: "missing", payload: {} }),
       sourceType: "Entity",
     });
@@ -258,7 +258,7 @@ describe("pre-ready queue", () => {
     registerBridgeRouter();
 
     system.afterEvents.scriptEventReceive.emit({
-      id: BRIDGE_MESSAGE_ID,
+      id: BRIDGE_REQUEST_MESSAGE_ID,
       message: JSON.stringify({ request_id: "r1", capability: "get_player_snapshot", payload: {} }),
       sourceType: "Server",
     } as ScriptEventCommandMessageAfterEvent);
@@ -278,7 +278,7 @@ describe("pre-ready queue", () => {
     // Enqueue three events before activation
     for (let i = 1; i <= 3; i++) {
       system.afterEvents.scriptEventReceive.emit({
-        id: BRIDGE_MESSAGE_ID,
+        id: BRIDGE_REQUEST_MESSAGE_ID,
         message: JSON.stringify({ request_id: `r${i}`, capability: "get_player_snapshot", payload: {} }),
         sourceType: "Server",
       } as ScriptEventCommandMessageAfterEvent);
@@ -297,7 +297,7 @@ describe("pre-ready queue", () => {
 
     for (let i = 0; i < MAX_PRE_READY_REQUESTS; i++) {
       system.afterEvents.scriptEventReceive.emit({
-        id: BRIDGE_MESSAGE_ID,
+        id: BRIDGE_REQUEST_MESSAGE_ID,
         message: JSON.stringify({ request_id: `r${i}`, capability: "x", payload: {} }),
         sourceType: "Server",
       } as ScriptEventCommandMessageAfterEvent);
@@ -307,7 +307,7 @@ describe("pre-ready queue", () => {
 
     // One more should be silently dropped
     system.afterEvents.scriptEventReceive.emit({
-      id: BRIDGE_MESSAGE_ID,
+      id: BRIDGE_REQUEST_MESSAGE_ID,
       message: JSON.stringify({ request_id: "overflow", capability: "x", payload: {} }),
       sourceType: "Server",
     } as ScriptEventCommandMessageAfterEvent);
@@ -472,7 +472,7 @@ describe("edge cases", () => {
 
     // Entity events must be queued, not dropped — WS commandRequest arrives as Entity.
     system.afterEvents.scriptEventReceive.emit({
-      id: BRIDGE_MESSAGE_ID,
+      id: BRIDGE_REQUEST_MESSAGE_ID,
       message: JSON.stringify({ request_id: "rx", capability: "x", payload: {} }),
       sourceType: "Entity",
     } as ScriptEventCommandMessageAfterEvent);

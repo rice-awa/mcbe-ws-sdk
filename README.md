@@ -12,7 +12,7 @@ owns a message broker or an LLM worker — those concerns are the host's.
 **One-way capability model:** the SDK sends bridge requests from the Python host
 to the Minecraft addon and receives responses. There is no inbound
 capability-registry dispatch — the addon side owns all capability handling. The
-`LegacyMcbeAiV1Profile` is the sole built-in protocol profile.
+`McbewsV1Profile` (`MCBEWS_V1`) is the sole built-in protocol profile.
 
 ## Install
 
@@ -83,8 +83,9 @@ A host implements / injects these classes:
   system notifications.
 - `AddonBridgeService` + `AddonBridgeClient`: the ScriptEvent bridge carrying
   structured capability requests/responses (no global singleton).
-- `LegacyMcbeAiV1Profile` (and module-level `LEGACY_MCBEAI_V1`): the one built-in
-  protocol profile for legacy mcbeai v1 addon interop.
+- `McbewsV1Profile` (and module-level `MCBEWS_V1`): the one built-in
+  protocol profile for mcbews v1 addon interop (`mcbews:bridge_req` /
+  `mcbews:text_resp`).
 - `CommandRegistry`: the Minecraft command surface the protocol handler renders
   (empty by default).
 - `ConnectionManager`: owns per-connection state and the player session map.

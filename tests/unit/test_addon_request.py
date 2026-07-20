@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_bridge_request
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_bridge_request
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
 
 
 def test_encode_bridge_request_uses_bridge_message_id_and_json_body() -> None:
@@ -15,7 +15,7 @@ def test_encode_bridge_request_uses_bridge_message_id_and_json_body() -> None:
         {"player": "Steve"},
     )
 
-    prefix = "scriptevent mcbeai:bridge_request "
+    prefix = "scriptevent mcbews:bridge_req "
     assert command.startswith(prefix)
     assert json.loads(command[len(prefix):]) == {
         "v": 2,
@@ -30,7 +30,7 @@ def test_encode_bridge_request_uses_custom_protocol_message_id() -> None:
         "r2",
         "ping",
         {},
-        profile=LegacyMcbeAiV1Profile(bridge_request_message_id="custom:bridge"),
+        profile=McbewsV1Profile(bridge_request_message_id="custom:bridge"),
     )
 
     assert command.startswith("scriptevent custom:bridge ")

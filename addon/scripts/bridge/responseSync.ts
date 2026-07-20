@@ -1,6 +1,6 @@
 import { system } from "@minecraft/server";
 
-import { AI_RESP_MESSAGE_ID } from "./constants";
+import { TEXT_RESP_MESSAGE_ID } from "./constants";
 import { utf8ByteLength } from "./chunking";
 
 // ── Limits ──
@@ -32,7 +32,7 @@ type BufferState = {
 
 // ── Public types ──
 
-export type LegacyResponseChunk = {
+export type TextResponseChunk = {
   id: string;
   i: number;
   n: number;
@@ -48,11 +48,11 @@ export type ReassembledResponse = {
 };
 
 /** 重组完成后的回调签名：(playerName, role, fullText) */
-export type AiRespHandler = (playerName: string, role: string, text: string) => void;
+export type TextRespHandler = (playerName: string, role: string, text: string) => void;
 
 // ── Chunk parser ──
 
-export function parseLegacyResponseChunk(value: unknown): LegacyResponseChunk | null {
+export function parseTextResponseChunk(value: unknown): TextResponseChunk | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   if (
@@ -94,7 +94,7 @@ export class ResponseAssembler {
     }
   }
 
-  push(chunk: LegacyResponseChunk): ReassembledResponse | null {
+  push(chunk: TextResponseChunk): ReassembledResponse | null {
     this.pruneExpired();
 
     // Validate chunk metadata
@@ -177,25 +177,25 @@ export class ResponseAssembler {
 
 // ── Module state ──
 
-let handler: AiRespHandler | null = null;
+let handler: TextRespHandler | null = null;
 let isRegistered = false;
 const assembler = new ResponseAssembler();
 
-/** 注册一个回调，在 mcbeai:ai_resp 报文重组完成后调用。 */
-export function setAiRespHandler(fn: AiRespHandler): void {
+/** 注册一个回调，在 mcbews:text_resp 报文重组完成后调用。 */
+export function setTextRespHandler(fn: TextRespHandler): void {
   handler = fn;
 }
 
-/** 注册 scriptEventReceive 订阅，监听 mcbeai:ai_resp 分片。 */
+/** 注册 scriptEventReceive 订阅，监听 mcbews:text_resp 分片。 */
 export function registerResponseSyncHandler(): void {
   if (isRegistered) return;
   isRegistered = true;
 
   system.afterEvents.scriptEventReceive.subscribe((event) => {
-    if (event.id !== AI_RESP_MESSAGE_ID) return;
+    if (event.id !== TEXT_RESP_MESSAGE_ID) return;
 
     // Same as bridge router: /wsserver-delivered scriptevents may arrive as
-    // Entity rather than Server. Dropping them silently breaks AI response sync.
+    // Entity rather than Server. Dropping them silently breaks text response sync.
     if (event.sourceType !== "Server") {
       console.warn(`[respSync] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
     }
@@ -207,7 +207,7 @@ export function registerResponseSyncHandler(): void {
       return;
     }
 
-    const chunk = parseLegacyResponseChunk(parsed);
+    const chunk = parseTextResponseChunk(parsed);
     if (!chunk) return;
 
     const result = assembler.push(chunk);

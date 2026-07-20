@@ -39,10 +39,10 @@
 - addon 桥数据模型：`AddonBridgeRequest`、`BridgeChatChunk`、`UiChatChunk`
 
 ### 流控层（flow）
-- `FlowControlMiddleware` 4 类分片：tellraw / scriptevent / ai_resp / raw（后者超长抛 ValueError）
+- `FlowControlMiddleware` 4 类分片：tellraw / scriptevent / text_resp / raw（后者超长抛 ValueError）
 - 字节预算 461B（实测 462B 失败），真实 UTF-8 字节反推（非估算）
 - 句子语义优先分片（`_SENTENCE_DELIMITER_RE`）+ 字符/字节兜底
-- 分片节流延迟（tellraw 0.05 / scriptevent 0.05 / ai_resp 0.15 / ai_resp_prelude 0.5）
+- 分片节流延迟（tellraw 0.05 / scriptevent 0.05 / text_resp 0.15；文本响应 prelude 0.5 由 profile 控制）
 
 ### 命令层（command）
 - `CommandRegistry` 聊天→`ParsedCommand`，整词匹配（前缀后必须空白或结束），主前缀+别名，别名运行时增删
@@ -65,10 +65,10 @@
 - `AddonBridgeService` / `AddonBridgeClient`：请求-响应生命周期（**无全局单例**）
 
 ### 协议 profile
-- `LegacyMcbeAiV1Profile` — 唯一内置协议 profile，支持 legacy mcbeai v1 addon 互操作
-- `LEGACY_MCBEAI_V1` — 模块级实例
-- `encode_legacy_response_commands()` — 将 AI 响应编码为命令列表
-- `LegacyMcbeAiV1Delivery` — profile 特定的投递实现
+- `McbewsV1Profile` — 唯一内置协议 profile，支持 mcbews v1 addon 互操作
+- `MCBEWS_V1` — 模块级实例
+- `encode_text_response_commands()` — 将文本响应编码为 `mcbews:text_resp` 命令列表
+- `McbewsV1Delivery` — profile 特定的投递实现
 
 ## 5. 非功能需求
 

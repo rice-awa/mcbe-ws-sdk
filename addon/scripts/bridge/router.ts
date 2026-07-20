@@ -1,7 +1,7 @@
 import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import { system } from "@minecraft/server";
 
-import { BRIDGE_MESSAGE_ID } from "./constants";
+import { BRIDGE_REQUEST_MESSAGE_ID } from "./constants";
 import { defaultCapabilityRegistry } from "./capabilities";
 
 // ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ function logUnexpectedRouterFailure(error: unknown): void {
 // ---------------------------------------------------------------------------
 
 export function shouldHandleScriptEvent(messageId: string): boolean {
-  return messageId === BRIDGE_MESSAGE_ID;
+  return messageId === BRIDGE_REQUEST_MESSAGE_ID;
 }
 
 // ---------------------------------------------------------------------------

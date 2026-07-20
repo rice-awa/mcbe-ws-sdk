@@ -8,7 +8,7 @@ from types import MappingProxyType
 
 from mcbe_ws_sdk.errors import ConfigurationError
 from mcbe_ws_sdk.profiles import AddonBridgeProfile
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
 
 
 def _require_positive_int(value: object, field_name: str) -> None:
@@ -36,11 +36,11 @@ class FlowControlSettings:
         default_factory=lambda: {
             "tellraw": 0.05,
             "scriptevent": 0.05,
-            "ai_resp": 0.15,
+            "text_resp": 0.15,
         }
     )
 
-    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent", "ai_resp"})
+    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent", "text_resp"})
 
     def __post_init__(self) -> None:
         _require_positive_int(self.command_line_byte_budget, "flow.command_line_byte_budget")
@@ -69,7 +69,7 @@ class AddonBridgeSettings:
     max_chunks_per_message: int = 64
     max_message_bytes: int = 262_144
     max_total_buffer_bytes: int = 1_048_576
-    profile: AddonBridgeProfile = field(default_factory=LegacyMcbeAiV1Profile)
+    profile: AddonBridgeProfile = field(default_factory=McbewsV1Profile)
 
     def __post_init__(self) -> None:
         for name in ("timeout_seconds", "buffer_ttl_seconds"):

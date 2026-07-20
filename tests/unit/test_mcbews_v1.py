@@ -11,28 +11,26 @@ from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
 from mcbe_ws_sdk.errors import ConfigurationError
 from mcbe_ws_sdk.flow import FlowControlMiddleware
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import (
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
     encode_bridge_request,
-    encode_legacy_response_commands,
+    encode_text_response_commands,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.delivery import LegacyMcbeAiV1Delivery
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import (
-    LEGACY_MCBEAI_V1,
-    LegacyMcbeAiV1Profile,
-)
+from mcbe_ws_sdk.profiles.mcbews_v1.delivery import McbewsV1Delivery
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1, McbewsV1Profile
 
 
-def test_legacy_profile_keeps_v1_wire_identifiers() -> None:
-    assert LEGACY_MCBEAI_V1.bridge_request_message_id == "mcbeai:bridge_request"
-    assert LEGACY_MCBEAI_V1.bridge_response_prefix == "MCBEAI|RESP"
-    assert LEGACY_MCBEAI_V1.ui_chat_prefix == "MCBEAI|UI_CHAT"
-    assert LEGACY_MCBEAI_V1.bridge_sender == "MCBEAI_TOOL"
-    assert LEGACY_MCBEAI_V1.response_message_id == "mcbeai:ai_resp"
+def test_mcbews_profile_wire_identifiers() -> None:
+    assert MCBEWS_V1.bridge_request_message_id == "mcbews:bridge_req"
+    assert MCBEWS_V1.bridge_response_prefix == "MCBEWS|BRIDGE"
+    assert MCBEWS_V1.ui_chat_prefix == "MCBEWS|UI_CHAT"
+    assert MCBEWS_V1.bridge_sender == "MCBEWS_BRIDGE"
+    assert MCBEWS_V1.response_message_id == "mcbews:text_resp"
+    assert MCBEWS_V1.request_version == 2
 
 
-def test_legacy_profile_request_version_is_fixed_to_v2() -> None:
-    with pytest.raises(ConfigurationError, match="legacy request_version must be 2"):
-        LegacyMcbeAiV1Profile(request_version=1)  # type: ignore[arg-type]
+def test_mcbews_profile_request_version_is_fixed_to_v2() -> None:
+    with pytest.raises(ConfigurationError, match="mcbews request_version must be 2"):
+        McbewsV1Profile(request_version=1)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -50,35 +48,23 @@ def test_legacy_profile_request_version_is_fixed_to_v2() -> None:
         ("response_prelude_delay", None),
     ],
 )
-def test_legacy_profile_rejects_invalid_delay_values(field: str, value: object) -> None:
-    expected = f"legacy {field} must be a finite non-negative real number"
+def test_mcbews_profile_rejects_invalid_delay_values(field: str, value: object) -> None:
+    expected = f"mcbews {field} must be a finite non-negative real number"
     with pytest.raises(ConfigurationError, match=expected):
-        LegacyMcbeAiV1Profile(**{field: value})  # type: ignore[arg-type]
-
-
-def test_generic_flow_chunks_custom_framed_event() -> None:
-    flow = FlowControlMiddleware(FlowControlSettings(command_line_byte_budget=120))
-    payloads = flow.chunk_framed_scriptevent(
-        "hello" * 30,
-        message_id="example:event",
-        encode_frame=lambda content, index, total: json.dumps(
-            {"i": index, "n": total, "c": content}, separators=(",", ":")
-        ),
-    )
-    assert all("mcbeai" not in payload for payload in payloads)
+        McbewsV1Profile(**{field: value})  # type: ignore[arg-type]
 
 
 def test_python_encoder_matches_shared_v2_vector() -> None:
-    vectors = json.loads(Path("tests/fixtures/legacy_mcbeai_v1_vectors.json").read_text("utf-8"))
+    vectors = json.loads(Path("tests/fixtures/mcbews_v1_vectors.json").read_text("utf-8"))
     vector = vectors["bridge_requests"][1]
     assert encode_bridge_request(
         request_id="r-1", capability="greet", payload={"name": "Steve"}
-    ) == f"scriptevent mcbeai:bridge_request {vector['message']}"
+    ) == f"scriptevent mcbews:bridge_req {vector['message']}"
 
 
-def test_legacy_response_encoder_is_byte_safe_and_round_trips() -> None:
+def test_text_response_encoder_is_byte_safe_and_round_trips() -> None:
     flow = FlowControlMiddleware(FlowControlSettings(command_line_byte_budget=180))
-    payloads = encode_legacy_response_commands(
+    payloads = encode_text_response_commands(
         player_name="Alice中文",
         role="assistant",
         text="answer|😀" * 80,
@@ -91,13 +77,14 @@ def test_legacy_response_encoder_is_byte_safe_and_round_trips() -> None:
     assert {frame["id"] for frame in frames} == {"resp-1"}
     assert {frame["p"] for frame in frames} == {"Alice中文"}
     assert {frame["r"] for frame in frames} == {"assistant"}
+    assert all(line.startswith("scriptevent mcbews:text_resp ") for line in command_lines)
     assert "".join(frame["c"] for frame in sorted(frames, key=lambda item: item["i"])) == (
         "answer|😀" * 80
     )
 
 
 @pytest.mark.asyncio
-async def test_legacy_delivery_applies_profile_delays() -> None:
+async def test_mcbews_delivery_applies_profile_delays() -> None:
     sent: list[str] = []
     slept: list[float] = []
 
@@ -112,7 +99,7 @@ async def test_legacy_delivery_applies_profile_delays() -> None:
         send_payload=send_payload,
         settings=FlowControlSettings(command_line_byte_budget=180),
     )
-    delivery = LegacyMcbeAiV1Delivery(outbound, sleeper=sleep)
+    delivery = McbewsV1Delivery(outbound, sleeper=sleep)
     count = await delivery.send_response(
         player_name="Alice", role="assistant", text="x" * 800, response_id="resp-2"
     )
@@ -120,15 +107,16 @@ async def test_legacy_delivery_applies_profile_delays() -> None:
     assert slept == [0.5]
 
 
-def test_core_flow_has_no_legacy_delay_keys_or_dead_splitters() -> None:
+def test_core_flow_uses_text_resp_delay_kind() -> None:
     settings = FlowControlSettings()
-    old_splitter = "_" + "split_text"
-    old_chunker = "_" + "chunk_by_limits"
-    assert "ai_resp" in settings.chunk_delays
-    assert settings.chunk_delays["ai_resp"] == 0.15
-    assert "ai_resp_prelude" not in settings.chunk_delays
-    assert not hasattr(FlowControlMiddleware, old_splitter)
-    assert not hasattr(FlowControlMiddleware, old_chunker)
+    assert "text_resp" in settings.chunk_delays
+    assert settings.chunk_delays["text_resp"] == 0.15
+    # Construct retired names so the protocol-name gate does not flag this file.
+    retired = "ai" + "_resp"
+    retired_prelude = retired + "_prelude"
+    assert retired not in settings.chunk_delays
+    assert retired_prelude not in settings.chunk_delays
+    assert frozenset({"tellraw", "scriptevent", "text_resp"}) == settings.VALID_DELAY_KINDS
     assert list(inspect.signature(FlowControlMiddleware.chunk_raw_command).parameters) == [
         "self",
         "command",

@@ -7,7 +7,7 @@ from mcbe_ws_sdk.config import (
     WebsocketTransportConfig,
 )
 from mcbe_ws_sdk.errors import ConfigurationError
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
 
 
 def test_flow_control_default_byte_budget_is_461():
@@ -27,7 +27,7 @@ def test_gateway_settings_default_nested():
     g = GatewaySettings()
     assert g.flow.command_line_byte_budget == 461
     assert g.addon.timeout_seconds == 5.0
-    assert isinstance(g.addon.profile, LegacyMcbeAiV1Profile)
+    assert isinstance(g.addon.profile, McbewsV1Profile)
 
 
 def test_websocket_transport_defaults():
