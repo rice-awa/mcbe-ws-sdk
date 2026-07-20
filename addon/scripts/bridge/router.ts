@@ -9,11 +9,7 @@ import { defaultCapabilityRegistry } from "./capabilities";
 // ---------------------------------------------------------------------------
 
 export type BridgeErrorCode =
-  | "MALFORMED_JSON"
-  | "INVALID_REQUEST"
-  | "UNSUPPORTED_VERSION"
-  | "UNSUPPORTED_CAPABILITY"
-  | "CAPABILITY_FAILED";
+  "MALFORMED_JSON" | "INVALID_REQUEST" | "UNSUPPORTED_VERSION" | "UNSUPPORTED_CAPABILITY" | "CAPABILITY_FAILED";
 
 export type BridgeErrorResponse = {
   ok: false;
@@ -40,7 +36,7 @@ export type CapabilityContext = {
 export type CapabilityHandler = (
   capability: string,
   payload: Record<string, unknown>,
-  context: CapabilityContext,
+  context: CapabilityContext
 ) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
 export type ResponseSender = (requestId: string, jsonBody: string) => Promise<void>;
@@ -48,8 +44,7 @@ export type ResponseSender = (requestId: string, jsonBody: string) => Promise<vo
 type RouterEvent = Pick<ScriptEventCommandMessageAfterEvent, "id" | "message" | "sourceType">;
 
 type ParseResult =
-  | { ok: true; request: BridgeRequest }
-  | { ok: false; requestId?: string; response: BridgeErrorResponse };
+  { ok: true; request: BridgeRequest } | { ok: false; requestId?: string; response: BridgeErrorResponse };
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -80,10 +75,7 @@ function invalidRequest(requestId?: string): ParseResult {
 }
 
 function logUnexpectedRouterFailure(error: unknown): void {
-  console.error(
-    "[bridge] unexpected router failure",
-    error instanceof Error ? error.message : String(error),
-  );
+  console.error("[bridge] unexpected router failure", error instanceof Error ? error.message : String(error));
 }
 
 // ---------------------------------------------------------------------------
@@ -109,9 +101,7 @@ export function parseBridgeRequest(message: string): ParseResult {
     };
   }
   const requestId =
-    isRecord(value) && typeof value.request_id === "string" && value.request_id.trim()
-      ? value.request_id
-      : undefined;
+    isRecord(value) && typeof value.request_id === "string" && value.request_id.trim() ? value.request_id : undefined;
   if (!isRecord(value)) {
     return invalidRequest(requestId);
   }
@@ -150,9 +140,7 @@ export function parseBridgeRequest(message: string): ParseResult {
 // ---------------------------------------------------------------------------
 
 function schedule(event: RouterEvent): void {
-  processingTail = processingTail
-    .then(() => handleBridgeScriptEvent(event))
-    .catch(logUnexpectedRouterFailure);
+  processingTail = processingTail.then(() => handleBridgeScriptEvent(event)).catch(logUnexpectedRouterFailure);
 }
 
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
@@ -206,7 +194,7 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void>
         await responseSender(parsed.requestId, JSON.stringify(parsed.response));
       } catch (error) {
         console.error(
-          `[bridge] response sender failed for requestId=${parsed.requestId}: ${(error as Error).constructor.name}`,
+          `[bridge] response sender failed for requestId=${parsed.requestId}: ${(error as Error).constructor.name}`
         );
       }
     }
@@ -254,7 +242,7 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void>
       await responseSender(request.request_id, JSON.stringify(resultPayload));
     } catch (error) {
       console.error(
-        `[bridge] response sender failed for requestId=${request.request_id}: ${(error as Error).constructor.name}`,
+        `[bridge] response sender failed for requestId=${request.request_id}: ${(error as Error).constructor.name}`
       );
     }
   }

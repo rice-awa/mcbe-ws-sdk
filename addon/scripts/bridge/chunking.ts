@@ -15,50 +15,25 @@ export type ChunkOptions = {
   wrapCommandLine?: (chunk: string) => string;
 };
 
-export function formatChunk(
-  prefix: string,
-  id: string,
-  index: number,
-  total: number,
-  content: string,
-): string {
+export function formatChunk(prefix: string, id: string, index: number, total: number, content: string): string {
   return `${prefix}|${id}|${index}/${total}|${content}`;
 }
 
-export function formatResponseChunk(
-  requestId: string,
-  index: number,
-  total: number,
-  content: string,
-): string {
+export function formatResponseChunk(requestId: string, index: number, total: number, content: string): string {
   return formatChunk(BRIDGE_RESPONSE_PREFIX, requestId, index, total, content);
 }
 
-export function chunkBridgePayload(
-  requestId: string,
-  payload: string,
-  options: ChunkOptions = {},
-): string[] {
+export function chunkBridgePayload(requestId: string, payload: string, options: ChunkOptions = {}): string[] {
   return chunkPayload(BRIDGE_RESPONSE_PREFIX, requestId, payload, options);
 }
 
-export function chunkUiChatPayload(
-  id: string,
-  payload: string,
-  options: ChunkOptions = {},
-): string[] {
+export function chunkUiChatPayload(id: string, payload: string, options: ChunkOptions = {}): string[] {
   return chunkPayload(BRIDGE_UI_CHAT_PREFIX, id, payload, options);
 }
 
-export function chunkPayload(
-  prefix: string,
-  id: string,
-  payload: string,
-  options: ChunkOptions = {},
-): string[] {
+export function chunkPayload(prefix: string, id: string, payload: string, options: ChunkOptions = {}): string[] {
   const budget = options.commandLineByteBudget ?? BRIDGE_COMMAND_LINE_BYTE_BUDGET;
-  const maxPoints =
-    options.maxContentCodePoints ?? BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS;
+  const maxPoints = options.maxContentCodePoints ?? BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS;
   const wrap = options.wrapCommandLine ?? ((chunk: string) => `tell @s ${chunk}`);
   const symbols = Array.from(payload);
 
@@ -68,10 +43,7 @@ export function chunkPayload(
       const index = parts.length;
       const candidate = parts[index - 1] + symbol;
       const candidateFrame = formatChunk(prefix, id, index, totalHint, candidate);
-      if (
-        Array.from(candidate).length <= maxPoints &&
-        utf8ByteLength(wrap(candidateFrame)) <= budget
-      ) {
+      if (Array.from(candidate).length <= maxPoints && utf8ByteLength(wrap(candidateFrame)) <= budget) {
         parts[index - 1] = candidate;
         continue;
       }
@@ -89,9 +61,7 @@ export function chunkPayload(
   while (true) {
     const parts = split(totalHint);
     if (parts.length === totalHint) {
-      return parts.map((content, index) =>
-        formatChunk(prefix, id, index + 1, parts.length, content),
-      );
+      return parts.map((content, index) => formatChunk(prefix, id, index + 1, parts.length, content));
     }
     totalHint = parts.length;
   }

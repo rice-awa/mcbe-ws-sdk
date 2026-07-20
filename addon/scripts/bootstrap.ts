@@ -28,24 +28,21 @@ export function initializeEarly(): void {
  * 用法：在你的 addon main 入口中，`initializeEarly()` 之后调用 `initializeAfterWorldLoad()`。
  * 你的宿主代码在此处注册能力处理器和 AI 响应处理器。
  */
-export function initializeAfterWorldLoad(onReady?: () => void): void {
+export function initializeAfterWorldLoad(onReady?: () => void | Promise<void>): void {
   log("initializeAfterWorldLoad: 等待世界就绪...");
 
-  const init = (): void => {
-    log("initializeAfterWorldLoad: 世界就绪");
-    onReady?.();
+  const init = async (): Promise<void> => {
+    try {
+      await onReady?.();
+    } catch (error) {
+      console.warn("[bridge] initialization failed", error);
+    }
   };
 
   world.afterEvents.worldLoad.subscribe(() => {
-    log("worldLoad 事件触发");
-    init();
+    void init();
   });
-
   system.run(() => {
-    try {
-      init();
-    } catch {
-      log("initializeAfterWorldLoad: 世界尚未就绪，等待 worldLoad 事件...");
-    }
+    void init();
   });
 }

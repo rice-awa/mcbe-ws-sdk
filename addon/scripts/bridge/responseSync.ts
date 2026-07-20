@@ -56,10 +56,14 @@ export function parseLegacyResponseChunk(value: unknown): LegacyResponseChunk | 
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   if (
-    typeof item.id !== "string" || typeof item.i !== "number" ||
-    typeof item.n !== "number" || typeof item.p !== "string" ||
-    typeof item.r !== "string" || typeof item.c !== "string"
-  ) return null;
+    typeof item.id !== "string" ||
+    typeof item.i !== "number" ||
+    typeof item.n !== "number" ||
+    typeof item.p !== "string" ||
+    typeof item.r !== "string" ||
+    typeof item.c !== "string"
+  )
+    return null;
   return { id: item.id, i: item.i, n: item.n, p: item.p, r: item.r, c: item.c };
 }
 
@@ -70,7 +74,7 @@ export class ResponseAssembler {
 
   constructor(
     private readonly limits: ResponseSyncLimits = DEFAULT_RESPONSE_SYNC_LIMITS,
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = Date.now
   ) {}
 
   get bufferCount(): number {
@@ -95,9 +99,13 @@ export class ResponseAssembler {
 
     // Validate chunk metadata
     if (
-      !chunk.id || !chunk.p || !chunk.r ||
-      !Number.isInteger(chunk.i) || !Number.isInteger(chunk.n) ||
-      chunk.i < 1 || chunk.i > chunk.n ||
+      !chunk.id ||
+      !chunk.p ||
+      !chunk.r ||
+      !Number.isInteger(chunk.i) ||
+      !Number.isInteger(chunk.n) ||
+      chunk.i < 1 ||
+      chunk.i > chunk.n ||
       chunk.n > this.limits.maxChunksPerMessage
     ) {
       return null;
@@ -118,11 +126,7 @@ export class ResponseAssembler {
         chunks: new Map<number, string>(),
       };
       this.buffers.set(chunk.id, state);
-    } else if (
-      state.total !== chunk.n ||
-      state.playerName !== chunk.p ||
-      state.role !== chunk.r
-    ) {
+    } else if (state.total !== chunk.n || state.playerName !== chunk.p || state.role !== chunk.r) {
       // Metadata conflict — delete buffer and return null
       this.buffers.delete(chunk.id);
       return null;
@@ -192,9 +196,7 @@ export function registerResponseSyncHandler(): void {
 
     // Server-only source; no Entity/tool-player fallback
     if (event.sourceType !== "Server") {
-      console.warn(
-        `[respSync] ignoring non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`,
-      );
+      console.warn(`[respSync] ignoring non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
       return;
     }
 
