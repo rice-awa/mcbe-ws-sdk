@@ -158,7 +158,7 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
   if (event.sourceType !== "Server") {
     console.warn(
       `[bridge] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}, ` +
-        `messagePreview=${event.message.slice(0, 120)}`,
+        `messagePreview=${event.message.slice(0, 120)}`
     );
   }
 
@@ -174,14 +174,14 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
     }
     console.warn(
       `[bridge] queue pre-ready request (bridge not active yet): queueSize=${preReadyQueue.length + 1}, ` +
-        `sourceType=${event.sourceType}`,
+        `sourceType=${event.sourceType}`
     );
     preReadyQueue.push(snapshot);
     return;
   }
   console.log(
     `[bridge] accept scriptevent: id=${event.id}, sourceType=${event.sourceType}, ` +
-      `messagePreview=${event.message.slice(0, 120)}`,
+      `messagePreview=${event.message.slice(0, 120)}`
   );
   schedule(snapshot);
 }
@@ -268,20 +268,18 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void>
       const body = JSON.stringify(resultPayload);
       console.log(
         `[bridge] send response: requestId=${request.request_id}, capability=${request.capability}, ` +
-          `bytes=${body.length}, preview=${body.slice(0, 160)}`,
+          `bytes=${body.length}, preview=${body.slice(0, 160)}`
       );
       await responseSender(request.request_id, body);
       console.log(`[bridge] response sent: requestId=${request.request_id}`);
     } catch (error) {
       console.error(
         `[bridge] response sender failed for requestId=${request.request_id}: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
+          `${error instanceof Error ? error.message : String(error)}`
       );
     }
   } else {
-    console.warn(
-      `[bridge] no responseSender for requestId=${request.request_id}, capability=${request.capability}`,
-    );
+    console.warn(`[bridge] no responseSender for requestId=${request.request_id}, capability=${request.capability}`);
   }
 }
 

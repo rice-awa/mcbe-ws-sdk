@@ -44,10 +44,10 @@ describe("Minecraft test baseline", () => {
     expect(moduleVersions["@minecraft/server-gametest"]).toBe("1.0.0-beta");
     expect(behavior.header.min_engine_version).toEqual([1, 21, 80]);
     expect(resource.header.min_engine_version).toEqual([1, 21, 80]);
-    expect(behavior.header.version).toEqual([1, 0, 0]);
-    expect(behavior.modules[0].version).toEqual([1, 0, 0]);
-    expect(resource.header.version).toEqual([1, 0, 0]);
-    expect(resource.modules[0].version).toEqual([1, 0, 0]);
+    expect(behavior.header.version).toEqual([1, 0, 1]);
+    expect(behavior.modules[0].version).toEqual([1, 0, 1]);
+    expect(resource.header.version).toEqual([1, 0, 1]);
+    expect(resource.modules[0].version).toEqual([1, 0, 1]);
     expect(behavior.header.uuid).toBe("60411f7f-774b-4269-b1cd-f58ebe702995");
     expect(resource.header.uuid).toBe("450332ea-6755-48b6-ab7f-36843065edd1");
     expect(resourceDependency).toEqual({

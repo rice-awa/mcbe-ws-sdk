@@ -59,14 +59,9 @@ export async function sendBridgeResponseChunks(requestId: string, payload: strin
   }
 
   const chunks = chunkBridgePayload(requestId, payload);
-  log(
-    `sendBridgeResponseChunks: requestId=${requestId}, chunks=${chunks.length}, payloadBytes=${payload.length}`,
-  );
+  log(`sendBridgeResponseChunks: requestId=${requestId}, chunks=${chunks.length}, payloadBytes=${payload.length}`);
   for (const [index, chunk] of chunks.entries()) {
-    log(
-      `sendBridgeResponseChunks: tell chunk ${index + 1}/${chunks.length} ` +
-        `preview=${chunk.slice(0, 120)}`,
-    );
+    log(`sendBridgeResponseChunks: tell chunk ${index + 1}/${chunks.length} ` + `preview=${chunk.slice(0, 120)}`);
     await toolPlayer.runCommand(`tell @s ${chunk}`);
   }
   log(`sendBridgeResponseChunks: done requestId=${requestId}`);

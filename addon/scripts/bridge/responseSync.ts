@@ -197,9 +197,7 @@ export function registerResponseSyncHandler(): void {
     // Same as bridge router: /wsserver-delivered scriptevents may arrive as
     // Entity rather than Server. Dropping them silently breaks AI response sync.
     if (event.sourceType !== "Server") {
-      console.warn(
-        `[respSync] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`,
-      );
+      console.warn(`[respSync] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
     }
 
     let parsed: unknown;

@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   chunkBridgePayload,
   chunkPayload,
@@ -29,6 +29,22 @@ describe("chunking", () => {
     it("returns correct length for mixed strings", () => {
       // "ab" = 2, "中" = 3 => 5
       expect(utf8ByteLength("ab中")).toBe(5);
+    });
+
+    it("works when the Bedrock runtime does not provide TextEncoder", () => {
+      vi.stubGlobal("TextEncoder", undefined);
+      try {
+        expect(utf8ByteLength("A中😀")).toBe(8);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("counts malformed UTF-16 surrogates as replacement characters", () => {
+      expect(utf8ByteLength("\uD800")).toBe(3);
+      expect(utf8ByteLength("\uDC00")).toBe(3);
+      expect(utf8ByteLength("\uD800\uD800")).toBe(6);
+      expect(utf8ByteLength("\uD83D\uDE00")).toBe(4);
     });
   });
 

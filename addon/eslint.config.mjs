@@ -15,6 +15,34 @@ export default [
     },
     rules: {
       "minecraft-linting/avoid-unnecessary-command": "error",
+      "no-restricted-globals": [
+        "error",
+        ...[
+          "Buffer",
+          "TextDecoder",
+          "TextEncoder",
+          "document",
+          "fetch",
+          "process",
+          "setInterval",
+          "setTimeout",
+          "window",
+        ].map((name) => ({
+          name,
+          message: `${name} is not part of the Bedrock Script runtime. Use @minecraft/server APIs or runtime-independent JavaScript.`,
+        })),
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["node:*"],
+              message: "Node.js modules are not available in the Bedrock Script runtime.",
+            },
+          ],
+        },
+      ],
     },
   },
 ];
