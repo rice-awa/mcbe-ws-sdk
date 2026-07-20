@@ -1,92 +1,297 @@
-import type { Player, ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
+import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import { system } from "@minecraft/server";
 
-import { BRIDGE_MESSAGE_ID, TOOL_PLAYER_NAME } from "./constants";
+import { BRIDGE_MESSAGE_ID } from "./constants";
 import { defaultCapabilityRegistry } from "./capabilities";
 
-let isBridgeRouterRegistered = false;
+// ---------------------------------------------------------------------------
+// Structured types
+// ---------------------------------------------------------------------------
+
+export type BridgeErrorCode =
+  | "MALFORMED_JSON"
+  | "INVALID_REQUEST"
+  | "UNSUPPORTED_VERSION"
+  | "UNSUPPORTED_CAPABILITY"
+  | "CAPABILITY_FAILED";
+
+export type BridgeErrorResponse = {
+  ok: false;
+  error: { code: BridgeErrorCode; message: string };
+};
+
+export type BridgeSuccessResponse = {
+  ok: true;
+  result: Record<string, unknown>;
+};
+
+export type BridgeRequest = {
+  v: 1 | 2;
+  request_id: string;
+  capability: string;
+  payload: Record<string, unknown>;
+};
+
+export type CapabilityContext = {
+  caller: { kind: "server" };
+  requestVersion: 1 | 2;
+};
 
 export type CapabilityHandler = (
   capability: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  context: CapabilityContext,
 ) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
 export type ResponseSender = (requestId: string, jsonBody: string) => Promise<void>;
 
+type RouterEvent = Pick<ScriptEventCommandMessageAfterEvent, "id" | "message" | "sourceType">;
+
+type ParseResult =
+  | { ok: true; request: BridgeRequest }
+  | { ok: false; requestId?: string; response: BridgeErrorResponse };
+
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
+
+let isBridgeRouterRegistered = false;
 let capabilityHandler: CapabilityHandler | null = null;
 let responseSender: ResponseSender | null = null;
+let bridgeActive = false;
+const preReadyQueue: RouterEvent[] = [];
+let processingTail: Promise<void> = Promise.resolve();
 
-/** 注册能力处理函数。未知能力返回默认错误 payload。 */
-export function setCapabilityHandler(fn: CapabilityHandler): void {
-  capabilityHandler = fn;
+export const MAX_PRE_READY_REQUESTS = 64;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+function invalidRequest(requestId?: string): ParseResult {
+  return {
+    ok: false,
+    requestId,
+    response: { ok: false, error: { code: "INVALID_REQUEST", message: "invalid bridge request" } },
+  };
 }
 
-/** 注册响应发送器（将编码后的 JSON 载荷分片回传给 MCBEAI_TOOL 玩家）。 */
-export function setResponseSender(fn: ResponseSender): void {
-  responseSender = fn;
+function logUnexpectedRouterFailure(error: unknown): void {
+  console.error(
+    "[bridge] unexpected router failure",
+    error instanceof Error ? error.message : String(error),
+  );
 }
 
-function defaultErrorPayload(capability: string): Record<string, unknown> {
-  return { ok: false, error: `unsupported capability: ${capability}` };
-}
+// ---------------------------------------------------------------------------
+// shouldHandleScriptEvent
+// ---------------------------------------------------------------------------
 
 export function shouldHandleScriptEvent(messageId: string): boolean {
   return messageId === BRIDGE_MESSAGE_ID;
 }
 
-export async function handleBridgeScriptEvent(event: ScriptEventCommandMessageAfterEvent): Promise<void> {
-  if (!shouldHandleScriptEvent(event.id)) {
+// ---------------------------------------------------------------------------
+// parseBridgeRequest
+// ---------------------------------------------------------------------------
+
+export function parseBridgeRequest(message: string): ParseResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(message);
+  } catch {
+    return {
+      ok: false,
+      response: { ok: false, error: { code: "MALFORMED_JSON", message: "invalid JSON" } },
+    };
+  }
+  const requestId =
+    isRecord(value) && typeof value.request_id === "string" && value.request_id.trim()
+      ? value.request_id
+      : undefined;
+  if (!isRecord(value)) {
+    return invalidRequest(requestId);
+  }
+  const rawVersion = value.v ?? 1;
+  if (rawVersion !== 1 && rawVersion !== 2) {
+    return {
+      ok: false,
+      requestId,
+      response: {
+        ok: false,
+        error: { code: "UNSUPPORTED_VERSION", message: "unsupported bridge version" },
+      },
+    };
+  }
+  if (
+    !requestId ||
+    typeof value.capability !== "string" ||
+    !value.capability.trim() ||
+    (value.payload !== undefined && !isRecord(value.payload))
+  ) {
+    return invalidRequest(requestId);
+  }
+  return {
+    ok: true,
+    request: {
+      v: rawVersion,
+      request_id: requestId,
+      capability: value.capability,
+      payload: value.payload ?? {},
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pre-ready state machine
+// ---------------------------------------------------------------------------
+
+function schedule(event: RouterEvent): void {
+  processingTail = processingTail
+    .then(() => handleBridgeScriptEvent(event))
+    .catch(logUnexpectedRouterFailure);
+}
+
+export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
+  if (!shouldHandleScriptEvent(event.id) || event.sourceType !== "Server") return;
+  const snapshot: RouterEvent = {
+    id: event.id,
+    message: event.message,
+    sourceType: event.sourceType,
+  };
+  if (!bridgeActive) {
+    if (preReadyQueue.length >= MAX_PRE_READY_REQUESTS) {
+      console.warn("[bridge] pre-ready queue full: code=BRIDGE_NOT_READY_QUEUE_FULL");
+      return;
+    }
+    preReadyQueue.push(snapshot);
+    return;
+  }
+  schedule(snapshot);
+}
+
+export async function activateBridge(sender: ResponseSender): Promise<void> {
+  if (bridgeActive) return;
+  responseSender = sender;
+  bridgeActive = true;
+  while (preReadyQueue.length > 0) {
+    const event = preReadyQueue.shift();
+    if (event) schedule(event);
+  }
+  await processingTail;
+}
+
+// ---------------------------------------------------------------------------
+// setCapabilityHandler
+// ---------------------------------------------------------------------------
+
+export function setCapabilityHandler(fn: CapabilityHandler): void {
+  capabilityHandler = fn;
+}
+
+// ---------------------------------------------------------------------------
+// handleBridgeScriptEvent
+// ---------------------------------------------------------------------------
+
+export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void> {
+  if (event.sourceType !== "Server") return;
+
+  const parsed = parseBridgeRequest(event.message);
+  if (!parsed.ok) {
+    if (parsed.requestId && responseSender) {
+      try {
+        await responseSender(parsed.requestId, JSON.stringify(parsed.response));
+      } catch (error) {
+        console.error(
+          `[bridge] response sender failed for requestId=${parsed.requestId}: ${(error as Error).constructor.name}`,
+        );
+      }
+    }
     return;
   }
 
-  // 发送者校验：脚本事件默认仅放行服务端来源，与 Python SDK 用
-  // sender == MCBEAI_TOOL 做入站信任边界的意图对齐——服务端来源比聊天消息路径
-  // 更窄，足以防止玩家伪造 scriptevent。实体来源仅在发送者为 MCBEAI_TOOL 工具玩家时放行。
-  const isFromServer = event.sourceType === "Server";
-  const isFromToolPlayer =
-    event.sourceType === "Entity" && (event.sourceEntity as Player | undefined)?.name === TOOL_PLAYER_NAME;
-  if (!isFromServer && !isFromToolPlayer) {
-    console.warn(`[bridge] 忽略非法来源的 scriptevent: id=${event.id}, sourceType=${event.sourceType}`);
-    return;
-  }
+  const { request } = parsed;
 
-  const request = JSON.parse(event.message) as {
-    request_id: string;
-    capability: string;
-    payload?: Record<string, unknown>;
+  let resultPayload: Record<string, unknown>;
+  const context: CapabilityContext = {
+    caller: { kind: "server" },
+    requestVersion: request.v,
   };
 
-  let payload: Record<string, unknown>;
   if (capabilityHandler) {
-    // 宿主已注入处理器，优先使用（覆盖默认注册表）。
-    payload = await capabilityHandler(request.capability, request.payload ?? {});
+    try {
+      resultPayload = await capabilityHandler(request.capability, request.payload, context);
+    } catch {
+      resultPayload = {
+        ok: false,
+        error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
+      };
+    }
   } else {
-    // 回退到默认注册表：按能力名查找并调用。
     const defaultHandler = defaultCapabilityRegistry[request.capability];
     if (defaultHandler) {
-      payload = await defaultHandler(request.capability, request.payload ?? {});
+      try {
+        resultPayload = await defaultHandler(request.capability, request.payload, context);
+      } catch {
+        resultPayload = {
+          ok: false,
+          error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
+        };
+      }
     } else {
-      payload = defaultErrorPayload(request.capability);
+      resultPayload = {
+        ok: false,
+        error: { code: "UNSUPPORTED_CAPABILITY", message: `unsupported capability: ${request.capability}` },
+      };
     }
   }
 
   if (responseSender) {
-    await responseSender(request.request_id, JSON.stringify(payload));
+    try {
+      await responseSender(request.request_id, JSON.stringify(resultPayload));
+    } catch (error) {
+      console.error(
+        `[bridge] response sender failed for requestId=${request.request_id}: ${(error as Error).constructor.name}`,
+      );
+    }
   }
 }
 
+// ---------------------------------------------------------------------------
+// registerBridgeRouter
+// ---------------------------------------------------------------------------
+
 export function registerBridgeRouter(): void {
-  if (isBridgeRouterRegistered) {
-    return;
-  }
-
+  if (isBridgeRouterRegistered) return;
   isBridgeRouterRegistered = true;
-
   system.afterEvents.scriptEventReceive.subscribe((event) => {
-    if (!shouldHandleScriptEvent(event.id)) {
-      return;
-    }
-
-    void handleBridgeScriptEvent(event);
+    enqueueOrHandle(event);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Internal testing helpers
+// ---------------------------------------------------------------------------
+
+/** @internal */
+export function _testingGetQueueSize(): number {
+  return preReadyQueue.length;
+}
+
+/** @internal */
+export function _testingFlush(): Promise<void> {
+  return processingTail;
+}
+
+/** @internal */
+export function _testingReset(): void {
+  preReadyQueue.length = 0;
+  responseSender = null;
+  capabilityHandler = null;
+  bridgeActive = false;
+  isBridgeRouterRegistered = false;
+  processingTail = Promise.resolve();
 }
