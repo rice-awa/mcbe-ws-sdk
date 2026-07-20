@@ -99,8 +99,21 @@ class McbeOutboundDelivery:
             target=message.player_name or "@a",
         )
 
-    async def send_chunked(self, payloads: list[str], delay_kind: str, source: str) -> None:
-        chunk_delay = self.flow.chunk_delay_for(delay_kind)
+    async def send_chunked(
+        self,
+        payloads: list[str],
+        delay_kind: str,
+        source: str,
+        *,
+        delay: float | None = None,
+    ) -> None:
+        """Send ``payloads`` with inter-chunk delays.
+
+        When ``delay`` is provided it overrides ``flow.chunk_delay_for(delay_kind)``
+        so protocol profiles can inject their own cadence (e.g.
+        ``profile.response_chunk_delay``).
+        """
+        chunk_delay = self.flow.chunk_delay_for(delay_kind) if delay is None else delay
         for idx, payload in enumerate(payloads):
             await self._send_one(
                 payload,

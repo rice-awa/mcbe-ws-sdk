@@ -29,14 +29,16 @@ McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
 ## 每连接消息路由
 
 1. `McbeServerFacade._on_connection` 创建连接状态，启动 `_response_sender` 协程，
-   并发送 subscribe + welcome。
+   并发送 handshake + subscribe。二者成功后先 emit `WsEventType.CONNECTED`，
+   再调用 `hook.on_connected`（welcome 由宿主在该 hook 中负责发送，facade 本身
+   不发欢迎语）。
 2. `_handle_raw` 对每帧入站数据分类：
    - **error** → `WsEventType.ERROR` + `hook.on_error`
    - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
    - **addon 前缀匹配** → `AddonBridgeService`（桥接 / UI 聊天重组）
    - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` + `hook.on_player_message`
 3. response-sender 排空 `state.response_queue`，经 `RouteEnvelope.from_message()` 包装后
-   交给 sink 分发。
+   内联路由到 sink 的两个 `on_*` 方法（协议上不含 `dispatch`）。
 4. 宿主 sink 使用 `McbeOutboundDelivery` 把排队消息变成 MC WebSocket 负载。
 
 ## 流控 — 461 B 硬上限

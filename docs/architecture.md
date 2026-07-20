@@ -29,14 +29,18 @@ gateway default when `None`. The host subclasses only what it needs:
 ## Per-connection message routing
 
 1. `McbeServerFacade._on_connection` creates connection state, starts a
-   `_response_sender` coroutine, and sends subscribe + welcome.
+   `_response_sender` coroutine, and sends handshake + subscribe. After those
+   succeed it emits `WsEventType.CONNECTED` then calls `hook.on_connected`
+   (welcome is the host's responsibility in that hook — the facade never sends
+   a welcome banner itself).
 2. `_handle_raw` classifies each inbound frame:
    - **error** → `WsEventType.ERROR` + `hook.on_error`
    - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
    - **addon prefix match** → `AddonBridgeService` (bridge / UI chat reassembly)
    - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` + `hook.on_player_message`
 3. The response-sender drains `state.response_queue`, wrapping each message via
-   `RouteEnvelope.from_message()` and dispatching through the sink.
+   `RouteEnvelope.from_message()` and routing inline to the sink's two `on_*`
+   methods (no `dispatch` on the protocol).
 4. The host sink turns queued messages into MC WebSocket payloads with
    `McbeOutboundDelivery`.
 

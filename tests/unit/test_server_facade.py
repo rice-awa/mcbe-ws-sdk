@@ -423,13 +423,21 @@ async def test_connection_sends_init_and_subscribe_before_hook() -> None:
         order.append(payload)
         await original_send(payload)
 
+    async def on_connected_event(state: ConnectionState) -> None:
+        order.append("connected_event")
+
+    facade.manager.event_bus.subscribe(
+        WsEventType.CONNECTED, on_connected_event, weak=False
+    )
     websocket.send = record_send  # type: ignore[method-assign]
     await facade._on_connection(websocket)
 
     assert order[0] == '{"Result":"true"}'
     assert json.loads(order[1])["header"]["messagePurpose"] == "subscribe"
     assert json.loads(order[1])["body"]["eventName"] == "PlayerMessage"
-    assert order[2] == "hook"
+    # D8: CONNECTED emit, then hook.on_connected — both after handshake+subscribe.
+    assert order[2] == "connected_event"
+    assert order[3] == "hook"
 
 
 # --------------------------------------------------------------------------- #

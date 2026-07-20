@@ -189,6 +189,9 @@ class McbeServerFacade:
                 connection_id=str(state.id),
                 events=list(self._handler.SUBSCRIBED_EVENTS),
             )
+            # CONNECTED is emitted only after handshake + subscribe succeed,
+            # immediately before the host hook (D8). Welcome is host-owned.
+            await self._manager.event_bus.emit(WsEventType.CONNECTED, state)
             await self._hook.on_connected(state)
 
             async for raw in websocket:
@@ -379,12 +382,18 @@ class McbeServerFacade:
 
         async def send_payload(payload: str) -> None:
             current_state = self._manager.get_connection(connection_id)
-            if current_state is not None:
-                await self._manager.event_bus.emit(
-                    WsEventType.RAW_OUTBOUND,
-                    current_state,
-                    payload,
+            if current_state is None:
+                # Connection already dropped — do not touch the websocket.
+                logger.debug(
+                    "send_payload_after_drop",
+                    connection_id=str(connection_id),
                 )
+                return
+            await self._manager.event_bus.emit(
+                WsEventType.RAW_OUTBOUND,
+                current_state,
+                payload,
+            )
             await websocket.send(payload)
 
         return send_payload

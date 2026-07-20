@@ -107,6 +107,44 @@ async def test_mcbews_delivery_applies_profile_delays() -> None:
     assert slept == [0.5]
 
 
+@pytest.mark.asyncio
+async def test_text_resp_uses_profile_chunk_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """text_resp chunk cadence must honor profile.response_chunk_delay (D4)."""
+    sent: list[str] = []
+    slept: list[float] = []
+
+    async def send_payload(payload: str) -> None:
+        sent.append(payload)
+
+    async def fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr("mcbe_ws_sdk.delivery.outbound.asyncio.sleep", fake_sleep)
+
+    # Distinct from FlowControlSettings default text_resp delay (0.15).
+    profile = McbewsV1Profile(response_chunk_delay=0.42, response_prelude_delay=0.0)
+    outbound = McbeOutboundDelivery(
+        connection_id=UUID(int=82),
+        send_payload=send_payload,
+        settings=FlowControlSettings(
+            command_line_byte_budget=180,
+            chunk_delays={"tellraw": 0.05, "scriptevent": 0.05, "text_resp": 0.15},
+        ),
+    )
+    delivery = McbewsV1Delivery(outbound, profile=profile, sleeper=fake_sleep)
+    count = await delivery.send_response(
+        player_name="Alice",
+        role="assistant",
+        text="x" * 800,
+        response_id="resp-delay",
+    )
+    assert count >= 2
+    assert count == len(sent)
+    # prelude (0.0 via sleeper) + inter-chunk profile delays via send_chunked.
+    assert slept[0] == 0.0
+    assert slept[1:] == [0.42] * (count - 1)
+
+
 def test_core_flow_uses_text_resp_delay_kind() -> None:
     settings = FlowControlSettings()
     assert "text_resp" in settings.chunk_delays

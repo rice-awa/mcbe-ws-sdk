@@ -55,7 +55,7 @@ async def test_default_sink_dispatches_outbound_and_system(state: ConnectionStat
     sink = DefaultResponseSink()
     msg = OutboundText(content="hello")
     note = SystemNotification(level="warning", message="careful")
-    # Both routes run without raising.
+    # Convenience dispatch remains on DefaultResponseSink (not on Protocol).
     await sink.dispatch(state, RouteEnvelope(ResponseKind.OUTBOUND_TEXT, msg))
     await sink.dispatch(state, RouteEnvelope(ResponseKind.SYSTEM_NOTIFICATION, note))
 
@@ -80,6 +80,23 @@ async def test_sink_dispatches_only_typed_outbound_messages() -> None:
 
 def test_default_sink_is_response_sink() -> None:
     assert isinstance(DefaultResponseSink(), ResponseSink)
+
+
+def test_duck_typed_two_method_sink_is_response_sink() -> None:
+    """Protocol only requires the two on_* methods — no dispatch."""
+
+    class TwoMethodSink:
+        async def on_outbound_text(
+            self, state: ConnectionState, message: OutboundText
+        ) -> None:
+            return None
+
+        async def on_system_notification(
+            self, state: ConnectionState, message: SystemNotification
+        ) -> None:
+            return None
+
+    assert isinstance(TwoMethodSink(), ResponseSink)
 
 
 def test_custom_sink_can_subclass_default() -> None:

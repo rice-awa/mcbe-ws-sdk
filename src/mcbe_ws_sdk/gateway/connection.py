@@ -4,14 +4,17 @@ Extends the minimal :class:`ConnectionState` foundation with the lifecycle the
 host drives through the facade: per-connection response queues, an outbound
 ``send_payload`` callable (the transport's frame send, e.g. ``websocket.send``),
 and a :class:`ConnectionManager` that owns the response-sender coroutine and
-emits ``CONNECTED`` / ``DISCONNECTED`` on the
+emits ``DISCONNECTED`` on the
 :class:`~mcbe_ws_sdk.gateway.events.EventBus`.
+
+``CONNECTED`` is intentionally **not** emitted here — the facade emits it after
+a successful handshake + subscribe, at the same moment as ``hook.on_connected``.
 
 The response-sender loop never builds Minecraft commands itself. It classifies
 each queued message with
-:meth:`~mcbe_ws_sdk.gateway.sink.RouteEnvelope.from_message` and forwards it to
-the shared :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink`, pushing the
-application-specific mapping entirely onto the host's ``HostSink``.
+:meth:`~mcbe_ws_sdk.gateway.sink.RouteEnvelope.from_message` and routes it
+inline to the sink's ``on_*`` methods, pushing the application-specific mapping
+entirely onto the host's ``HostSink``.
 """
 
 from __future__ import annotations
@@ -25,7 +28,13 @@ from uuid import UUID, uuid4
 import structlog
 
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
-from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink, RouteEnvelope
+from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
+from mcbe_ws_sdk.gateway.sink import (
+    DefaultResponseSink,
+    ResponseKind,
+    ResponseSink,
+    RouteEnvelope,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -136,12 +145,14 @@ class ConnectionManager:
         posts response messages to it (prefer :func:`enqueue_response` so a full
         queue drops the oldest item instead of blocking). ``send_payload`` is the
         transport frame-send the sink's command routes ultimately deliver through.
+
+        Does **not** emit ``WsEventType.CONNECTED`` — that is the facade's job
+        after handshake + subscribe succeed.
         """
         state = ConnectionState(id=connection_id or uuid4(), send_payload=send_payload)
         state.response_queue = asyncio.Queue(maxsize=self._response_queue_maxsize)
         self._connections[state.id] = state
         self._sender_tasks[state.id] = asyncio.create_task(self._response_sender(state))
-        await self._bus.emit(WsEventType.CONNECTED, state)
         logger.info("connection_created", connection_id=str(state.id))
         return state
 
@@ -203,12 +214,12 @@ class ConnectionManager:
                     )
                     continue
                 try:
-                    await self._sink.dispatch(state, envelope)
+                    await self._route_envelope(state, envelope)
                 except Exception:
                     logger.exception(
                         "response_sink_dispatch_failed",
                         connection_id=str(state.id),
-                        kind=envelope.kind.value if envelope else None,
+                        kind=envelope.kind.value,
                     )
         except asyncio.CancelledError:
             logger.debug("response_sender_cancelled", connection_id=str(state.id))
@@ -216,3 +227,23 @@ class ConnectionManager:
         except Exception:
             logger.exception("response_sender_error", connection_id=str(state.id))
         logger.debug("response_sender_stopped", connection_id=str(state.id))
+
+    async def _route_envelope(self, state: ConnectionState, envelope: RouteEnvelope) -> None:
+        """Inline envelope routing — never requires ``ResponseSink.dispatch``."""
+        if envelope.kind is ResponseKind.OUTBOUND_TEXT:
+            if not isinstance(envelope.payload, OutboundText):
+                raise TypeError(
+                    "Expected OutboundText for OUTBOUND_TEXT kind, "
+                    f"got {type(envelope.payload).__name__}"
+                )
+            await self._sink.on_outbound_text(state, envelope.payload)
+            return
+        if envelope.kind is ResponseKind.SYSTEM_NOTIFICATION:
+            if not isinstance(envelope.payload, SystemNotification):
+                raise TypeError(
+                    "Expected SystemNotification for SYSTEM_NOTIFICATION kind, "
+                    f"got {type(envelope.payload).__name__}"
+                )
+            await self._sink.on_system_notification(state, envelope.payload)
+            return
+        raise TypeError(f"Unsupported response kind: {envelope.kind!r}")

@@ -1,9 +1,10 @@
 """Tests for the gateway connection manager (connection.py).
 
 Verifies the batch-C rewrite invariants:
-  * create_connection emits CONNECTED and installs a response queue.
+  * create_connection installs a response queue but does NOT emit CONNECTED
+    (CONNECTED is facade-owned after handshake + subscribe).
   * The response-sender loop classifies queued messages with RouteEnvelope and
-    dispatches them to the shared sink (replacing the old if/elif dispatch).
+    routes them inline to the sink's on_* methods (no Protocol.dispatch).
   * Unroutable messages are dropped with a warning, not crashed.
   * drop_connection cancels the sender and emits DISCONNECTED.
 """
@@ -42,6 +43,22 @@ class RecordingSink(DefaultResponseSink):
         self.envelopes.append((state.id, RouteEnvelope(ResponseKind.SYSTEM_NOTIFICATION, note)))
 
 
+class DuckTypedSink:
+    """Minimal host sink: only the two Protocol methods, no dispatch."""
+
+    def __init__(self) -> None:
+        self.outbound: list[OutboundText] = []
+        self.notifications: list[SystemNotification] = []
+
+    async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
+        self.outbound.append(message)
+
+    async def on_system_notification(
+        self, state: ConnectionState, note: SystemNotification
+    ) -> None:
+        self.notifications.append(note)
+
+
 def _send_noop(payload: str) -> asyncio.Future[None]:  # pragma: no cover - transport stub
     f: asyncio.Future[None] = asyncio.get_running_loop().create_future()
     f.set_result(None)
@@ -64,7 +81,7 @@ def manager(bus: EventBus, sink: RecordingSink) -> ConnectionManager:
 
 
 @pytest.mark.asyncio
-async def test_create_connection_emits_connected_and_installs_queue(
+async def test_create_connection_installs_queue_without_emitting_connected(
     manager: ConnectionManager, bus: EventBus
 ) -> None:
     connected: list[ConnectionState] = []
@@ -75,7 +92,7 @@ async def test_create_connection_emits_connected_and_installs_queue(
     assert state.id == UUID(int=1)
     assert state.response_queue is not None
     assert manager.connection_count == 1
-    assert connected == [state]
+    assert connected == []
 
 
 @pytest.mark.asyncio
@@ -100,6 +117,29 @@ async def test_response_sender_dispatches_outbound_and_system_to_sink(
     assert len(sink.envelopes) == 2
     assert sink.envelopes[0][1].kind is ResponseKind.OUTBOUND_TEXT
     assert sink.envelopes[1][1].kind is ResponseKind.SYSTEM_NOTIFICATION
+
+
+@pytest.mark.asyncio
+async def test_response_sender_routes_duck_typed_sink_without_dispatch(bus: EventBus) -> None:
+    sink = DuckTypedSink()
+    manager = ConnectionManager(sink=sink, event_bus=bus)  # type: ignore[arg-type]
+    state = await manager.create_connection(connection_id=UUID(int=21), send_payload=_send_noop)
+    queue = state.response_queue
+    assert queue is not None
+
+    msg = OutboundText(content="duck", sequence=1)
+    note = SystemNotification(level="info", message="typed")
+    queue.put_nowait(msg)
+    queue.put_nowait(note)
+
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if len(sink.outbound) == 1 and len(sink.notifications) == 1:
+            break
+
+    assert sink.outbound == [msg]
+    assert sink.notifications == [note]
+    await manager.drop_connection(state.id)
 
 
 @pytest.mark.asyncio

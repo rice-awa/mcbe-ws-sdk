@@ -57,7 +57,12 @@ class RouteEnvelope:
 
 @runtime_checkable
 class ResponseSink(Protocol):
-    """The two outbound delivery routes the response sender dispatches."""
+    """The two outbound delivery routes the response sender dispatches.
+
+    ``dispatch`` is intentionally **not** part of this protocol: the connection
+    manager routes by envelope kind and calls the matching ``on_*`` method
+    directly so a duck-typed host only needs these two hooks.
+    """
 
     async def on_outbound_text(
         self, state: ConnectionState, message: OutboundText
@@ -71,10 +76,6 @@ class ResponseSink(Protocol):
     ) -> None:
         ...
 
-    async def dispatch(self, state: ConnectionState, envelope: RouteEnvelope) -> None:
-        """Route ``envelope`` to the matching ``on_*`` method."""
-        ...
-
 
 class DefaultResponseSink:
     """Gateway default sink: logs metadata, delivers nothing to game.
@@ -82,6 +83,9 @@ class DefaultResponseSink:
     ``on_outbound_text`` and ``on_system_notification`` log metadata (no player
     text, no command lines). A real host wires a
     :class:`~mcbe_ws_sdk.delivery.outbound.McbeOutboundDelivery` here.
+
+    ``dispatch`` remains as a non-protocol convenience for hosts/tests that want
+    envelope-based routing; the manager never requires it.
     """
 
     async def on_outbound_text(
@@ -108,6 +112,7 @@ class DefaultResponseSink:
         )
 
     async def dispatch(self, state: ConnectionState, envelope: RouteEnvelope) -> None:
+        """Convenience router; not part of :class:`ResponseSink`."""
         if envelope.kind is ResponseKind.OUTBOUND_TEXT:
             if not isinstance(envelope.payload, OutboundText):
                 raise TypeError(

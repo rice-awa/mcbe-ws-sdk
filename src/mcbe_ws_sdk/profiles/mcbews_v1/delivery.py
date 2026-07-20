@@ -39,5 +39,10 @@ class McbewsV1Delivery:
             profile=self._profile,
         )
         await self._sleep(self._profile.response_prelude_delay)
-        await self._outbound.send_chunked(payloads, "text_resp", "mcbews_v1_text_resp")
+        await self._outbound.send_chunked(
+            payloads,
+            "text_resp",
+            "mcbews_v1_text_resp",
+            delay=self._profile.response_chunk_delay,
+        )
         return len(payloads)
