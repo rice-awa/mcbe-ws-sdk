@@ -11,13 +11,13 @@ from uuid import uuid4
 
 from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, ProtocolError
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import (
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
     decode_bridge_chat_chunk,
     decode_ui_chat_chunk,
     reassemble_bridge_chunks,
     reassemble_ui_chat_chunks,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
     UiChatChunk,
     UiChatMessage,

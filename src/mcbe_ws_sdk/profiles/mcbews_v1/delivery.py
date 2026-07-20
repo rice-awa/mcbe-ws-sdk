@@ -4,21 +4,18 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from mcbe_ws_sdk.delivery.outbound import McbeOutboundDelivery
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_legacy_response_commands
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import (
-    LEGACY_MCBEAI_V1,
-    LegacyMcbeAiV1Profile,
-)
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_text_response_commands
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1, McbewsV1Profile
 
 Sleeper = Callable[[float], Awaitable[None]]
 
 
-class LegacyMcbeAiV1Delivery:
+class McbewsV1Delivery:
     def __init__(
         self,
         outbound: McbeOutboundDelivery,
         *,
-        profile: LegacyMcbeAiV1Profile = LEGACY_MCBEAI_V1,
+        profile: McbewsV1Profile = MCBEWS_V1,
         sleeper: Sleeper = asyncio.sleep,
     ) -> None:
         self._outbound = outbound
@@ -33,7 +30,7 @@ class LegacyMcbeAiV1Delivery:
         text: str,
         response_id: str | None = None,
     ) -> int:
-        payloads = encode_legacy_response_commands(
+        payloads = encode_text_response_commands(
             player_name=player_name,
             role=role,
             text=text,
@@ -42,5 +39,5 @@ class LegacyMcbeAiV1Delivery:
             profile=self._profile,
         )
         await self._sleep(self._profile.response_prelude_delay)
-        await self._outbound.send_chunked(payloads, "ai_resp", "legacy_mcbeai_v1_response")
+        await self._outbound.send_chunked(payloads, "text_resp", "mcbews_v1_text_resp")
         return len(payloads)

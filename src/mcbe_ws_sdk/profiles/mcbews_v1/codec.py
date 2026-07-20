@@ -5,16 +5,16 @@ from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
     AddonBridgeRequest,
     AddonBridgeResponse,
     UiChatChunk,
     UiChatMessage,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import (
-    LEGACY_MCBEAI_V1,
-    LegacyMcbeAiV1Profile,
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import (
+    MCBEWS_V1,
+    McbewsV1Profile,
 )
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ def encode_bridge_request(
     request_id: str,
     capability: str,
     payload: dict[str, Any],
-    profile: LegacyMcbeAiV1Profile | AddonBridgeProfile = LEGACY_MCBEAI_V1,
+    profile: McbewsV1Profile | AddonBridgeProfile = MCBEWS_V1,
 ) -> str:
     body = AddonBridgeRequest(
         v=profile.request_version,  # type: ignore[arg-type]  # Protocol int vs Literal[2]
@@ -44,7 +44,7 @@ def encode_bridge_request(
 
 def decode_bridge_chat_chunk(
     chunk: str,
-    profile: LegacyMcbeAiV1Profile | AddonBridgeProfile = LEGACY_MCBEAI_V1,
+    profile: McbewsV1Profile | AddonBridgeProfile = MCBEWS_V1,
 ) -> AddonBridgeChunk:
     parts = chunk.split("|", 4)
     if len(parts) != 5:
@@ -108,7 +108,7 @@ def reassemble_bridge_chunks(chunks: list[AddonBridgeChunk]) -> AddonBridgeRespo
 
 def decode_ui_chat_chunk(
     chunk: str,
-    profile: LegacyMcbeAiV1Profile | AddonBridgeProfile = LEGACY_MCBEAI_V1,
+    profile: McbewsV1Profile | AddonBridgeProfile = MCBEWS_V1,
 ) -> UiChatChunk:
     parts = chunk.split("|", 4)
     if len(parts) != 5:
@@ -175,14 +175,14 @@ def reassemble_ui_chat_chunks(chunks: list[UiChatChunk]) -> UiChatMessage:
     return UiChatMessage(msg_id=msg_id, player_name=player_name, message=message)
 
 
-def encode_legacy_response_commands(
+def encode_text_response_commands(
     *,
     player_name: str,
     role: str,
     text: str,
     flow: FlowControlMiddleware,
     response_id: str | None = None,
-    profile: LegacyMcbeAiV1Profile = LEGACY_MCBEAI_V1,
+    profile: McbewsV1Profile = MCBEWS_V1,
 ) -> list[str]:
     message_id = response_id or f"resp-{uuid4().hex}"
 

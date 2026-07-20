@@ -4,19 +4,12 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LEGACY_MCBEAI_V1, LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1, McbewsV1Profile
 
 
 @runtime_checkable
 class AddonBridgeProfile(Protocol):
-    """Protocol defining the wire-format contract for addon bridge interop.
-
-    Concrete profiles (e.g. :class:`LegacyMcbeAiV1Profile`) satisfy this
-    protocol structurally; no inheritance is required.
-
-    All members are declared as read-only properties so that frozen
-    dataclass implementations satisfy the protocol.
-    """
+    """Wire-format contract for addon bridge interop."""
 
     @property
     def bridge_request_message_id(self) -> str: ...
@@ -38,6 +31,6 @@ class AddonBridgeProfile(Protocol):
 
 __all__ = [
     "AddonBridgeProfile",
-    "LEGACY_MCBEAI_V1",
-    "LegacyMcbeAiV1Profile",
+    "MCBEWS_V1",
+    "McbewsV1Profile",
 ]

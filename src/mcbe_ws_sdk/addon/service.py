@@ -26,8 +26,8 @@ import structlog
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import BridgeTimeoutError
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_bridge_request
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import (
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_bridge_request
+from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
     UiChatChunk,
     UiChatMessage,
