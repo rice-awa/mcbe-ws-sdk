@@ -2,7 +2,7 @@ import { GameMode, world, system } from "@minecraft/server";
 import { spawnSimulatedPlayer } from "@minecraft/server-gametest";
 
 import { chunkBridgePayload, chunkUiChatPayload } from "./chunking";
-import { BRIDGE_MAX_CHUNK_CONTENT_LENGTH, TOOL_PLAYER_NAME } from "./constants";
+import { TOOL_PLAYER_NAME } from "./constants";
 
 const DEBUG = true;
 
@@ -57,7 +57,7 @@ export async function sendBridgeResponseChunks(requestId: string, payload: strin
     throw new Error("Tool player is not available");
   }
 
-  const chunks = chunkBridgePayload(requestId, payload, BRIDGE_MAX_CHUNK_CONTENT_LENGTH);
+  const chunks = chunkBridgePayload(requestId, payload);
   for (const chunk of chunks) {
     await toolPlayer.runCommand(`tell @s ${chunk}`);
   }
@@ -74,7 +74,7 @@ export function sendUiChatMessage(playerName: string, message: string): void {
 
   const id = `ui-${Date.now()}-${++uiChatSeq}`;
   const payload = JSON.stringify({ player: playerName, message });
-  const chunks = chunkUiChatPayload(id, payload, BRIDGE_MAX_CHUNK_CONTENT_LENGTH);
+  const chunks = chunkUiChatPayload(id, payload);
   for (const chunk of chunks) {
     toolPlayer.runCommand(`tell @s ${chunk}`);
   }

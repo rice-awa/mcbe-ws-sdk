@@ -13,4 +13,11 @@ export const TOOL_PLAYER_NAME = "MCBEAI_TOOL";
  *     可通过 .env 的 MAX_CHUNK_CONTENT_LENGTH 调整）
  */
 export const BRIDGE_MAX_CHUNK_CONTENT_LENGTH = 256;
+
+/** MCBE commandLine 实测安全字节上限 */
+export const BRIDGE_COMMAND_LINE_BYTE_BUDGET = 461;
+
+/** 单分片内容 code-point 上限（字符数，非字节数） */
+export const BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS = 256;
+
 export const AI_RESP_MESSAGE_ID = "mcbeai:ai_resp";
