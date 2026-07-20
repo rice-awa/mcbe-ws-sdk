@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 
 from mcbe_ws_sdk.config import FlowControlSettings
-from mcbe_ws_sdk.errors import FrameTooLargeError
+from mcbe_ws_sdk.errors import FrameTooLargeError, ProtocolError
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommand
 
 # 句子分隔符：中英文句号、问号、感叹号、换行
@@ -140,7 +140,16 @@ class FlowControlMiddleware:
         else:
             text_parts = [text]
         total_hint = len(text_parts)
+        max_iterations = 10
+        iteration = 0
         while True:
+            iteration += 1
+            if iteration > max_iterations:
+                raise ProtocolError(
+                    f"chunk_framed_scriptevent failed to converge after "
+                    f"{max_iterations} iterations "
+                    f"(last total_hint={total_hint})"
+                )
             refined_parts: list[str] = []
             for part in text_parts:
                 def command_line_for(fragment: str, probe_total: int = total_hint) -> str:

@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from mcbe_ws_sdk._logging import get_logger
+import structlog
+
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 
 if TYPE_CHECKING:
     from mcbe_ws_sdk.gateway.connection import ConnectionState
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ResponseKind(Enum):
@@ -108,8 +109,16 @@ class DefaultResponseSink:
 
     async def dispatch(self, state: ConnectionState, envelope: RouteEnvelope) -> None:
         if envelope.kind is ResponseKind.OUTBOUND_TEXT:
-            assert isinstance(envelope.payload, OutboundText)
+            if not isinstance(envelope.payload, OutboundText):
+                raise TypeError(
+                    "Expected OutboundText for OUTBOUND_TEXT kind, "
+                    f"got {type(envelope.payload).__name__}"
+                )
             await self.on_outbound_text(state, envelope.payload)
             return
-        assert isinstance(envelope.payload, SystemNotification)
+        if not isinstance(envelope.payload, SystemNotification):
+            raise TypeError(
+                "Expected SystemNotification for SYSTEM_NOTIFICATION kind, "
+                f"got {type(envelope.payload).__name__}"
+            )
         await self.on_system_notification(state, envelope.payload)

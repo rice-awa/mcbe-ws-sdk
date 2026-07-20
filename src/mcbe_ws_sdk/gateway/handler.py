@@ -25,14 +25,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from mcbe_ws_sdk._logging import get_logger
+import structlog
+
 from mcbe_ws_sdk.command import CommandRegistry, ParsedCommand
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftSubscribe,
     PlayerMessageEvent,
 )
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 Level = Literal["info", "error", "success"]

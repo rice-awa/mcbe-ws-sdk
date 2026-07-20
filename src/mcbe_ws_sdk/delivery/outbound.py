@@ -5,13 +5,14 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from mcbe_ws_sdk._logging import get_logger
+import structlog
+
 from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.flow import FlowControlMiddleware
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 
-logger = get_logger(__name__)
-ws_raw_logger = get_logger("websocket.raw")
+logger = structlog.get_logger(__name__)
+ws_raw_logger = structlog.get_logger("websocket.raw")
 PayloadSender = Callable[[str], Awaitable[None]]
 
 
@@ -48,7 +49,7 @@ class McbeOutboundDelivery:
     ) -> int:
         """发送 tellraw 文本并返回实际 payload 数量。"""
         payloads = self.flow.chunk_tellraw(message, color=color, target=target)
-        await self._send_chunked(payloads, "tellraw", source)
+        await self.send_chunked(payloads, "tellraw", source)
         return len(payloads)
 
     async def send_scriptevent(
@@ -59,7 +60,7 @@ class McbeOutboundDelivery:
     ) -> int:
         """发送 scriptevent 文本并返回实际 payload 数量。"""
         payloads = self.flow.chunk_scriptevent(content, message_id)
-        await self._send_chunked(payloads, "scriptevent", source)
+        await self.send_chunked(payloads, "scriptevent", source)
         return len(payloads)
 
     async def send_raw_command(
@@ -98,7 +99,7 @@ class McbeOutboundDelivery:
             target=message.player_name or "@a",
         )
 
-    async def _send_chunked(self, payloads: list[str], delay_kind: str, source: str) -> None:
+    async def send_chunked(self, payloads: list[str], delay_kind: str, source: str) -> None:
         chunk_delay = self.flow.chunk_delay_for(delay_kind)
         for idx, payload in enumerate(payloads):
             await self._send_one(

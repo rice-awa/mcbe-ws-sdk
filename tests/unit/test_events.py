@@ -58,18 +58,18 @@ async def test_emit_invokes_strong_synchronous_handler(bus: EventBus) -> None:
 
 
 @pytest.mark.asyncio
-async def test_emit_rejects_synchronous_handler_return_value(bus: EventBus) -> None:
+async def test_emit_logs_synchronous_handler_return_value(bus: EventBus) -> None:
     def _invalid_handler() -> int:
         return 123
 
     bus.subscribe(WsEventType.PLAYER_MESSAGE, _invalid_handler, weak=False)
-
-    with pytest.raises(TypeError, match="must return None or an awaitable"):
-        await bus.emit(WsEventType.PLAYER_MESSAGE)
+    # The TypeError is now caught and logged by emit's exception isolation;
+    # emit completes without raising.
+    await bus.emit(WsEventType.PLAYER_MESSAGE)
 
 
 @pytest.mark.asyncio
-async def test_emit_propagates_handler_exception_after_prior_handlers_run(bus: EventBus) -> None:
+async def test_emit_isolates_handler_exception_and_continues(bus: EventBus) -> None:
     first: list[str] = []
     second: list[str] = []
 
@@ -77,16 +77,18 @@ async def test_emit_propagates_handler_exception_after_prior_handlers_run(bus: E
         first.append(msg)
 
     async def b(msg: str) -> None:
-        # Fail the second handler and confirm the first still ran.
+        # Fail the second handler and confirm the first still ran
+        # and emit continues to subsequent handlers.
         second.append(msg)
         raise RuntimeError("boom")
 
     bus.subscribe(WsEventType.RAW_INBOUND, a, weak=False)
     bus.subscribe(WsEventType.RAW_INBOUND, b, weak=False)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        await bus.emit(WsEventType.RAW_INBOUND, "tick")
+    # Exception is caught and logged; emit completes without raising.
+    await bus.emit(WsEventType.RAW_INBOUND, "tick")
     assert first == ["tick"]
+    assert second == ["tick"]
     assert second == ["tick"]
 
 

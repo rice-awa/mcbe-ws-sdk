@@ -70,7 +70,7 @@ class AddonBridgeService:
         send_command: CommandSender,
     ) -> AddonBridgeClient:
         """Build a client bound to one connection."""
-        return _ConnectionAddonBridgeClient(self, connection_id, send_command)
+        return ConnectionAddonBridgeClient(self, connection_id, send_command)
 
     async def request_capability(
         self,
@@ -170,7 +170,7 @@ class AddonBridgeService:
         return session
 
 
-class _ConnectionAddonBridgeClient:
+class ConnectionAddonBridgeClient:
     """Per-connection client bound to one bridge service instance."""
 
     def __init__(

@@ -19,6 +19,7 @@ from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import (
 
 if TYPE_CHECKING:
     from mcbe_ws_sdk.flow.flow_control import FlowControlMiddleware
+    from mcbe_ws_sdk.profiles import AddonBridgeProfile
 
 
 def _split_prefix(expected: str) -> tuple[str, str]:
@@ -30,10 +31,10 @@ def encode_bridge_request(
     request_id: str,
     capability: str,
     payload: dict[str, Any],
-    profile: LegacyMcbeAiV1Profile = LEGACY_MCBEAI_V1,
+    profile: LegacyMcbeAiV1Profile | AddonBridgeProfile = LEGACY_MCBEAI_V1,
 ) -> str:
     body = AddonBridgeRequest(
-        v=profile.request_version,
+        v=profile.request_version,  # type: ignore[arg-type]  # Protocol int vs Literal[2]
         request_id=request_id,
         capability=capability,
         payload=payload,
@@ -43,7 +44,7 @@ def encode_bridge_request(
 
 def decode_bridge_chat_chunk(
     chunk: str,
-    profile: LegacyMcbeAiV1Profile = LEGACY_MCBEAI_V1,
+    profile: LegacyMcbeAiV1Profile | AddonBridgeProfile = LEGACY_MCBEAI_V1,
 ) -> AddonBridgeChunk:
     parts = chunk.split("|", 4)
     if len(parts) != 5:
@@ -107,7 +108,7 @@ def reassemble_bridge_chunks(chunks: list[AddonBridgeChunk]) -> AddonBridgeRespo
 
 def decode_ui_chat_chunk(
     chunk: str,
-    profile: LegacyMcbeAiV1Profile = LEGACY_MCBEAI_V1,
+    profile: LegacyMcbeAiV1Profile | AddonBridgeProfile = LEGACY_MCBEAI_V1,
 ) -> UiChatChunk:
     parts = chunk.split("|", 4)
     if len(parts) != 5:

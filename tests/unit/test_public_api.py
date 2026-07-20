@@ -11,6 +11,7 @@ def test_public_api_snapshot() -> None:
     assert set(mcbe_ws_sdk.__all__) == {
         "__version__",
         "AddonBridgeClient",
+        "AddonBridgeProfile",
         "AddonBridgeService",
         "AddonBridgeSettings",
         "AddonMessageResult",
@@ -20,6 +21,7 @@ def test_public_api_snapshot() -> None:
         "BridgeTimeoutError",
         "CommandRegistry",
         "ConfigurationError",
+        "ConnectionAddonBridgeClient",
         "ConnectionHook",
         "ConnectionManager",
         "ConnectionState",
@@ -36,6 +38,7 @@ def test_public_api_snapshot() -> None:
         "McbeOutboundDelivery",
         "McbeServerFacade",
         "McbeWsSdkError",
+        "MessageSurfaceConfig",
         "MinecraftCommandResponse",
         "MinecraftErrorFrame",
         "MinecraftProtocolHandler",

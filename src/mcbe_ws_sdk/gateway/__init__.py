@@ -11,7 +11,7 @@ repo) injects behaviour by implementing
 from mcbe_ws_sdk.config import GatewaySettings, WebsocketTransportConfig
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState
 from mcbe_ws_sdk.gateway.events import EventBus, SubscriptionToken, WsEventType
-from mcbe_ws_sdk.gateway.handler import MinecraftProtocolHandler
+from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
@@ -30,6 +30,7 @@ __all__ = [
     "EventBus",
     "GatewaySettings",
     "McbeServerFacade",
+    "MessageSurfaceConfig",
     "MinecraftProtocolHandler",
     "NoOpHook",
     "OutboundText",

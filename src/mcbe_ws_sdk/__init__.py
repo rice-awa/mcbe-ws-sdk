@@ -23,6 +23,7 @@ from mcbe_ws_sdk.addon import (
     AddonBridgeService,
     AddonBridgeSettings,
     AddonMessageResult,
+    ConnectionAddonBridgeClient,
 )
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
@@ -46,6 +47,7 @@ from mcbe_ws_sdk.gateway import (
     EventBus,
     GatewaySettings,
     McbeServerFacade,
+    MessageSurfaceConfig,
     MinecraftProtocolHandler,
     NoOpHook,
     OutboundText,
@@ -57,7 +59,7 @@ from mcbe_ws_sdk.gateway import (
     WebsocketTransportConfig,
     WsEventType,
 )
-from mcbe_ws_sdk.profiles import LEGACY_MCBEAI_V1, LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles import LEGACY_MCBEAI_V1, AddonBridgeProfile, LegacyMcbeAiV1Profile
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_legacy_response_commands
 from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.delivery import LegacyMcbeAiV1Delivery
 from mcbe_ws_sdk.protocol import (
@@ -74,6 +76,7 @@ except importlib.metadata.PackageNotFoundError:
 __all__ = (
     "__version__",
     "AddonBridgeClient",
+    "AddonBridgeProfile",
     "AddonBridgeService",
     "AddonBridgeSettings",
     "AddonMessageResult",
@@ -83,6 +86,7 @@ __all__ = (
     "BridgeTimeoutError",
     "CommandRegistry",
     "ConfigurationError",
+    "ConnectionAddonBridgeClient",
     "ConnectionHook",
     "ConnectionManager",
     "ConnectionState",
@@ -99,6 +103,7 @@ __all__ = (
     "McbeOutboundDelivery",
     "McbeServerFacade",
     "McbeWsSdkError",
+    "MessageSurfaceConfig",
     "MinecraftCommandResponse",
     "MinecraftErrorFrame",
     "MinecraftProtocolHandler",

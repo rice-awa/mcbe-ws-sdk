@@ -42,8 +42,5 @@ class LegacyMcbeAiV1Delivery:
             profile=self._profile,
         )
         await self._sleep(self._profile.response_prelude_delay)
-        for index, payload in enumerate(payloads):
-            await self._outbound.send_payload(payload, source="legacy_mcbeai_v1_response")
-            if index < len(payloads) - 1:
-                await self._sleep(self._profile.response_chunk_delay)
+        await self._outbound.send_chunked(payloads, "ai_resp", "legacy_mcbeai_v1_response")
         return len(payloads)

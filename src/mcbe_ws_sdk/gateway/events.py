@@ -10,6 +10,8 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
+import structlog
+
 Handler = Callable[..., Awaitable[None] | None]
 
 
@@ -97,7 +99,11 @@ class EventBus:
         return len(self._subscribers[event])
 
     async def emit(self, event: WsEventType, *args: Any, **kwargs: Any) -> None:
-        """Await live handlers in subscription order."""
+        """Await live handlers in subscription order.
+
+        Each handler is isolated: an exception in one handler does not prevent
+        subsequent handlers from being called.
+        """
         subscribers = self._subscribers[event]
         for token_id in list(subscribers):
             subscription = subscribers.get(token_id)
@@ -107,14 +113,22 @@ class EventBus:
             if handler is None:
                 subscribers.pop(token_id, None)
                 continue
-            result = handler(*args, **kwargs)
-            if inspect.isawaitable(result):
-                await result
-            elif result is not None:
+            try:
+                result = handler(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    await result
+                elif result is not None:
+                    handler_name = getattr(handler, "__qualname__", repr(handler))
+                    raise TypeError(
+                        f"Event handler {handler_name} for {event.value!r} must return None "
+                        f"or an awaitable, got {type(result).__name__}"
+                    )
+            except Exception:
                 handler_name = getattr(handler, "__qualname__", repr(handler))
-                raise TypeError(
-                    f"Event handler {handler_name} for {event.value!r} must return None "
-                    f"or an awaitable, got {type(result).__name__}"
+                structlog.get_logger(__name__).exception(
+                    "event_handler_failed",
+                    event_type=event.value,
+                    handler=handler_name,
                 )
 
     def _prune_dead(self, event: WsEventType) -> None:

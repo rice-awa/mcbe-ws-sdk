@@ -194,7 +194,7 @@ class AddonBridgeSession:
         content: str,
         item: T,
     ) -> ChunkBuffer[T]:
-        self._prune_expired()
+        self._prune_if_needed()
         if not 1 <= index <= total <= self._settings.max_chunks_per_message:
             raise BridgeLimitError("invalid chunk index or total")
         encoded_size = len(content.encode("utf-8"))
@@ -234,6 +234,12 @@ class AddonBridgeSession:
         for buffer_id, ui_buffer in list(self._ui_chat_chunk_buffers.items()):
             if now - ui_buffer.updated_at >= ttl:
                 self._drop_buffer(self._ui_chat_chunk_buffers, buffer_id)
+
+    def _prune_if_needed(self) -> None:
+        """Prune expired buffers when approaching resource limits."""
+        total = len(self._chunk_buffers) + len(self._ui_chat_chunk_buffers)
+        if total >= self._settings.max_buffer_ids * 0.75:
+            self._prune_expired()
 
     @staticmethod
     def _drop_buffer(

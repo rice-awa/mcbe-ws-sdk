@@ -22,11 +22,12 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
-from mcbe_ws_sdk._logging import get_logger
+import structlog
+
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink, RouteEnvelope
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 SendPayload = Callable[[str], Awaitable[None]]
 
@@ -42,9 +43,28 @@ class ConnectionState:
     """
 
     id: UUID = field(default_factory=uuid4)
-    player_name: str | None = None  # most-recent speaker convenience pointer only
+    _player_name: str | None = field(default=None, repr=False)
     send_payload: SendPayload | None = None
     response_queue: asyncio.Queue[object] | None = None
+
+    @property
+    def player_name(self) -> str | None:
+        """Most-recent speaker convenience pointer only.
+
+        .. deprecated::
+            Use :attr:`PlayerMessageEvent.sender` for authoritative player identity.
+            This attribute is retained for backwards compatibility only and will
+            emit a :class:`DeprecationWarning` on access.
+        """
+        import warnings
+
+        warnings.warn(
+            "ConnectionState.player_name is a convenience pointer only; "
+            "use PlayerMessageEvent.sender for authoritative player identity",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._player_name
 
 
 class ConnectionManager:

@@ -9,7 +9,7 @@ whitespace, so ``#prefix_xyz`` does NOT match the ``#prefix`` token.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import structlog
@@ -24,7 +24,7 @@ class MinecraftCommandConfig:
     prefix: str
     type: str
     description: str
-    aliases: list[str] = field(default_factory=list)
+    aliases: tuple[str, ...] = field(default_factory=tuple)
     usage: str | None = None
 
 
@@ -57,7 +57,7 @@ class CommandRegistry:
                 cmd_config = MinecraftCommandConfig(
                     prefix=prefix,
                     type=cmd,
-                    aliases=[],
+                    aliases=(),
                     description="",
                     usage=None,
                 )
@@ -66,7 +66,7 @@ class CommandRegistry:
                 cmd_config = MinecraftCommandConfig(
                     prefix=prefix,
                     type=cmd.get("type", ""),
-                    aliases=list(cmd.get("aliases", [])),
+                    aliases=tuple(cmd.get("aliases", [])),
                     description=cmd.get("description", ""),
                     usage=cmd.get("usage"),
                 )
@@ -138,7 +138,8 @@ class CommandRegistry:
             return False
 
         self._alias_map[alias] = command_prefix
-        self._commands[command_prefix].aliases.append(alias)
+        old = self._commands[command_prefix]
+        self._commands[command_prefix] = replace(old, aliases=old.aliases + (alias,))
 
         logger.info("alias_added", prefix=command_prefix, alias=alias)
         return True
@@ -150,7 +151,10 @@ class CommandRegistry:
             return False
 
         main_prefix = self._alias_map.pop(alias)
-        self._commands[main_prefix].aliases.remove(alias)
+        old = self._commands[main_prefix]
+        self._commands[main_prefix] = replace(
+            old, aliases=tuple(a for a in old.aliases if a != alias)
+        )
 
         logger.info("alias_removed", prefix=main_prefix, alias=alias)
         return True
@@ -159,15 +163,15 @@ class CommandRegistry:
         """获取命令配置"""
         return self._commands.get(prefix)
 
-    def get_aliases(self, command_prefix: str) -> list[str]:
+    def get_aliases(self, command_prefix: str) -> tuple[str, ...]:
         """获取命令的所有别名"""
         cmd = self._commands.get(command_prefix)
-        return list(cmd.aliases) if cmd else []
+        return cmd.aliases if cmd else ()
 
-    def list_all_commands(self) -> list[tuple[str, str, list[str]]]:
-        """列出所有命令 (前缀, 类型, 别名列表)"""
+    def list_all_commands(self) -> list[tuple[str, str, tuple[str, ...]]]:
+        """列出所有命令 (前缀, 类型, 别名元组)"""
         return [
-            (prefix, config.type, list(config.aliases))
+            (prefix, config.type, config.aliases)
             for prefix, config in self._commands.items()
         ]
 

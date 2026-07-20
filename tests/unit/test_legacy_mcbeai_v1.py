@@ -117,14 +117,15 @@ async def test_legacy_delivery_applies_profile_delays() -> None:
         player_name="Alice", role="assistant", text="x" * 800, response_id="resp-2"
     )
     assert count == len(sent)
-    assert slept == [0.5] + [0.15] * (count - 1)
+    assert slept == [0.5]
 
 
 def test_core_flow_has_no_legacy_delay_keys_or_dead_splitters() -> None:
     settings = FlowControlSettings()
     old_splitter = "_" + "split_text"
     old_chunker = "_" + "chunk_by_limits"
-    assert "ai_resp" not in settings.chunk_delays
+    assert "ai_resp" in settings.chunk_delays
+    assert settings.chunk_delays["ai_resp"] == 0.15
     assert "ai_resp_prelude" not in settings.chunk_delays
     assert not hasattr(FlowControlMiddleware, old_splitter)
     assert not hasattr(FlowControlMiddleware, old_chunker)

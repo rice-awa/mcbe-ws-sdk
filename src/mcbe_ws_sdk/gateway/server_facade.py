@@ -34,9 +34,9 @@ import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+import structlog
 import websockets
 
-from mcbe_ws_sdk._logging import get_logger
 from mcbe_ws_sdk.addon import AddonBridgeService
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.config import GatewaySettings
@@ -51,7 +51,7 @@ from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftEr
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class McbeServerFacade:
@@ -70,13 +70,14 @@ class McbeServerFacade:
         sink: ResponseSink | None = None,
         addon: AddonBridgeService | None = None,
         registry: CommandRegistry | None = None,
+        surface: MessageSurfaceConfig | None = None,
     ) -> None:
         self._settings = settings if settings is not None else GatewaySettings()
         self._hook = hook if hook is not None else NoOpHook()
         self._sink = sink if sink is not None else DefaultResponseSink()
         self._registry = registry if registry is not None else CommandRegistry()
 
-        self._handler = MinecraftProtocolHandler(self._registry, surface=MessageSurfaceConfig())
+        self._handler = MinecraftProtocolHandler(self._registry, surface=surface)
         self._addon = addon if addon is not None else AddonBridgeService(self._settings.addon)
         self._addon.set_ui_chat_callback(self._on_ui_chat_reassembled)
 

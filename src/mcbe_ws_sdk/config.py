@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 from mcbe_ws_sdk.errors import ConfigurationError
 from mcbe_ws_sdk.profiles import AddonBridgeProfile
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.profile import LegacyMcbeAiV1Profile
 
 
 def _require_positive_int(value: object, field_name: str) -> None:
@@ -26,7 +27,7 @@ def _require_finite_real(value: object, field_name: str, *, allow_zero: bool = F
         raise ConfigurationError(f"{field_name} must be a finite {comparison} real number")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlowControlSettings:
     command_line_byte_budget: int = 461
     max_chunk_content_length: int = 400
@@ -35,8 +36,11 @@ class FlowControlSettings:
         default_factory=lambda: {
             "tellraw": 0.05,
             "scriptevent": 0.05,
+            "ai_resp": 0.15,
         }
     )
+
+    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent", "ai_resp"})
 
     def __post_init__(self) -> None:
         _require_positive_int(self.command_line_byte_budget, "flow.command_line_byte_budget")
@@ -45,12 +49,18 @@ class FlowControlSettings:
             delays = dict(self.chunk_delays)
         except (TypeError, ValueError) as exc:
             raise ConfigurationError("flow.chunk_delays must be a mapping") from exc
+        invalid = delays.keys() - self.VALID_DELAY_KINDS
+        if invalid:
+            raise ConfigurationError(
+                f"flow.chunk_delays contains unknown keys: {sorted(invalid)}; "
+                f"valid keys: {sorted(self.VALID_DELAY_KINDS)}"
+            )
         for kind, delay in delays.items():
             _require_finite_real(delay, f"flow.chunk_delays.{kind}", allow_zero=True)
         object.__setattr__(self, "chunk_delays", MappingProxyType(delays))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AddonBridgeSettings:
     timeout_seconds: float = 5.0
     buffer_ttl_seconds: float = 30.0
@@ -59,7 +69,7 @@ class AddonBridgeSettings:
     max_chunks_per_message: int = 64
     max_message_bytes: int = 262_144
     max_total_buffer_bytes: int = 1_048_576
-    profile: AddonBridgeProfile = field(default_factory=AddonBridgeProfile)
+    profile: AddonBridgeProfile = field(default_factory=LegacyMcbeAiV1Profile)
 
     def __post_init__(self) -> None:
         for name in ("timeout_seconds", "buffer_ttl_seconds"):
@@ -74,7 +84,7 @@ class AddonBridgeSettings:
             _require_positive_int(getattr(self, name), f"addon.{name}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WebsocketTransportConfig:
     """Transport knobs for the facade's ``websockets.serve`` lifetime."""
 
@@ -100,7 +110,7 @@ class WebsocketTransportConfig:
                 _require_positive_int(value, f"websocket.{name}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GatewaySettings:
     flow: FlowControlSettings = field(default_factory=FlowControlSettings)
     addon: AddonBridgeSettings = field(default_factory=AddonBridgeSettings)
