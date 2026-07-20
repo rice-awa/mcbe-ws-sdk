@@ -2,13 +2,13 @@ import { GameMode, world, system } from "@minecraft/server";
 import { spawnSimulatedPlayer } from "@minecraft/server-gametest";
 
 import { chunkBridgePayload } from "./chunking";
-import { TOOL_PLAYER_NAME } from "./constants";
+import { BRIDGE_SENDER } from "./constants";
 
 const DEBUG = true;
 
 function log(message: string): void {
   if (DEBUG) {
-    console.log(`[MCBE-AI-ToolPlayer] ${message}`);
+    console.log(`[mcbews-bridge-sender] ${message}`);
   }
 }
 
@@ -19,9 +19,9 @@ const TOOL_PLAYER_CHECK_INTERVAL_TICKS = 20 * 30;
 let isToolPlayerInitialized = false;
 
 export function ensureToolPlayer(): void {
-  log(`ensureToolPlayer: 检查模拟玩家 ${TOOL_PLAYER_NAME} 是否存在...`);
+  log(`ensureToolPlayer: 检查模拟玩家 ${BRIDGE_SENDER} 是否存在...`);
 
-  const existing = world.getAllPlayers().find((player) => player.name === TOOL_PLAYER_NAME);
+  const existing = world.getAllPlayers().find((player) => player.name === BRIDGE_SENDER);
 
   if (existing) {
     log("ensureToolPlayer: 模拟玩家已存在，跳过创建");
@@ -40,7 +40,7 @@ export function ensureToolPlayer(): void {
         dimension,
         ...TOOL_PLAYER_LOCATION,
       },
-      TOOL_PLAYER_NAME,
+      BRIDGE_SENDER,
       GameMode.Creative
     );
     log(`ensureToolPlayer: 模拟玩家创建成功: ${player.name}`);
@@ -51,7 +51,7 @@ export function ensureToolPlayer(): void {
 }
 
 export async function sendBridgeResponseChunks(requestId: string, payload: string): Promise<void> {
-  const toolPlayer = world.getAllPlayers().find((player) => player.name === TOOL_PLAYER_NAME);
+  const toolPlayer = world.getAllPlayers().find((player) => player.name === BRIDGE_SENDER);
 
   if (!toolPlayer) {
     log(`sendBridgeResponseChunks: tool player missing for requestId=${requestId}`);

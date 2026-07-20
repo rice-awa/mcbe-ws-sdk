@@ -75,13 +75,13 @@ describe("chunking", () => {
     it("handles empty payload", () => {
       const chunks = chunkBridgePayload("req-1", "");
       expect(chunks.length).toBe(1);
-      expect(chunks[0]).toContain("MCBEAI|RESP|req-1|1/1|");
+      expect(chunks[0]).toContain("MCBEWS|BRIDGE|req-1|1/1|");
     });
 
     it("handles short payload as a single chunk", () => {
       const chunks = chunkBridgePayload("req-1", "hello");
       expect(chunks.length).toBe(1);
-      expect(chunks[0]).toBe("MCBEAI|RESP|req-1|1/1|hello");
+      expect(chunks[0]).toBe("MCBEWS|BRIDGE|req-1|1/1|hello");
     });
 
     it("round-trips content correctly", () => {
@@ -93,7 +93,7 @@ describe("chunking", () => {
 
     it("includes correct metadata in each chunk", () => {
       const chunks = chunkBridgePayload("my-id", "abcdef");
-      expect(chunks[0]).toMatch(/^MCBEAI\|RESP\|my-id\|1\/\d+\|abcdef$/);
+      expect(chunks[0]).toMatch(/^MCBEWS\|BRIDGE\|my-id\|1\/\d+\|abcdef$/);
     });
 
     it("accepts custom commandLineByteBudget", () => {
@@ -137,13 +137,13 @@ describe("chunking", () => {
 
     it("uses BRIDGE_UI_CHAT_PREFIX in chunks", () => {
       const chunks = chunkUiChatPayload("ui-1", "hello");
-      expect(chunks[0]).toMatch(/^MCBEAI\|UI_CHAT\|ui-1\|1\/\d+\|hello$/);
+      expect(chunks[0]).toMatch(/^MCBEWS\|UI_CHAT\|ui-1\|1\/\d+\|hello$/);
     });
 
     it("handles empty payload", () => {
       const chunks = chunkUiChatPayload("ui-1", "");
       expect(chunks.length).toBe(1);
-      expect(chunks[0]).toContain("MCBEAI|UI_CHAT|ui-1|1/1|");
+      expect(chunks[0]).toContain("MCBEWS|UI_CHAT|ui-1|1/1|");
     });
   });
 

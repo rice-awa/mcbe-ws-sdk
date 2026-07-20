@@ -3,14 +3,14 @@ import { system } from "@minecraft/server";
 import {
   ResponseAssembler,
   DEFAULT_RESPONSE_SYNC_LIMITS,
-  parseLegacyResponseChunk,
-  setAiRespHandler,
+  parseTextResponseChunk,
+  setTextRespHandler,
   registerResponseSyncHandler,
   _testingReset,
-  type LegacyResponseChunk,
+  type TextResponseChunk,
   type ResponseSyncLimits,
 } from "../scripts/bridge/responseSync";
-import { AI_RESP_MESSAGE_ID } from "../scripts/bridge/constants";
+import { TEXT_RESP_MESSAGE_ID } from "../scripts/bridge/constants";
 import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 
 function serverEvent(message: string) {
   return {
-    id: AI_RESP_MESSAGE_ID,
+    id: TEXT_RESP_MESSAGE_ID,
     message,
     sourceType: "Server" as const,
   };
@@ -27,7 +27,7 @@ function serverEvent(message: string) {
 
 function entityEvent(message: string) {
   return {
-    id: AI_RESP_MESSAGE_ID,
+    id: TEXT_RESP_MESSAGE_ID,
     message,
     sourceType: "Entity" as const,
   };
@@ -43,38 +43,38 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// parseLegacyResponseChunk
+// parseTextResponseChunk
 // ---------------------------------------------------------------------------
 
-describe("parseLegacyResponseChunk", () => {
+describe("parseTextResponseChunk", () => {
   it("rejects null", () => {
-    expect(parseLegacyResponseChunk(null)).toBeNull();
+    expect(parseTextResponseChunk(null)).toBeNull();
   });
 
   it("rejects non-object primitive", () => {
-    expect(parseLegacyResponseChunk("hello")).toBeNull();
-    expect(parseLegacyResponseChunk(42)).toBeNull();
-    expect(parseLegacyResponseChunk(true)).toBeNull();
+    expect(parseTextResponseChunk("hello")).toBeNull();
+    expect(parseTextResponseChunk(42)).toBeNull();
+    expect(parseTextResponseChunk(true)).toBeNull();
   });
 
   it("rejects array", () => {
-    expect(parseLegacyResponseChunk(["a", "b"])).toBeNull();
+    expect(parseTextResponseChunk(["a", "b"])).toBeNull();
   });
 
   it("rejects missing fields", () => {
-    expect(parseLegacyResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: "user" })).toBeNull();
+    expect(parseTextResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: "user" })).toBeNull();
   });
 
   it("rejects wrong types", () => {
-    expect(parseLegacyResponseChunk({ id: "x", i: "1", n: 1, p: "P", r: "user", c: "hi" })).toBeNull();
-    expect(parseLegacyResponseChunk({ id: 123, i: 1, n: 1, p: "P", r: "user", c: "hi" })).toBeNull();
-    expect(parseLegacyResponseChunk({ id: "x", i: 1, n: 1, p: 42, r: "user", c: "hi" })).toBeNull();
-    expect(parseLegacyResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: true, c: "hi" })).toBeNull();
-    expect(parseLegacyResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: "user", c: 42 })).toBeNull();
+    expect(parseTextResponseChunk({ id: "x", i: "1", n: 1, p: "P", r: "user", c: "hi" })).toBeNull();
+    expect(parseTextResponseChunk({ id: 123, i: 1, n: 1, p: "P", r: "user", c: "hi" })).toBeNull();
+    expect(parseTextResponseChunk({ id: "x", i: 1, n: 1, p: 42, r: "user", c: "hi" })).toBeNull();
+    expect(parseTextResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: true, c: "hi" })).toBeNull();
+    expect(parseTextResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: "user", c: 42 })).toBeNull();
   });
 
   it("returns a valid chunk for a well-formed object", () => {
-    const result = parseLegacyResponseChunk({ id: "x", i: 1, n: 3, p: "Player1", r: "assistant", c: "hello" });
+    const result = parseTextResponseChunk({ id: "x", i: 1, n: 3, p: "Player1", r: "assistant", c: "hello" });
     expect(result).toEqual({ id: "x", i: 1, n: 3, p: "Player1", r: "assistant", c: "hello" });
   });
 });
@@ -300,7 +300,7 @@ describe("ResponseAssembler", () => {
 describe("registerResponseSyncHandler source acceptance", () => {
   it("accepts Entity source (WS /wsserver commandRequest path)", () => {
     const handler = vi.fn();
-    setAiRespHandler(handler);
+    setTextRespHandler(handler);
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
@@ -313,7 +313,7 @@ describe("registerResponseSyncHandler source acceptance", () => {
 
   it("processes Server source events", () => {
     const handler = vi.fn();
-    setAiRespHandler(handler);
+    setTextRespHandler(handler);
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
@@ -332,7 +332,7 @@ describe("registerResponseSyncHandler source acceptance", () => {
 describe("registerResponseSyncHandler malformed input", () => {
   it("handles malformed JSON silently (no-op)", () => {
     const handler = vi.fn();
-    setAiRespHandler(handler);
+    setTextRespHandler(handler);
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
@@ -344,7 +344,7 @@ describe("registerResponseSyncHandler malformed input", () => {
 
   it("handles missing fields silently (no-op)", () => {
     const handler = vi.fn();
-    setAiRespHandler(handler);
+    setTextRespHandler(handler);
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
@@ -356,7 +356,7 @@ describe("registerResponseSyncHandler malformed input", () => {
 
   it("handles array as root silently (no-op)", () => {
     const handler = vi.fn();
-    setAiRespHandler(handler);
+    setTextRespHandler(handler);
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
@@ -368,7 +368,7 @@ describe("registerResponseSyncHandler malformed input", () => {
 
   it("handles wrong types silently (no-op)", () => {
     const handler = vi.fn();
-    setAiRespHandler(handler);
+    setTextRespHandler(handler);
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { BRIDGE_MESSAGE_ID } from "../scripts/bridge/constants";
+import { BRIDGE_REQUEST_MESSAGE_ID } from "../scripts/bridge/constants";
 import { MAX_PRE_READY_REQUESTS } from "../scripts/bridge/router";
 
 type MainHarness = Awaited<ReturnType<typeof loadMainHarness>>;
@@ -17,7 +17,7 @@ async function loadMainHarness() {
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   minecraft.world.getAllPlayers.mockReturnValue([
     {
-      name: "MCBEAI_TOOL",
+      name: "MCBEWS_BRIDGE",
       runCommand,
       id: "tool1",
       location: { x: 0, y: 0, z: 0 },
@@ -31,7 +31,7 @@ async function loadMainHarness() {
 }
 
 function serverEvent(message: string) {
-  return { id: BRIDGE_MESSAGE_ID, sourceType: "Server", message };
+  return { id: BRIDGE_REQUEST_MESSAGE_ID, sourceType: "Server", message };
 }
 
 function v2Request(id: string): string {
@@ -52,12 +52,12 @@ afterEach(async () => {
 it("turns an unsupported Server request into a response tell", async () => {
   harness.minecraft.world.afterEvents.worldLoad.emit({});
   harness.minecraft.system.afterEvents.scriptEventReceive.emit({
-    id: BRIDGE_MESSAGE_ID,
+    id: BRIDGE_REQUEST_MESSAGE_ID,
     sourceType: "Server",
     message: JSON.stringify({ v: 2, request_id: "r1", capability: "missing", payload: {} }),
   });
   await harness.testing.flushRouter();
-  expect(harness.runCommand).toHaveBeenCalledWith(expect.stringContaining("tell @s MCBEAI|RESP|r1|"));
+  expect(harness.runCommand).toHaveBeenCalledWith(expect.stringContaining("tell @s MCBEWS|BRIDGE|r1|"));
 });
 
 it("queues a pre-ready request and responds after activation", async () => {
@@ -66,7 +66,7 @@ it("queues a pre-ready request and responds after activation", async () => {
   expect(harness.testing.getPreReadyQueueSize()).toBe(1);
   harness.minecraft.world.afterEvents.worldLoad.emit({});
   await harness.testing.flushRouter();
-  expect(harness.runCommand).toHaveBeenCalledWith(expect.stringContaining("tell @s MCBEAI|RESP|early|"));
+  expect(harness.runCommand).toHaveBeenCalledWith(expect.stringContaining("tell @s MCBEWS|BRIDGE|early|"));
   expect(harness.testing.getPreReadyQueueSize()).toBe(0);
 });
 
@@ -80,7 +80,7 @@ it("bounds the pre-ready queue", async () => {
   harness.minecraft.world.afterEvents.worldLoad.emit({});
   await harness.testing.flushRouter();
   expect(harness.runCommand).toHaveBeenCalledTimes(MAX_PRE_READY_REQUESTS);
-  expect(harness.runCommand).not.toHaveBeenCalledWith(expect.stringContaining("MCBEAI|RESP|r-64|"));
+  expect(harness.runCommand).not.toHaveBeenCalledWith(expect.stringContaining("MCBEWS|BRIDGE|r-64|"));
 });
 
 it("does not activate or execute handlers when tool initialization fails", async () => {
