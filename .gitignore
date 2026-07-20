@@ -20,6 +20,7 @@ venv/
 
 # Test / coverage
 .pytest_cache/
+.pytest_dist_cache/
 .coverage
 coverage.xml
 htmlcov/

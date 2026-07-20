@@ -8,17 +8,10 @@ repo) injects behaviour by implementing
 :class:`~mcbe_ws_sdk.gateway.server_facade.McbeServerFacade`.
 """
 
-from mcbe_ws_sdk.gateway.connection import (
-    ConnectionManager,
-    ConnectionState,
-    SendPayload,
-)
+from mcbe_ws_sdk.config import GatewaySettings, WebsocketTransportConfig
+from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState
 from mcbe_ws_sdk.gateway.events import EventBus, SubscriptionToken, WsEventType
-from mcbe_ws_sdk.gateway.handler import (
-    MessageSurfaceConfig,
-    MinecraftProtocolHandler,
-    TellrawMessage,
-)
+from mcbe_ws_sdk.gateway.handler import MinecraftProtocolHandler
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
@@ -30,22 +23,21 @@ from mcbe_ws_sdk.gateway.sink import (
 )
 
 __all__ = [
-    "ConnectionManager",
     "ConnectionHook",
+    "ConnectionManager",
     "ConnectionState",
     "DefaultResponseSink",
     "EventBus",
+    "GatewaySettings",
     "McbeServerFacade",
-    "MessageSurfaceConfig",
     "MinecraftProtocolHandler",
     "NoOpHook",
     "OutboundText",
     "ResponseKind",
     "ResponseSink",
     "RouteEnvelope",
-    "SendPayload",
     "SubscriptionToken",
     "SystemNotification",
-    "TellrawMessage",
+    "WebsocketTransportConfig",
     "WsEventType",
 ]

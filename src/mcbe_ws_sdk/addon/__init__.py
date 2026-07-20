@@ -1,5 +1,11 @@
 """Addon bridge capability for the MCBE WebSocket SDK."""
 
-from mcbe_ws_sdk.addon.service import AddonBridgeClient, AddonBridgeService
+from mcbe_ws_sdk.addon.service import AddonBridgeClient, AddonBridgeService, AddonMessageResult
+from mcbe_ws_sdk.config import AddonBridgeSettings
 
-__all__ = ["AddonBridgeClient", "AddonBridgeService"]
+__all__ = [
+    "AddonBridgeClient",
+    "AddonBridgeService",
+    "AddonBridgeSettings",
+    "AddonMessageResult",
+]

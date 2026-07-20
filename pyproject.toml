@@ -12,16 +12,56 @@ requires-python = ">=3.11"
 authors = [{ name = "mcbe-ws-sdk contributors" }]
 dependencies = [
     "pydantic>=2.0",
-    "pydantic-settings>=2.0",
-    "websockets>=12",
     "structlog>=24.0",
+    "websockets>=12,<17",
 ]
 
 [project.optional-dependencies]
-dev = ["ruff", "mypy", "pytest", "pytest-asyncio"]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "PyYAML>=6,<7",
+    "types-PyYAML>=6,<7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcbe_ws_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/mcbe_ws_sdk",
+    "tests",
+    "examples",
+    "addon/scripts",
+    "addon/behavior_packs/mc-ws-sdk/manifest.json",
+    "addon/behavior_packs/mc-ws-sdk/pack_icon.png",
+    "addon/resource_packs/mc-ws-sdk/manifest.json",
+    "addon/resource_packs/mc-ws-sdk/pack_icon.png",
+    "addon/package.json",
+    "addon/package-lock.json",
+    "addon/tsconfig.json",
+    "addon/tsconfig.test.json",
+    "addon/vitest.config.ts",
+    "addon/README.md",
+    "addon/README.zh.md",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+exclude = [
+    "docs/reviews/**",
+    "docs/superpowers/**",
+    "addon/node_modules/**",
+    "addon/lib/**",
+    "addon/dist/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    ".mypy_cache/**",
+    ".pytest_cache/**",
+    ".ruff_cache/**",
+]
 
 [tool.ruff]
 line-length = 100

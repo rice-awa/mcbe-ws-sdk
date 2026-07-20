@@ -14,7 +14,18 @@ The full connection lifetime, packet request abstraction and byte-safe command
 chunking are provided; the agent's LLM / message-broker concerns are the host's.
 """
 
-from mcbe_ws_sdk.addon import AddonBridgeClient, AddonBridgeService
+from __future__ import annotations
+
+import importlib.metadata
+
+from mcbe_ws_sdk.addon import (
+    AddonBridgeClient,
+    AddonBridgeService,
+    AddonBridgeSettings,
+    AddonMessageResult,
+)
+from mcbe_ws_sdk.command import CommandRegistry
+from mcbe_ws_sdk.delivery import McbeOutboundDelivery
 from mcbe_ws_sdk.errors import (
     BridgeClosedError,
     BridgeError,
@@ -26,68 +37,81 @@ from mcbe_ws_sdk.errors import (
     McbeWsSdkError,
     ProtocolError,
 )
+from mcbe_ws_sdk.flow import FlowControlMiddleware, FlowControlSettings
 from mcbe_ws_sdk.gateway import (
     ConnectionHook,
     ConnectionManager,
     ConnectionState,
     DefaultResponseSink,
     EventBus,
+    GatewaySettings,
     McbeServerFacade,
-    MessageSurfaceConfig,
     MinecraftProtocolHandler,
     NoOpHook,
     OutboundText,
     ResponseKind,
     ResponseSink,
     RouteEnvelope,
-    SendPayload,
     SubscriptionToken,
     SystemNotification,
-    TellrawMessage,
+    WebsocketTransportConfig,
     WsEventType,
 )
-from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.models import AddonBridgeResponse
-from mcbe_ws_sdk.protocol.minecraft import PlayerMessageEvent
+from mcbe_ws_sdk.profiles import LEGACY_MCBEAI_V1, LegacyMcbeAiV1Profile
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.codec import encode_legacy_response_commands
+from mcbe_ws_sdk.profiles.legacy_mcbeai_v1.delivery import LegacyMcbeAiV1Delivery
+from mcbe_ws_sdk.protocol import (
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    PlayerMessageEvent,
+)
 
-__version__ = "0.1.0"
+try:
+    __version__ = importlib.metadata.version("mcbe-ws-sdk")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "0+unknown"
 
-__all__ = [
-    "addon",
-    "gateway",
-    "protocol",
-    # protocol
-    "AddonBridgeResponse",
-    "PlayerMessageEvent",
-    # errors
+__all__ = (
+    "__version__",
+    "AddonBridgeClient",
+    "AddonBridgeService",
+    "AddonBridgeSettings",
+    "AddonMessageResult",
     "BridgeClosedError",
     "BridgeError",
     "BridgeLimitError",
     "BridgeTimeoutError",
+    "CommandRegistry",
     "ConfigurationError",
-    "FacadeLifecycleError",
-    "FrameTooLargeError",
-    "McbeWsSdkError",
-    "ProtocolError",
-    # addon
-    "AddonBridgeClient",
-    "AddonBridgeService",
-    # gateway
     "ConnectionHook",
     "ConnectionManager",
     "ConnectionState",
     "DefaultResponseSink",
     "EventBus",
+    "FacadeLifecycleError",
+    "FlowControlMiddleware",
+    "FlowControlSettings",
+    "FrameTooLargeError",
+    "GatewaySettings",
+    "LEGACY_MCBEAI_V1",
+    "LegacyMcbeAiV1Delivery",
+    "LegacyMcbeAiV1Profile",
+    "McbeOutboundDelivery",
     "McbeServerFacade",
-    "MessageSurfaceConfig",
+    "McbeWsSdkError",
+    "MinecraftCommandResponse",
+    "MinecraftErrorFrame",
     "MinecraftProtocolHandler",
     "NoOpHook",
     "OutboundText",
+    "PlayerMessageEvent",
+    "ProtocolError",
     "ResponseKind",
     "ResponseSink",
     "RouteEnvelope",
-    "SendPayload",
     "SubscriptionToken",
     "SystemNotification",
-    "TellrawMessage",
+    "WebsocketTransportConfig",
     "WsEventType",
-]
+    "encode_legacy_response_commands",
+)
