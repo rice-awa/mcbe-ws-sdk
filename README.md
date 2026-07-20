@@ -9,6 +9,11 @@ dual-layer interface the host drives with dependency injection: subscribe to an
 `ResponseSink` and run everything through `McbeServerFacade`. The package never
 owns a message broker or an LLM worker — those concerns are the host's.
 
+**One-way capability model:** the SDK sends bridge requests from the Python host
+to the Minecraft addon and receives responses. There is no inbound
+capability-registry dispatch — the addon side owns all capability handling. The
+`LegacyMcbeAiV1Profile` is the sole built-in protocol profile.
+
 ## Install
 
 Editable install against the main-repo venv (`.venv` lives in the main repo, not
@@ -20,8 +25,8 @@ pip install -e ./mcbe-ws-sdk
 
 ## Quickstart
 
-`McbeServerFacade` is the host entry point. Build one with all defaults
-(`SilentResponseSink`), override collaborators one at a time, then run it:
+`McbeServerFacade` is the host entry point. Build one with default collaborators,
+override them one at a time, then run it:
 
 ```python
 import asyncio
@@ -50,17 +55,16 @@ if __name__ == "__main__":
 ```
 
 The constructor is keyword-only; every argument collapses to a gateway default
-when `None`, so `McbeServerFacade()` stands up a working facade with silent
-sink, default command registry and capability registry:
+when `None`, so `McbeServerFacade()` stands up a working facade with neutral
+sink, empty command registry, and a default-safe addon bridge:
 
 ```python
 facade = McbeServerFacade(
-    settings=None,        # -> GatewaySettings()
-    hook=None,            # -> NoOpHook()
-    sink=None,            # -> SilentResponseSink()
-    addon=None,           # -> AddonBridgeService(settings.addon)
-    registry=None,        # -> CommandRegistry(DEFAULT_COMMANDS)
-    capabilities=None,    # -> CapabilityRegistry()
+    settings=None,    # -> GatewaySettings()
+    hook=None,        # -> NoOpHook()
+    sink=None,        # -> DefaultResponseSink()
+    addon=None,       # -> AddonBridgeService(settings.addon)
+    registry=None,    # -> CommandRegistry()
 )
 ```
 
@@ -72,19 +76,33 @@ also works).
 
 A host implements / injects these classes:
 
-- `ConnectionHook` (+ 7 hooks): `on_connected`, `on_authenticated`,
-  `on_disconnected`, `on_player_message`, `on_bridge_message`,
-  `on_ui_chat_reassembled`, `on_command_response`.
-- `ResponseSink` / `SilentResponseSink` / `DefaultResponseSink`: how outbound
-  tellraw / scriptevent / AI-response payloads are delivered.
+- `ConnectionHook` (+ 6 hooks): `on_connected`, `on_disconnected`,
+  `on_player_message`, `on_ui_chat_reassembled`, `on_command_response`,
+  `on_error`.
+- `ResponseSink` / `DefaultResponseSink`: outbound routes for text payloads and
+  system notifications.
 - `AddonBridgeService` + `AddonBridgeClient`: the ScriptEvent bridge carrying
-  structured requests/responses (no global singleton).
-- `CapabilityRegistry` + `CapabilityHandler` + `CapabilityContext`: override
-  point for inbound `scriptevent mcbeai:bridge_request` calls.
-- `CommandRegistry`: the Minecraft command surface the protocol handler renders.
+  structured capability requests/responses (no global singleton).
+- `LegacyMcbeAiV1Profile` (and module-level `LEGACY_MCBEAI_V1`): the one built-in
+  protocol profile for legacy mcbeai v1 addon interop.
+- `CommandRegistry`: the Minecraft command surface the protocol handler renders
+  (empty by default).
 - `ConnectionManager`: owns per-connection state and the player session map.
 - `MinecraftProtocolHandler`: parses inbound traffic and builds outbound packets.
 - `EventBus` / `WsEventType`: low-level typed event subscription.
 
 `addon/service.py` and the addon bridge carry no global singleton and are
 configured entirely through `AddonBridgeSettings`.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+ruff check --no-cache src tests examples
+mypy --no-incremental src
+pytest -p no:cacheprovider -q
+```
+
+## License
+
+MIT

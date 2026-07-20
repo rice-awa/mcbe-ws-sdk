@@ -2,16 +2,15 @@
 
 > Superpowers brainstorming 流程产出的规格文档。
 > 日期：2026-07-18。对应产品需求 [`docs/PRD.md`](PRD.md)。
-> 本文件是设计阶段的冻结产物；实现计划见 [`docs/PLAN.md`](PLAN.md)。
 
 ## 1. 概述
 
-把 `MCBE-AI-Agent` 的 WS 子系统核心（数据包编解码、字节安全分片、连接/玩家状态机、addon 桥会话、AI 响应协议）抽成独立包 `mcbe-ws-sdk`，给 MCBE 服主提供通用 WebSocket 网关 SDK。
+把 `MCBE-AI-Agent` 的 WS 子系统核心（数据包编解码、字节安全分片、连接/玩家状态机、addon 桥会话）抽成独立包 `mcbe-ws-sdk`，给 MCBE 服主提供通用 WebSocket 网关 SDK。
 
 **关键约束**：
 - 独立文件夹 `mcbe-ws-sdk/`，独立 git 仓库，**不污染主仓** `services/` / `models/`
-- 抽出后兼容：多人会话隔离 `(connection_id, player_name)`、AI 响应分片重组、addon 桥 capability/UI_CHAT 双链路
-- 双层接口：底层事件总线 + 高层能力 SDK
+- 抽出后兼容：多人会话隔离 `(connection_id, player_name)`、addon 桥 capability 请求-响应生命周期
+- 双层接口：底层事件总线 + 高层钩子/sink 协议
 
 ## 2. 包边界（source of truth）
 
@@ -25,7 +24,7 @@
 | delivery | `outbound.py` | `McbeOutboundDelivery` |
 | gateway | `events.py`、`hook.py`、`sink.py`、`connection.py`、`handler.py`、`server_facade.py` | `McbeServerFacade`、`EventBus`、`ConnectionHook`、`ResponseSink` |
 | addon | `protocol.py`、`session.py`、`service.py` | `AddonBridgeService`、`AddonBridgeClient`、`BridgeCodec` |
-| capability | `registry.py` | `CapabilityRegistry`、`CapabilityHandler` |
+| profiles | `legacy_mcbeai_v1/` | `LegacyMcbeAiV1Profile`、`LEGACY_MCBEAI_V1`、`encode_legacy_response_commands`、`LegacyMcbeAiV1Delivery` |
 | — | `config.py` | `FlowControlSettings`、`AddonBridgeSettings`、`GatewaySettings` |
 
 ### 留主仓不动
@@ -43,24 +42,25 @@
 │  HostHook / HostSink / HostApp                           │
 └──────────────┬──────────────────────────────┬────────────┘
                │ 注入                             │ 注册
-┌──────────────▼──────────┐        ┌───────────▼───────────┐
-│  gateway (门面)          │        │  capability registry   │
-│  McbeServerFacade        │        │  (默认 LoggingStub)    │
-│  ├─ connection 状态机    │        └───────────────────────┘
-│  ├─ handler 协议处理     │
-│  ├─ event bus (分发)     │
-│  └─ hook + sink 协议     │
-└──────────────┬──────────┘
-               │
-┌──────────────▼──────────┐        ┌───────────────────────┐
-│  addon 完整会话          │        │  flow + delivery       │
-│  service / session /     │        │  字节反推分片 + 延迟    │
-│  protocol (BridgeCodec)  │        └───────────────────────┘
+┌──────────────▼──────────────────────────────▼────────────┐
+│  gateway (门面)                                           │
+│  McbeServerFacade                                        │
+│  ├─ connection 状态机                                     │
+│  ├─ handler 协议处理                                      │
+│  ├─ event bus (分发)                                     │
+│  └─ hook + sink 协议                                     │
+└──────────────┬──────────────────────────────┬────────────┘
+               │                              │
+┌──────────────▼──────────┐   ┌───────────────▼─────────────┐
+│  addon 完整会话          │   │  flow + delivery            │
+│  service / session /     │   │  字节反推分片 + 延迟         │
+│  protocol (BridgeCodec)  │   └─────────────────────────────┘
 └──────────────┬──────────┘
                │
 ┌──────────────▼──────────┐
 │  protocol (纯模型)       │
-│  minecraft / addon pydantic │
+│  minecraft / addon      │
+│  pydantic               │
 └─────────────────────────┘
 ```
 
@@ -73,6 +73,7 @@ class WsEventType(Enum):
     CONNECTED / DISCONNECTED / PLAYER_MESSAGE
     BRIDGE_CHUNK / UI_CHAT_CHUNK / UI_CHAT_REASSEMBLED
     COMMAND_RESPONSE / RAW_INBOUND / RAW_OUTBOUND
+    ERROR
 
 class EventBus:
     def subscribe(self, event: WsEventType, handler: Callable): ...
@@ -84,32 +85,21 @@ class EventBus:
 ```python
 class ConnectionHook(Protocol):
     async def on_connected(self, state: ConnectionState): ...
-    async def on_authenticated(self, state: ConnectionState, player: str): ...
-    async def on_disconnected(self, state: ConnectionState): ...  # 宿主注入 prompt_manager.clear_connection
-    async def on_player_message(self, state, player_event) -> bool: ...  # 返回 True 表示已消费
-    async def on_bridge_message(self, state, request) -> bool: ...
+    async def on_disconnected(self, state: ConnectionState): ...
+    async def on_player_message(self, state, player_event) -> None: ...
     async def on_ui_chat_reassembled(self, state, player_name, message): ...
     async def on_command_response(self, state, request_id, response): ...
+    async def on_error(self, state, error): ...
 ```
 
-### 4.3 ResponseSink（gateway/sink.py，Protocol）+ RouteEnvelope
+### 4.3 ResponseSink（gateway/sink.py，Protocol）
 
 ```python
-@dataclass(frozen=True)
-class RouteEnvelope:
-    kind: ResponseKind  # STREAM_CHUNK | SYSTEM_NOTIFICATION | GAME_MESSAGE | RUN_COMMAND | AI_RESPONSE_SYNC
-    payload: Any
-    @classmethod
-    def from_message(cls, msg: Any) -> "RouteEnvelope": ...
-
 class ResponseSink(Protocol):
-    async def on_stream_chunk(self, state, chunk): ...
-    async def on_system_notification(self, state, note): ...
-    async def on_game_message(self, state, payload): ...
-    async def on_run_command(self, state, payload): ...
-    async def on_ai_response_sync(self, state, payload): ...
+    async def on_outbound_text(self, state, text: OutboundText): ...
+    async def on_system_notification(self, state, note: SystemNotification): ...
 
-class DefaultResponseSink:  # 包内提供：处理前两路，后三路上抛
+class DefaultResponseSink:  # 包内提供
 ```
 
 ### 4.4 Settings 值对象（config.py）
@@ -140,50 +130,49 @@ class GatewaySettings:
 class McbeServerFacade:
     def __init__(
         self,
-        settings: GatewaySettings,
+        *,
+        settings: GatewaySettings | None = None,
         hook: ConnectionHook | None = None,
         sink: ResponseSink | None = None,
         addon: AddonBridgeService | None = None,
-        registry: CapabilityRegistry | None = None,
-        broker: ResponseQueue | None = None,  # 默认内存实现
+        registry: CommandRegistry | None = None,
     ): ...
-    async def run_lifetime(self, host: str, port: int): ...
+    async def run_lifetime(self, host: str | None = None, port: int | None = None): ...
+    async def stop(self): ...
 ```
 
-### 4.6 CapabilityRegistry（capability/registry.py）
+### 4.6 AddonBridgeService（addon/service.py）
 
-```python
-@dataclass
-class CapabilityContext:
-    capability: str
-    payload: dict[str, Any]
-    connection_id: UUID
-    player_name: str | None
-
-CapabilityHandler = Callable[[CapabilityContext], Awaitable[dict[str, Any]]]
-
-class CapabilityRegistry:
-    def register(self, capability: str, handler: CapabilityHandler): ...
-    def unregister(self, capability: str): ...
-    async def dispatch(self, ctx: CapabilityContext) -> dict[str, Any]: ...
-
-class LoggingStubHandler:  # 默认：日志 + 未实现哨兵
-```
-
-### 4.7 AddonBridgeService（addon/service.py）
-
-删全局单例 `_addon_bridge_service` / `get_addon_bridge_service()`；由宿主 new 实例注入 facade。
+无全局单例；由宿主 new 实例注入 facade。
 
 ```python
 class AddonBridgeService:
     def __init__(self, settings: AddonBridgeSettings): ...
     def create_client(self, connection_id, send_command) -> AddonBridgeClient: ...
-    async def request_capability(self, connection_id, capability, payload, send_command) -> dict: ...
+    async def handle_player_message(self, connection_id, sender, message) -> AddonMessageResult: ...
     def is_bridge_chat_message(self, sender, message) -> bool: ...
     def is_ui_chat_message(self, sender, message) -> bool: ...
-    def handle_player_message(self, connection_id, sender, message) -> bool: ...
     def set_ui_chat_callback(self, callback): ...
     def close_connection(self, connection_id): ...
+```
+
+### 4.7 LegacyMcbeAiV1Profile（profiles/legacy_mcbeai_v1/）
+
+唯一内置协议 profile，支持旧版 mcbeai v1 addon 桥接。
+
+```python
+@dataclass(frozen=True)
+class LegacyMcbeAiV1Profile:
+    bridge_request_message_id: str = "mcbeai:bridge_request"
+    bridge_response_prefix: str = "MCBEAI|RESP"
+    ui_chat_prefix: str = "MCBEAI|UI_CHAT"
+    bridge_sender: str = "MCBEAI_TOOL"
+    response_message_id: str = "mcbeai:ai_resp"
+    request_version: int = 2
+    response_chunk_delay: float = 0.15
+    response_prelude_delay: float = 0.5
+
+LEGACY_MCBEAI_V1 = LegacyMcbeAiV1Profile()
 ```
 
 ## 5. 关键重构（改造前/后对照）
@@ -194,8 +183,6 @@ class AddonBridgeService:
 # 改造前
 if isinstance(msg, StreamChunk): ...
 elif isinstance(msg, SystemNotification): ...
-elif isinstance(msg, dict):
-    if msg["type"] == "game_message": ...
 
 # 改造后
 envelope = RouteEnvelope.from_message(msg)
@@ -210,20 +197,23 @@ await self.sink.dispatch(envelope)
 
 `ConnectionManager.unregister` 删除 `get_prompt_manager().clear_connection(...)` 调用；宿主实现 `on_disconnected` 注入。
 
-### 5.4 Agent 专有 dict → ResponseSink
+### 5.4 响应路由 → ResponseSink
 
-DefaultResponseSink 处理 StreamChunk / SystemNotification；game_message / run_command / ai_response_sync 宿主 HostSink 处理。
+DefaultResponseSink 处理默认路由；宿主实现 HostSink 覆盖出站行为。
 
 ### 5.5 `get_addon_bridge_service()` → 实例注入
 
 删 `_addon_bridge_service` 全局；facade 构造时可选注入，为 None 则默认 `AddonBridgeService(AddonBridgeSettings())`。
+
+### 5.6 入站能力注册表 → 移除
+
+入站能力注册表已从 SDK 中移除。Addon 端拥有所有能力处理逻辑。SDK 仅通过 `AddonBridgeService` 发送请求并接收响应。
 
 ## 6. 依赖与打包
 
 ```
 依赖（最小闭包）      python_requires
 pydantic>=2.0         >=3.11
-pydantic-settings>=2.0
 websockets>=12
 structlog>=24.0
 ```
@@ -236,10 +226,10 @@ structlog>=24.0
 
 ## 7. 验收 / 验证
 
-- 包内 e2e：内存 WS 跑 `run_lifetime` 全链路（分片、addon 重组、能力调度）
-- 主仓联调：`pip install -e ./mcbe-ws-sdk` + `tools_ws_tester.py` 回归
-- 示例侧：`examples/capability-greeting` + `examples/addon-ts` 端到端
-- 静态：ruff → mypy strict → pytest（覆盖率达标）→ twine check
+- 包内 e2e：内存 WS 跑 `run_lifetime` 全链路
+- 示例侧：`examples/addon-capability-call` 端到端
+- 静态：ruff → mypy strict → pytest → twine check
+- CI：workflow gates for quality / python matrix / websockets matrix / addon build / dist
 
 ## 8. 风险与权衡
 
@@ -247,13 +237,12 @@ structlog>=24.0
 |---|---|
 | 事件总线分配开销 | weakref 订阅 + 直接调用派发 |
 | 协议升级字段 | 模型保留额外字段，增不改删 |
-| 删 `get_addon_bridge_service()` 回归 | grep 清理主仓全部引用 |
-| `FlowControlMiddleware` classmethod 改实例化 | 一步到位 + `from_settings()` 工厂 deprecated 兼容 |
+| `FlowControlMiddleware` 实例化方式变更 | 一步到位 + `from_settings()` 工厂留兼容 |
 | 主仓 editable install 漂移 | 发布期前 editable 验证，发版后切 pinned |
 
 ## 9. 成功标准
 
-- 主仓回归通过
+- 全量验证通过（Python 3.11-3.14、websockets 12/14/16、addon build）
 - 核心层覆盖率 ≥85%
 - examples 端到端可用
 - PyPI 发版

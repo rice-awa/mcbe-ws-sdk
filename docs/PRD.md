@@ -1,7 +1,7 @@
 # PRD — mcbe-ws-sdk
 
 > 产品需求：把 MCBE AI Agent 项目的 WebSocket 子系统核心抽取为独立 Python 包 `mcbe-ws-sdk`（PyPI 发布）。
-> 详细技术规格见 [`docs/spec/2026-07-18-ws-sdk-design.md`](spec/2026-07-18-ws-sdk-design.md)（遵循 superpowers brainstorming 流程产出）。
+> 详细技术规格见 [`docs/spec/2026-07-18-ws-sdk-design.md`](spec/2026-07-18-ws-sdk-design.md)。
 
 ## 1. 问题
 
@@ -12,23 +12,24 @@
 ## 2. 目标
 
 - 抽出 **通用 MCBE WS 网关** 作为独立、可发布的 Python 包。
-- 提供**双层接口**：底层事件总线 + 高层能力 SDK。
+- 提供**双层接口**：底层事件总线 + 高层钩子/sink 协议。
 - **绝对不污染**主仓 `services/` / `models/` — 新包放独立文件夹 `mcbe-ws-sdk/`，独立 git 仓库。
-- 兼容现有行为：多人会话隔离 `(connection_id, player_name)`、AI 响应分片重组、addon 桥 capability/UI_CHAT 双链路。
+- 兼容现有行为：多人会话隔离 `(connection_id, player_name)`，addon 桥 capability 请求-响应生命周期。
 
 ### 非目标（明确不做）
 
 - 不实现任何 LLM / PydanticAI 调用
-- 不内置 `get_player_snapshot` 等具体能力 — 仅提供 `CapabilityRegistry` + 默认 `LoggingStub`，能力由宿主注册
+- 不包含入站能力注册表 — addon 端拥有所有能力处理逻辑
 - 不内置登录/JWT 认证（宿主注入）
 - 不重写 `core/queue.MessageBroker`
+- 不多玩家 AI 响应分片同步
 
 ## 3. 目标用户
 
 | 用户 | 怎么用 |
 |---|---|
-| 想搭 MCBE WS 机器人的服主 | 用 `McbeServerFacade` 起网关，注册少量 handler |
-| 需要 addon 桥接的团队 | 用 `AddonBridgeService` + `CapabilityRegistry` 暴露客户端能力 |
+| 想搭 MCBE WS 机器人的服主 | 用 `McbeServerFacade` 起网关，注册少量 hook/sink |
+| 需要 addon 桥接的团队 | 用 `AddonBridgeService` + `AddonBridgeClient` 发送能力请求 |
 | 需要事件驱动处理者 | 订阅 `EventBus`（WsEventType）按事件挂业务 |
 
 ## 4. 功能需求
@@ -54,18 +55,20 @@
 - 多人隔离：主推 `(connection_id, player_name)` 分桶；连接级 `player_name` 仅作"最近发言者"便捷指针
 - 字节级出站经由 `FlowControlMiddleware`，不重复实现分片
 - **事件总线** `EventBus` + `WsEventType` 枚举：CONNECTED / DISCONNECTED / PLAYER_MESSAGE / BRIDGE_CHUNK / UI_CHAT_CHUNK / UI_CHAT_REASSEMBLED / COMMAND_RESPONSE / RAW_INBOUND / RAW_OUTBOUND
-- **钩子协议** `ConnectionHook`（6 hook 点）：on_connected / on_authenticated / on_disconnected / on_player_message(→bool) / on_bridge_message(→bool) / on_ui_chat_reassembled / on_command_response
-- **响应上抛** `ResponseSink`（5 路）+ `RouteEnvelope`：StreamChunk / SystemNotification / game_message / run_command / ai_response_sync
-- `McbeServerFacade` + `run_lifetime`：宿主注入 hook/sink/addon/registry/broker
+- **钩子协议** `ConnectionHook`（6 个钩子点）：on_connected / on_disconnected / on_player_message / on_ui_chat_reassembled / on_command_response / on_error
+- **响应上抛** `ResponseSink`（2 路）：on_outbound_text / on_system_notification
+- `McbeServerFacade` + `run_lifetime`：宿主注入 hook/sink/addon/registry
 
 ### addon 桥（addon）
 - `BridgeCodec`：`encode_bridge_request` / `decode_bridge_chat_chunk` / `reassemble_bridge_chunks` / `decode_ui_chat_chunk` / `reassemble_ui_chat_chunks`
 - `AddonBridgeSession`：分片缓存 + request future + 5s 超时
-- `AddonBridgeService` / `AddonBridgeClient`：请求-响应生命周期（**删全局单例** `get_addon_bridge_service()`）
+- `AddonBridgeService` / `AddonBridgeClient`：请求-响应生命周期（**无全局单例**）
 
-### 能力层（capability）
-- `CapabilityHandler` / `CapabilityResult` / `CapabilityContext` / `CapabilityRegistry`
-- 内置默认 `LoggingStubHandler`（仅日志 + 未实现哨兵），业务 handler 宿主注入
+### 协议 profile
+- `LegacyMcbeAiV1Profile` — 唯一内置协议 profile，支持 legacy mcbeai v1 addon 互操作
+- `LEGACY_MCBEAI_V1` — 模块级实例
+- `encode_legacy_response_commands()` — 将 AI 响应编码为命令列表
+- `LegacyMcbeAiV1Delivery` — profile 特定的投递实现
 
 ## 5. 非功能需求
 
@@ -73,7 +76,7 @@
 - **异步原生**：asyncio 架构，async for WS 消息循环
 - **结构化日志**：structlog
 - **测试覆盖**：核心层（flow / gateway / addon）≥85%
-- **依赖最小闭包**：仅 `pydantic>=2`、`pydantic-settings>=2`、`websockets>=12`、`structlog>=24`；不拖 httpx/PyJWT/pydantic-ai 进包
+- **依赖最小闭包**：仅 `pydantic>=2`、`websockets>=12`、`structlog>=24`；不拖 httpx/PyJWT/pydantic-ai 进包
 - **Python 3.11+**
 
 ## 6. 依赖（从主仓搬迁源）
@@ -92,30 +95,26 @@
 | `services/websocket/connection.py` | `src/mcbe_ws_sdk/gateway/connection.py` |
 | `services/websocket/minecraft.py` | `src/mcbe_ws_sdk/gateway/handler.py` |
 
-**留主仓不动**：`server.py`、`services/agent/tools.py`、`core/queue.py`、`core/session.py`、`config/`、`_version.py`
-
-## 7. 迁移批序（计划文档详情见 PLAN.md）
+## 7. 迁移批序
 
 - **批 A**（低风险纯搬迁）：协议模型 + flow + command + delivery + addon 三件套 + 测试同步迁
 - **批 B**（新建事件体系）：events / hook / sink / config Settings
 - **批 C**（核心重构）：connection 重写 + handler 抽净
-- **批 D**（门面+能力）：server_facade + capability registry + service 改造
-- **批 E**（主仓适配+示例+文档）：server.py 重写为 HostHook/HostSink/HostApp + examples + docs 6 篇
+- **批 D**（门面+能力）：server_facade + service 改造
+- **批 E**（主仓适配+示例+文档）
 
 ## 8. 风险
 
 | 风险 | 缓解 |
 |---|---|
 | 事件总线分配开销 | weakref 订阅 + 直接调用派发，benchmark 后迭代 |
-| 协议升级（AI_RESP/bridge 字段） | 模型保留额外字段；增不改删，版本化 |
-| 删 `get_addon_bridge_service()` 回归 | 必 grep 清理主仓全部引用，统一改引用包 |
-| `FlowControlMiddleware` classmethod 改实例化 | 一步到位实例化 + `from_settings()` 工厂留兼容，旧的 deprecated |
+| 协议升级字段 | 模型保留额外字段；增不改删，版本化 |
+| `FlowControlMiddleware` 实例化方式变更 | 一步到位 + `from_settings()` 工厂留兼容 |
 | 主仓 editable install 漂移 | 发布期前 editable 联调验证，PyPI 发版后主仓切 pinned |
 
 ## 9. 成功指标
 
-- 主仓 `pip install -e ./mcbe-ws-sdk` 后，现有 `tools_ws_tester.py` 回归全通过
 - 包内 e2e（内存 WS 跑 `run_lifetime` 全链路）
-- `examples/capability-greeting` + `examples/addon-ts` 端到端可用
+- `examples/addon-capability-call` 端到端可用
 - mypy strict + ruff + pytest 覆盖率（核心层 ≥85%）
 - PyPI 发版（MIT）
