@@ -1,4 +1,4 @@
-"""Minecraft 协议消息模型"""
+"""Minecraft protocol message models (WebSocket envelopes and helpers)."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def sanitize_tellraw_text(message: str) -> str:
 
 
 class MinecraftHeader(BaseModel):
-    """Minecraft WebSocket 消息头"""
+    """Minecraft WebSocket message header."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -71,11 +71,11 @@ class MinecraftHeader(BaseModel):
     )
     version: int = 1
     EventName: str | None = None
-    eventName: str | None = None  # 事件名称（小写）
+    eventName: str | None = None  # lowercase event name (wire alias)
 
 
 class MinecraftOrigin(BaseModel):
-    """命令来源"""
+    """Command origin metadata on a request body."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -83,7 +83,7 @@ class MinecraftOrigin(BaseModel):
 
 
 class MinecraftCommandBody(BaseModel):
-    """命令请求体"""
+    """Body of a ``commandRequest`` frame."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -93,7 +93,7 @@ class MinecraftCommandBody(BaseModel):
 
 
 class MinecraftSubscribeBody(BaseModel):
-    """订阅请求体"""
+    """Body of a subscribe request."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -101,7 +101,7 @@ class MinecraftSubscribeBody(BaseModel):
 
 
 class MinecraftMessage(BaseModel):
-    """通用 Minecraft WebSocket 消息"""
+    """Generic Minecraft WebSocket message envelope."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -110,7 +110,7 @@ class MinecraftMessage(BaseModel):
 
 
 class MinecraftCommand(BaseModel):
-    """Minecraft 命令消息"""
+    """Minecraft ``commandRequest`` message."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -129,7 +129,7 @@ class MinecraftCommand(BaseModel):
         color: str = "§a",
         target: str = "@a",
     ) -> MinecraftCommand:
-        """创建 tellraw 命令"""
+        """Build a tellraw command request."""
         safe_message = sanitize_tellraw_text(message)
         rawtext = json.dumps(
             {"rawtext": [{"text": f"{color}{safe_message}"}]},
@@ -147,7 +147,7 @@ class MinecraftCommand(BaseModel):
 
     @classmethod
     def create_scriptevent(cls, content: str, message_id: str = "server:data") -> MinecraftCommand:
-        """创建 scriptevent 命令"""
+        """Build a scriptevent command request."""
         safe_message_id = validate_scriptevent_message_id(message_id)
         return cls(
             body=MinecraftCommandBody(
@@ -157,12 +157,12 @@ class MinecraftCommand(BaseModel):
 
     @classmethod
     def create_raw(cls, command: str) -> MinecraftCommand:
-        """创建原始命令"""
+        """Build a raw command-line command request."""
         return cls(body=MinecraftCommandBody(commandLine=command))
 
 
 class MinecraftSubscribe(BaseModel):
-    """Minecraft 事件订阅消息"""
+    """Minecraft event subscription message."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -176,12 +176,12 @@ class MinecraftSubscribe(BaseModel):
 
     @classmethod
     def player_message(cls) -> MinecraftSubscribe:
-        """订阅玩家消息事件"""
+        """Subscribe to the ``PlayerMessage`` event."""
         return cls(body=MinecraftSubscribeBody(eventName="PlayerMessage"))
 
 
 class PlayerMessageEvent(BaseModel):
-    """玩家消息事件"""
+    """Parsed player chat/message event from the WebSocket stream."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -192,7 +192,7 @@ class PlayerMessageEvent(BaseModel):
 
     @classmethod
     def from_event_body(cls, body: dict[str, Any]) -> PlayerMessageEvent:
-        """从事件体解析"""
+        """Parse a ``PlayerMessageEvent`` from an event body dict."""
         return cls(
             sender=body.get("sender", ""),
             message=body.get("message", ""),

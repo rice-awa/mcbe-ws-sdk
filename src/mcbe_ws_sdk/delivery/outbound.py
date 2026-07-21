@@ -17,7 +17,7 @@ PayloadSender = Callable[[str], Awaitable[None]]
 
 
 class McbeOutboundDelivery:
-    """统一执行 MCBE commandRequest 分片、节流、发送和 raw 日志。"""
+    """Chunk, throttle, send, and optionally log MCBE ``commandRequest`` payloads."""
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class McbeOutboundDelivery:
         return self._flow
 
     async def send_payload(self, payload: str, source: str) -> None:
-        """发送已构造好的 payload，用于订阅、初始化等非长文本路径。"""
+        """Send an already-built payload (subscribe, handshake, non-chunked paths)."""
         await self._send_one(payload, source)
 
     async def send_tellraw(
@@ -47,7 +47,7 @@ class McbeOutboundDelivery:
         source: str,
         target: str = "@a",
     ) -> int:
-        """发送 tellraw 文本并返回实际 payload 数量。"""
+        """Send tellraw text and return the number of payloads actually transmitted."""
         payloads = self.flow.chunk_tellraw(message, color=color, target=target)
         await self.send_chunked(payloads, "tellraw", source)
         return len(payloads)
@@ -58,7 +58,7 @@ class McbeOutboundDelivery:
         message_id: str = "server:data",
         source: str = "scriptevent",
     ) -> int:
-        """发送 scriptevent 文本并返回实际 payload 数量。"""
+        """Send scriptevent text and return the number of payloads actually transmitted."""
         payloads = self.flow.chunk_scriptevent(content, message_id)
         await self.send_chunked(payloads, "scriptevent", source)
         return len(payloads)
@@ -69,7 +69,10 @@ class McbeOutboundDelivery:
         source: str = "raw_command",
         before_send: Callable[[str], None] | None = None,
     ) -> str:
-        """发送不可语义分片的原始命令，超长时抛 ``FrameTooLargeError``。"""
+        """Send a raw command that must not be semantically split.
+
+        Raises ``FrameTooLargeError`` when the command exceeds the byte budget.
+        """
         payload = self.flow.chunk_raw_command(command)[0]
         request_id = _request_id_from_payload(payload)
         if before_send is not None:

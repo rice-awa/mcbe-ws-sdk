@@ -1,3 +1,5 @@
+"""Byte-safe outbound command chunking for MCBE ``commandLine`` limits."""
+
 from __future__ import annotations
 
 import json
@@ -8,37 +10,37 @@ from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.errors import FrameTooLargeError, ProtocolError
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommand
 
-# 句子分隔符：中英文句号、问号、感叹号、换行
+# Sentence delimiters: CJK and Latin period/question/exclamation plus newline.
 _SENTENCE_DELIMITER_RE = re.compile(r"([。！？.!?\n])")
 
 
 class FlowControlMiddleware:
-    """统一流控中间件：将所有出站长文本分片为安全大小的 Minecraft 命令。"""
+    """Unified flow control: split outbound long text into safe Minecraft commands."""
 
     def __init__(self, settings: FlowControlSettings) -> None:
         self.settings = settings
 
     @property
     def _byte_budget(self) -> int:
-        """MCBE commandLine 实测安全字节上限。
+        """Empirically measured safe upper bound for MCBE ``commandLine`` bytes.
 
-        数据来源: 自动递增压力测试 (200B→512B, step 1B, interval 0ms, 222 包)
-          最大成功 commandLine: 461 B
-          首次失败 commandLine: 462 B
-        取 461 为硬上限；超过此值 server 会拒绝 commandRequest
+        Source: stepped stress test (200B→512B, step 1B, interval 0ms, 222 packets).
+          Largest successful ``commandLine``: 461 B
+          First failing ``commandLine``: 462 B
+        461 is treated as a hard limit; beyond it the server rejects ``commandRequest``.
         """
         return self.settings.command_line_byte_budget
 
     def chunk_delay_for(self, kind: str) -> float:
-        """返回指定分片场景的分片间延迟（秒）。
+        """Return inter-chunk delay in seconds for a chunking scenario.
 
-        kind: "tellraw" | "scriptevent"
-        未知 kind 返回 0.0（不延迟），调用方自行决定是否报错。
+        ``kind`` is typically ``"tellraw"`` or ``"scriptevent"``. Unknown kinds
+        yield ``0.0`` (no delay); the caller may treat that as an error.
         """
         return self.settings.chunk_delays.get(kind, 0.0)
 
     def _get_max_length(self, max_length: int | None) -> int:
-        """获取有效的最大长度值。"""
+        """Resolve the effective per-chunk content character limit."""
         if max_length is None or max_length <= 0:
             return self.settings.max_chunk_content_length
         return max_length
@@ -50,11 +52,12 @@ class FlowControlMiddleware:
         max_length: int | None = None,
         target: str = "@a",
     ) -> list[str]:
-        """将长 tellraw 消息分片为多个 commandRequest JSON 字符串列表。
+        """Split a long tellraw message into ``commandRequest`` JSON payload strings.
 
-        空文本约定返回 []，由调用方决定是否仍要发送。
-        每条 JSON 的 commandLine 中的 text 内容不超过 max_length 字符，
-        且最终 create_tellraw commandLine 字节数 ≤ 461 B（MCBE 实测安全上限）。
+        Empty text returns ``[]``; the caller decides whether anything still must be
+        sent. Each JSON ``commandLine`` text is at most ``max_length`` characters,
+        and the final ``create_tellraw`` ``commandLine`` stays within the measured
+        461 B MCBE budget.
         """
         if not message:
             return []
@@ -78,11 +81,12 @@ class FlowControlMiddleware:
         message_id: str = "server:data",
         max_length: int | None = None,
     ) -> list[str]:
-        """将长 scriptevent payload 分片为多个 commandRequest JSON 字符串列表。
+        """Split a long scriptevent payload into ``commandRequest`` JSON strings.
 
-        空文本约定返回 []，由调用方决定是否仍要发送。
-        每条 commandLine 中的 content 部分不超过 max_length 字符，
-        且 commandLine 字节数 ≤ 461 B（MCBE 实测安全上限）。
+        Empty content returns ``[]``; the caller decides whether anything still
+        must be sent. Each ``commandLine`` content segment is at most
+        ``max_length`` characters, and total ``commandLine`` bytes stay within
+        the measured 461 B MCBE budget.
         """
         # Validate even empty content so invalid message_id is always rejected
         # before callers decide whether to send zero chunks.
@@ -106,10 +110,11 @@ class FlowControlMiddleware:
         return payloads
 
     def chunk_raw_command(self, command: str) -> list[str]:
-        """包装原始命令为 commandRequest JSON 列表（始终返回单元素）。
+        """Wrap a raw command as a one-element ``commandRequest`` JSON list.
 
-        原始命令不能在动词之外的位置被截断，否则后续分片会成为非法命令。
-        因此此方法**不进行分片**：长度超限时抛 FrameTooLargeError，由调用方决策。
+        Raw commands must not be truncated past the verb, or later fragments would
+        be illegal. This method **does not chunk**: over-budget input raises
+        ``FrameTooLargeError`` for the caller to handle.
         """
         cmd = MinecraftCommand.create_raw(command)
         payload = cmd.model_dump_json(exclude_none=True)
@@ -193,7 +198,7 @@ class FlowControlMiddleware:
         target: str,
         max_length: int,
     ) -> list[str]:
-        """按最终 create_tellraw commandLine 的真实 UTF-8 字节数切分文本。"""
+        """Split text so each final ``create_tellraw`` ``commandLine`` fits in UTF-8 bytes."""
         return self._split_by_command_fit(
             text,
             max_length,
@@ -303,10 +308,11 @@ class FlowControlMiddleware:
         return len(command_line.encode("utf-8")) <= self._byte_budget
 
     def _assert_byte_safe(self, payload: str) -> None:
-        """字节级兜底：分片后 commandLine 字节数必须 ≤ 实测安全预算。
+        """Defensive check: post-chunk ``commandLine`` bytes must stay within budget.
 
-        正常路径下 _split_by_command_fit 已在源头保证字节安全；此函数作为防御性校验，
-        若调用方绕过 chunk_* 直接构造命令时仍能尽早暴露问题。
+        ``_split_by_command_fit`` already enforces this on the normal path; this
+        guard surfaces misuse when callers build command envelopes outside
+        ``chunk_*``.
         """
         try:
             data = json.loads(payload)

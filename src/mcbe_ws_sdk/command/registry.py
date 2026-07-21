@@ -38,22 +38,22 @@ class ParsedCommand:
 
 
 class CommandRegistry:
-    """命令注册表 - 管理命令和别名"""
+    """Registry of command prefixes, types, and aliases."""
 
     def __init__(
         self,
         commands_config: Mapping[str, str | Mapping[str, Any]] | None = None,
     ) -> None:
         self._commands: dict[str, MinecraftCommandConfig] = {}
-        self._alias_map: dict[str, str] = {}  # 别名 -> 主命令前缀
-        self._type_to_prefix: dict[str, str] = {}  # 命令类型 -> 主命令前缀
+        self._alias_map: dict[str, str] = {}  # alias -> primary prefix
+        self._type_to_prefix: dict[str, str] = {}  # command type -> primary prefix
         self._load_commands(commands_config or {})
 
     def _load_commands(self, config: Mapping[str, str | Mapping[str, Any]]) -> None:
-        """加载命令配置并构建别名映射"""
+        """Load command config and build the alias map."""
         for prefix, cmd in config.items():
             if isinstance(cmd, str):
-                # 兼容旧格式: {prefix: type}
+                # Legacy format: {prefix: type}
                 cmd_config = MinecraftCommandConfig(
                     prefix=prefix,
                     type=cmd,
@@ -62,7 +62,7 @@ class CommandRegistry:
                     usage=None,
                 )
             elif isinstance(cmd, dict):
-                # 新格式: {prefix: {type, aliases, description, usage}}
+                # Full format: {prefix: {type, aliases, description, usage}}
                 cmd_config = MinecraftCommandConfig(
                     prefix=prefix,
                     type=cmd.get("type", ""),
@@ -76,7 +76,6 @@ class CommandRegistry:
             self._commands[prefix] = cmd_config
             self._type_to_prefix[cmd_config.type] = prefix
 
-            # 构建别名映射
             for alias in cmd_config.aliases:
                 self._alias_map[alias] = prefix
 
@@ -87,7 +86,7 @@ class CommandRegistry:
         )
 
     def resolve(self, message: str) -> tuple[str | None, str]:
-        """解析消息，返回 (命令类型, 内容)"""
+        """Resolve a message to ``(command_type, content)``."""
         parsed = self.resolve_parsed(message)
         if parsed is None:
             return None, message
@@ -102,7 +101,7 @@ class CommandRegistry:
         return len(message) > len(token) and message[len(token)].isspace()
 
     def resolve_parsed(self, message: str) -> ParsedCommand | None:
-        """解析消息，返回带匹配来源的 typed command。"""
+        """Resolve a message to a typed command, including which token matched."""
         for prefix, cmd_config in self._commands.items():
             if self._matches_token(message, prefix):
                 content = message[len(prefix) :].strip()
@@ -128,7 +127,7 @@ class CommandRegistry:
         return None
 
     def add_alias(self, command_prefix: str, alias: str) -> bool:
-        """动态添加别名"""
+        """Register a dynamic alias for an existing command prefix."""
         if command_prefix not in self._commands:
             logger.warning("add_alias_command_not_found", prefix=command_prefix)
             return False
@@ -145,7 +144,7 @@ class CommandRegistry:
         return True
 
     def remove_alias(self, alias: str) -> bool:
-        """动态删除别名"""
+        """Remove a previously registered alias."""
         if alias not in self._alias_map:
             logger.warning("remove_alias_not_found", alias=alias)
             return False
@@ -160,18 +159,18 @@ class CommandRegistry:
         return True
 
     def get_command_config(self, prefix: str) -> MinecraftCommandConfig | None:
-        """获取命令配置"""
+        """Return the loaded config for a primary command prefix."""
         return self._commands.get(prefix)
 
     def get_aliases(self, command_prefix: str) -> tuple[str, ...]:
-        """获取命令的所有别名"""
+        """Return all aliases for a command prefix."""
         cmd = self._commands.get(command_prefix)
         return cmd.aliases if cmd else ()
 
     def list_all_commands(self) -> list[tuple[str, str, tuple[str, ...]]]:
-        """列出所有命令 (前缀, 类型, 别名元组)"""
+        """List all commands as ``(prefix, type, aliases)`` tuples."""
         return [(prefix, config.type, config.aliases) for prefix, config in self._commands.items()]
 
     def get_command_prefix(self, cmd_type: str) -> str | None:
-        """根据命令类型获取主命令前缀"""
+        """Return the primary prefix for a command type, if registered."""
         return self._type_to_prefix.get(cmd_type)

@@ -44,6 +44,14 @@ mkdocs serve
 mkdocs build --strict
 ```
 
+## Documentation language
+
+- **Public source docstrings** (modules, classes, public methods) are **English**. Prefer Google-style sections (`Args` / `Returns` / `Raises`) when structured detail is needed. Do not put dual-language EN+ZH blocks in source docstrings.
+- **Narrative docs** for humans may be bilingual via suffix pairs: `docs/page.md` + `docs/page.zh.md`, `README.md` + `README.zh.md`.
+- **API reference**: mkdocstrings generates English only (`docs/reference.md`). The Chinese site keeps a stub at `docs/reference.zh.md` that points readers at the English API page — do not re-run the same `:::` tree under `/zh/` (strict-mode cross-ref conflicts).
+- Inline comments may stay English; game-facing default strings (welcome/error UI) may remain Chinese when they are product copy for Chinese players, not API docs.
+- CJK may appear inside English docs only as **examples** (e.g. Bedrock player name ``玩家``) or quoted game error text.
+
 ## Architecture
 
 The SDK layers stack bottom-up as follows. Every layer above transport is injectable so the host can override any default without the SDK importing host code:
