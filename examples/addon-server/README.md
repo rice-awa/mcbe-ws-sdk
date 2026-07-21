@@ -31,6 +31,11 @@ It:
    Then import the produced `.mcaddon` (or the behavior pack) into the world
    and make sure the pack is active.
 
+   **Required:** in the world settings, open **Experiments** and enable
+   **Beta APIs**. Without it, Script API modules do not load — bridge
+   capability calls will time out with no in-game effect. Prefer a dedicated
+   test world (experiments can affect achievements / features).
+
 3. Start this server, then in-game run:
 
    ```text
@@ -165,5 +170,6 @@ Important details:
 - Allow TCP port `8080` through the host firewall.
 - This example has no authentication. Use it only on a trusted local/LAN
   network.
-- If a request times out, the world almost certainly does not have the bridge
-  addon loaded, or the `/wsserver` connection dropped.
+- If a request times out, check in order: (1) the bridge addon pack is active
+  in this world; (2) **Experiments → Beta APIs** is on (scripts do not load
+  otherwise); (3) the `/wsserver` connection is still up.

@@ -1,52 +1,54 @@
 # mcbe-ws-sdk
 
 [![Languages](https://img.shields.io/badge/Languages-中文-blue?style=flat-square)](./README.zh.md)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
 
-Generic WebSocket gateway SDK for Minecraft Bedrock Edition. The package owns the
-WS transport, packet protocol and byte-safe command chunking, and exposes a
-dual-layer interface the host drives with dependency injection: subscribe to an
-`EventBus` keyed by `WsEventType`, or implement `ConnectionHook` and
-`ResponseSink` and run everything through `McbeServerFacade`. The package never
-owns a message broker or an LLM worker — those concerns are the host's.
+Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
 
-**One-way capability model:** the SDK sends bridge requests from the Python host
-to the Minecraft addon and receives responses. There is no inbound
-capability-registry dispatch — the addon side owns all capability handling. The
-`McbewsV1Profile` (`MCBEWS_V1`) is the sole built-in protocol profile.
+It owns the WS transport, packet protocol, and byte-safe command chunking
+(461-byte hard limit). Your host injects behaviour through `ConnectionHook` and
+`ResponseSink`, and drives the stack with `McbeServerFacade`.
+
+There is **no** message broker and **no** LLM worker inside the SDK — those stay
+in the host application.
+
+```text
+Minecraft client  ←── /wsserver IP:port ──→  Your Python host (this SDK)
+```
 
 ## Install
 
-Editable install against the main-repo venv (`.venv` lives in the main repo, not
-inside this package):
-
 ```bash
-pip install -e ./mcbe-ws-sdk
+pip install mcbe-ws-sdk
 ```
 
-## Quickstart
+Editable install for development:
 
-`McbeServerFacade` is the host entry point. Build one with default collaborators,
-override them one at a time, then run it:
+```bash
+pip install -e ".[dev,docs]"
+```
+
+Requires **Python 3.11+**.
+
+## 30-second taste
 
 ```python
 import asyncio
-from mcbe_ws_sdk import McbeServerFacade, ConnectionHook
+from mcbe_ws_sdk import McbeServerFacade, NoOpHook
 
 
-class MyHook(ConnectionHook):
+class MyHook(NoOpHook):
     async def on_connected(self, state):
         print("connected:", state.id)
 
-    async def on_player_message(self, state, event):
-        print("chat:", event.message)
-
-    async def on_disconnected(self, state):
-        print("disconnected:", state.id)
+    async def on_player_message(self, state, event, parsed=None):
+        print(f"{event.sender}: {event.message}")
 
 
 async def main() -> None:
     facade = McbeServerFacade(hook=MyHook())
-    print(f"listening on ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
+    print(f"ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
     await facade.run_lifetime()
 
 
@@ -54,46 +56,41 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The constructor is keyword-only; every argument collapses to a gateway default
-when `None`, so `McbeServerFacade()` stands up a working facade with neutral
-sink, empty command registry, and a default-safe addon bridge:
+Then in Minecraft: `/wsserver <this-machine-ip>:8080`
 
-```python
-facade = McbeServerFacade(
-    settings=None,    # -> GatewaySettings()
-    hook=None,        # -> NoOpHook()
-    sink=None,        # -> DefaultResponseSink()
-    addon=None,       # -> AddonBridgeService(settings.addon)
-    registry=None,    # -> CommandRegistry()
-)
+For a **reply-with-tellraw** host, run the ready-made example:
+
+```bash
+python examples/basic-server/server.py
 ```
 
-Stop a running facade from another task with `await facade.stop()`
-(`run_lifetime` unwinds cleanly into a graceful shutdown; cancelling the task
-also works).
+## Documentation
 
-## Public API surface
+Full beginner tutorial, architecture, protocol, and API reference live on the
+docs site (English + 中文):
 
-A host implements / injects these classes:
+| | |
+|---|---|
+| **Online** | https://rice-awa.github.io/mcbe-ws-sdk/ |
+| **Local** | `pip install -e ".[docs]" && mkdocs serve` → http://127.0.0.1:8000 |
 
-- `ConnectionHook` (+ 6 hooks): `on_connected`, `on_disconnected`,
-  `on_player_message`, `on_ui_chat_reassembled`, `on_command_response`,
-  `on_error`.
-- `ResponseSink` / `DefaultResponseSink`: outbound routes for text payloads and
-  system notifications.
-- `AddonBridgeService` + `AddonBridgeClient`: the ScriptEvent bridge carrying
-  structured capability requests/responses (no global singleton).
-- `McbewsV1Profile` (and module-level `MCBEWS_V1`): the one built-in
-  protocol profile for mcbews v1 addon interop (`mcbews:bridge_req` /
-  `mcbews:text_resp`).
-- `CommandRegistry`: the Minecraft command surface the protocol handler renders
-  (empty by default).
-- `ConnectionManager`: owns per-connection state and the player session map.
-- `MinecraftProtocolHandler`: parses inbound traffic and builds outbound packets.
-- `EventBus` / `WsEventType`: low-level typed event subscription.
+| Page | Content |
+|------|---------|
+| [Getting Started](./docs/getting-started.md) | Install, 5-minute walkthrough, minimal echo bot, FAQ |
+| [Architecture](./docs/architecture.md) | Layer stack and dependency inversion |
+| [Protocol](./docs/addon-bridge-protocol.md) | mcbews v1 bridge wire format |
+| [API Reference](./docs/reference.md) | Generated from source |
 
-`addon/service.py` and the addon bridge carry no global singleton and are
-configured entirely through `AddonBridgeSettings`.
+## Examples
+
+| Path | What it shows |
+|------|---------------|
+| [`examples/basic-server/`](./examples/basic-server/) | Echo chat with `tellraw` (start here) |
+| [`examples/addon-server/`](./examples/addon-server/) | Capability calls via the companion addon |
+| [`examples/addon-capability-call/`](./examples/addon-capability-call/) | In-memory bridge round-trip (no game) |
+
+Companion TypeScript addon: [`addon/`](./addon/). Worlds that load it must enable
+**Experiments → Beta APIs** (see [addon README](./addon/README.md#enable-in-a-world)).
 
 ## Development
 
@@ -104,18 +101,6 @@ mypy --no-incremental src
 pytest -p no:cacheprovider -q
 ```
 
-## Docs
-
-Bilingual (English + 中文) site built with Material for MkDocs +
-mkdocstrings + mkdocs-static-i18n:
-
-```bash
-pip install -e ".[docs]"
-mkdocs serve          # EN  http://127.0.0.1:8000
-                      # 中文 http://127.0.0.1:8000/zh/
-mkdocs build --strict # writes ./site
-```
-
 ## License
 
-MIT
+[MIT](./LICENSE)

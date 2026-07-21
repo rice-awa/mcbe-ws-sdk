@@ -10,6 +10,11 @@
 
 本协议是 `mcbe-ws-sdk` 的默认协议 profile（`McbewsV1Profile` / `MCBEWS_V1`）。
 
+!!! warning "世界要求：测试版 API"
+    配套 Script addon 仅在世界开启 **实验 → 测试版 API**（Beta APIs）时运行。
+    未开启时 `scriptEventReceive` 不会触发，能力请求会超时。
+    详见 [addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md#%E5%9C%A8%E4%B8%96%E7%95%8C%E4%B8%AD%E5%90%AF%E7%94%A8)。
+
 ## 命名规则
 
 | 场景 | 规则 | 示例 |

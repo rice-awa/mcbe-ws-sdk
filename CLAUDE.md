@@ -108,6 +108,8 @@ Protocol profiles live under `profiles/` and define wire-format constants for di
 
 The bridge carries structured capability requests/responses over `scriptevent` via a simulated bridge player (`MCBEWS_BRIDGE`). Messages are piped through chat with a `namespace|prefix|request_id|index/total|content` format (`MCBEWS|BRIDGE`, `MCBEWS|UI_CHAT`). `AddonBridgeSession` handles chunk reassembly with TTL-based buffer expiry, byte limits, and per-connection future management. There is no global singleton — `AddonBridgeService` instances are constructed with explicit `AddonBridgeSettings`.
 
+**World requirement:** the companion Script addon only loads when the Bedrock world has **Experiments → Beta APIs** enabled. Without it, scripts never load and capability requests time out. Document this whenever writing enable/import steps for the addon. See `addon/README.md` (Enable in a world).
+
 **Trust boundary:** the bridge is not a security boundary. The host must authenticate/authorize capability callers; the addon only applies a defensive allow/denylist on the world-command path. See `addon/README.md` (Trust boundary).
 
 ### No host imports
@@ -144,6 +146,7 @@ The SDK never imports from its parent repo. `ConnectionState.send_payload` is an
 - **python** — pytest across Python 3.11–3.14
 - **websockets** — test facade + delivery against websockets 12, 14, 16
 - **addon** — Node.js build, test, lint, typecheck for the TypeScript addon side
-- **docs** — `mkdocs build --strict` (Material + mkdocstrings + static-i18n, EN/中文)
+- **docs** — `mkdocs build --strict` (Material + mkdocstrings + static-i18n, EN/中文); uploads `docs-site` artifact
+- **docs-pages** — on `main` (docs/src/mkdocs paths) or `workflow_dispatch`: build + deploy to GitHub Pages (`https://rice-awa.github.io/mcbe-ws-sdk/`)
 - **dist** — build sdist+wheel, twine check, check_dist, verify import (gated on all prior jobs)
 - **release** — tag-triggered; verifies release tag matches package version

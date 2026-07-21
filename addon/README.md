@@ -63,6 +63,22 @@ The build pipeline has two steps:
 
 The artifact that loads in-game is `scripts/main.js` — treat that as authoritative, not the intermediate output under `lib/`.
 
+## Enable in a world
+
+1. Import the generated `.mcaddon` (or copy the behavior / resource packs) into Minecraft.
+2. Open the **target world** settings (create a new world, or **Edit** an existing one).
+3. Under **Experiments**, turn on **Beta APIs**.
+4. Activate this pack in **Behavior Packs** (and the companion resource pack if prompted).
+5. Enter the world, then connect with `/wsserver <host-ip>:8080`.
+
+> **Required: Beta APIs**  
+> This addon depends on the Minecraft Script API (`@minecraft/server`,
+> `@minecraft/server-ui`, and a beta `@minecraft/server-gametest` module).  
+> If **Experiments → Beta APIs** is off, scripts will not load: capability
+> requests time out, and you will see no bridge activity in-game.  
+> Enabling experiments may make the world ineligible for some achievements /
+> features — use a dedicated test world when possible.
+
 ## Built-in Capabilities
 
 The addon ships a ready-to-use capability registry

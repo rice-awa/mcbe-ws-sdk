@@ -1,48 +1,52 @@
 # mcbe-ws-sdk
 
 [![Languages](https://img.shields.io/badge/Languages-English-blue?style=flat-square)](./README.md)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
 
-面向 Minecraft Bedrock Edition 的通用 WebSocket 网关 SDK。本包拥有 WS 传输、数据包
-协议与字节安全的命令分片，并通过依赖注入暴露一个双层接口供宿主驱动：既可以订阅
-按 `WsEventType` 分键的 `EventBus`，也可以实现 `ConnectionHook` 与 `ResponseSink` 并通过
-`McbeServerFacade` 运行全部流程。本包**不拥有**消息 broker 或 LLM worker —— 这些关切
-完全属于宿主。
+面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
 
-**单向能力模型：** SDK 从 Python 宿主向 Minecraft addon 发送桥接请求并接收响应。
-SDK 不包含入站能力注册表分发 —— addon 端拥有所有能力处理逻辑。`McbewsV1Profile`
-（`MCBEWS_V1`）是唯一内置的协议 profile。
+本包拥有 WS 传输、数据包协议与字节安全的命令分片（461 字节硬上限）。宿主通过
+`ConnectionHook` 与 `ResponseSink` 注入行为，并由 `McbeServerFacade` 驱动整条链路。
+
+SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属于宿主应用。
+
+```text
+Minecraft 客户端  ←── /wsserver IP:端口 ──→  你的 Python 宿主（本 SDK）
+```
 
 ## 安装
 
-针对主仓库的 venv 做可编辑安装（`.venv` 位于主仓库根目录，不在此包内）：
-
 ```bash
-pip install -e ./mcbe-ws-sdk
+pip install mcbe-ws-sdk
 ```
 
-## 快速开始
+开发时的可编辑安装：
 
-`McbeServerFacade` 是宿主入口。以默认协作者构造一个实例，再逐个覆盖，然后运行它：
+```bash
+pip install -e ".[dev,docs]"
+```
+
+需要 **Python 3.11+**。
+
+## 30 秒体验
 
 ```python
 import asyncio
-from mcbe_ws_sdk import McbeServerFacade, ConnectionHook
+from mcbe_ws_sdk import McbeServerFacade, NoOpHook
 
 
-class MyHook(ConnectionHook):
+class MyHook(NoOpHook):
     async def on_connected(self, state):
         print("connected:", state.id)
 
-    async def on_player_message(self, state, event):
-        print("chat:", event.message)
-
-    async def on_disconnected(self, state):
-        print("disconnected:", state.id)
+    async def on_player_message(self, state, event, parsed=None):
+        print(f"{event.sender}: {event.message}")
 
 
 async def main() -> None:
     facade = McbeServerFacade(hook=MyHook())
-    print(f"listening on ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
+    print(f"ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
     await facade.run_lifetime()
 
 
@@ -50,64 +54,50 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-构造器是 keyword-only 的；每个参数在 `None` 时会折叠回网关默认值，因此
-`McbeServerFacade()` 即可启动一个带中性 sink、空命令注册表与默认安全 addon 桥的
-可运行 facade：
+然后在游戏里执行：`/wsserver <本机IP>:8080`
 
-```python
-facade = McbeServerFacade(
-    settings=None,    # -> GatewaySettings()
-    hook=None,        # -> NoOpHook()
-    sink=None,        # -> DefaultResponseSink()
-    addon=None,       # -> AddonBridgeService(settings.addon)
-    registry=None,    # -> CommandRegistry()
-)
+若要「收到消息并用 tellraw 回复」，直接跑现成示例：
+
+```bash
+python examples/basic-server/server.py
 ```
 
-通过 `await facade.stop()` 可从另一个任务停止运行中的 facade（`run_lifetime`
-会干净地展开为优雅关闭；直接取消该任务同样有效）。
+## 文档
 
-## 公共 API 面
+完整新手教程、架构、协议与 API 参考在文档站（中英双语）：
 
-宿主需要实现 / 注入以下类：
+| | |
+|---|---|
+| **在线** | https://rice-awa.github.io/mcbe-ws-sdk/zh/ |
+| **本地** | `pip install -e ".[docs]" && mkdocs serve` → http://127.0.0.1:8000/zh/ |
 
-- `ConnectionHook`（+ 6 个钩子）：`on_connected`、`on_disconnected`、
-  `on_player_message`、`on_ui_chat_reassembled`、`on_command_response`、
-  `on_error`。
-- `ResponseSink` / `DefaultResponseSink`：出站文本负载与系统通知的投递方式。
-- `AddonBridgeService` + `AddonBridgeClient`：承载结构化能力请求/响应的 ScriptEvent
-  桥（无全局单例）。
-- `McbewsV1Profile`（模块级 `MCBEWS_V1`）：唯一内置的协议 profile，
-  用于 mcbews v1 addon 互操作（`mcbews:bridge_req` / `mcbews:text_resp`）。
-- `CommandRegistry`：协议处理器所渲染的 Minecraft 命令面（默认为空）。
-- `ConnectionManager`：持有每连接状态与玩家会话映射。
-- `MinecraftProtocolHandler`：解析入站流量并构建出站数据包。
-- `EventBus` / `WsEventType`：底层类型化事件订阅。
+| 页面 | 内容 |
+|------|------|
+| [快速开始](./docs/getting-started.zh.md) | 安装、5 分钟上手、最小回声机器人、FAQ |
+| [架构](./docs/architecture.zh.md) | 分层栈与依赖倒置 |
+| [协议](./docs/addon-bridge-protocol.zh.md) | mcbews v1 桥接线格式 |
+| [API 参考](./docs/reference.zh.md) | 从源码生成（导读见中文站） |
 
-`addon/service.py` 与 addon 桥不携带全局单例，完全通过 `AddonBridgeSettings`
-进行配置。
+## 示例
+
+| 路径 | 说明 |
+|------|------|
+| [`examples/basic-server/`](./examples/basic-server/) | 聊天回声 + `tellraw`（推荐先看） |
+| [`examples/addon-server/`](./examples/addon-server/) | 通过配套 addon 调用能力 |
+| [`examples/addon-capability-call/`](./examples/addon-capability-call/) | 内存中的桥接往返（不连游戏） |
+
+配套 TypeScript addon：[`addon/`](./addon/)。加载该包的世界必须开启
+**实验 → 测试版 API**（详见 [addon README](./addon/README.zh.md#%E5%9C%A8%E4%B8%96%E7%95%8C%E4%B8%AD%E5%90%AF%E7%94%A8)）。
 
 ## 开发
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,docs]"
 ruff check --no-cache src tests examples
 mypy --no-incremental src
 pytest -p no:cacheprovider -q
 ```
 
-## 文档
-
-中英双语文档站，基于 Material for MkDocs + mkdocstrings +
-mkdocs-static-i18n 自动生成 API 参考：
-
-```bash
-pip install -e ".[docs]"
-mkdocs serve          # 英文 http://127.0.0.1:8000
-                      # 中文 http://127.0.0.1:8000/zh/
-mkdocs build --strict # 输出到 ./site
-```
-
 ## License
 
-MIT
+[MIT](./LICENSE)

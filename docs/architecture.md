@@ -81,6 +81,13 @@ Protocol profiles live under `profiles/` and define wire-format constants.
 `McbewsV1Profile` is the sole built-in profile (module-level singleton
 `MCBEWS_V1`). See [Protocol](addon-bridge-protocol.md) for the wire format.
 
+## Addon bridge runtime requirement
+
+The companion Script addon only loads when the world has **Experiments →
+Beta APIs** enabled. Without it, `scriptEventReceive` never fires and
+capability requests time out. See
+[addon/README.md — Enable in a world](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#enable-in-a-world).
+
 ## Addon bridge trust boundary
 
 The bridge is **not** a security boundary. The host must authenticate and

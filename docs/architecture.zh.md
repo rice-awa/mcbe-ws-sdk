@@ -74,6 +74,12 @@ async def on_player_message(
 `McbewsV1Profile` 是唯一内置 profile（模块级单例 `MCBEWS_V1`）。线格式详见
 [协议](addon-bridge-protocol.md)。
 
+## Addon 桥运行要求
+
+配套 Script addon 仅在世界开启 **实验 → 测试版 API**（Beta APIs）时加载。
+未开启时 `scriptEventReceive` 不会触发，能力请求会超时。详见
+[addon/README.zh.md — 在世界中启用](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md#%E5%9C%A8%E4%B8%96%E7%95%8C%E4%B8%AD%E5%90%AF%E7%94%A8)。
+
 ## Addon 桥信任边界
 
 桥接层**不是**安全边界。宿主必须自行认证 / 授权谁可以调用能力；addon 仅在

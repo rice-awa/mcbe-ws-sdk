@@ -11,6 +11,11 @@ A stable bridge protocol between the Python host and the Minecraft Addon:
 This protocol is the default profile of `mcbe-ws-sdk`
 (`McbewsV1Profile` / `MCBEWS_V1`).
 
+!!! warning "World requirement: Beta APIs"
+    The companion Script addon only runs when the world has **Experiments →
+    Beta APIs** enabled. Without it, `scriptEventReceive` never fires and
+    capability requests time out. See the [addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#enable-in-a-world).
+
 ## Naming rules
 
 | Context | Rule | Example |

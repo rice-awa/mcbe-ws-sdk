@@ -59,6 +59,21 @@ npm run mcaddon     # 在构建产物基础上组装 .mcaddon
 
 最终在游戏内加载的是 `scripts/main.js`，请以此为准，而非 `lib/` 下的中间产物。
 
+## 在世界中启用
+
+1. 将生成的 `.mcaddon` 导入 Minecraft（或手动复制行为包 / 资源包）。
+2. 打开**目标世界**的设置（新建世界，或对已有世界点**编辑**）。
+3. 在 **实验**（Experiments）里打开 **测试版 API**（Beta APIs）。
+4. 在 **行为包** 中启用本包（如提示配套资源包也一并启用）。
+5. 进入世界后，再执行 `/wsserver <主机IP>:8080` 连接。
+
+> **必开：测试版 API**  
+> 本 addon 依赖 Minecraft Script API（`@minecraft/server`、
+> `@minecraft/server-ui`，以及 beta 的 `@minecraft/server-gametest`）。  
+> 若未开启 **实验 → 测试版 API**，脚本不会加载：能力请求会超时，
+> 游戏内也看不到任何桥接活动。  
+> 开启实验性玩法可能导致该世界无法解锁部分成就 / 功能，建议使用专用测试世界。
+
 ## 内置能力
 
 Addon 内置一套开箱即用的能力注册表（`scripts/bridge/capabilities/index.ts`），
