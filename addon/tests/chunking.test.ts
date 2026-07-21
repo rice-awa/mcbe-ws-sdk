@@ -7,10 +7,7 @@ import {
   utf8ByteLength,
 } from "../scripts/bridge/chunking";
 import type { ChunkOptions } from "../scripts/bridge/chunking";
-import {
-  BRIDGE_COMMAND_LINE_BYTE_BUDGET,
-  BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS,
-} from "../scripts/bridge/constants";
+import { BRIDGE_COMMAND_LINE_BYTE_BUDGET, BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS } from "../scripts/bridge/constants";
 
 describe("chunking", () => {
   describe("utf8ByteLength", () => {
@@ -180,7 +177,7 @@ describe("chunking", () => {
       expect(() =>
         chunkPayload("P", "id", "中", {
           commandLineByteBudget: 5,
-        }),
+        })
       ).toThrow("chunk framing leaves no room for one Unicode code point");
     });
   });

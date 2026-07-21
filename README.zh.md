@@ -96,6 +96,8 @@ pip install -e ".[dev,docs]"
 ruff check --no-cache src tests examples
 mypy --no-incremental src
 pytest -p no:cacheprovider -q
+python tools/format.py          # ruff format+fix（Python）；有 Node 时跑 prettier（Addon）
+python tools/format.py --check  # CI 风格只检查不写入
 ```
 
 ## License

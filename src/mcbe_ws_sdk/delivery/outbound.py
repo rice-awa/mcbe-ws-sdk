@@ -85,9 +85,7 @@ class McbeOutboundDelivery:
                 message.content, message_id=message.message_id, source=source
             )
         target = message.target or message.player_name or "@a"
-        return await self.send_tellraw(
-            message.content, color="", source=source, target=target
-        )
+        return await self.send_tellraw(message.content, color="", source=source, target=target)
 
     async def send_system_notification(self, message: SystemNotification) -> int:
         """Route a SystemNotification through the delivery adapter."""

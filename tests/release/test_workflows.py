@@ -23,13 +23,14 @@ def load_workflow(name: str) -> dict[str, Any]:
 
 
 def test_ci_dist_depends_on_every_gate() -> None:
-    """The dist job waits for all quality/py/ws/addon gates."""
+    """The dist job waits for every non-dist CI gate (incl. docs)."""
     workflow = load_workflow("ci.yml")
     assert set(workflow["jobs"]["dist"]["needs"]) == {
         "quality",
         "python",
         "websockets",
         "addon",
+        "docs",
     }
 
 

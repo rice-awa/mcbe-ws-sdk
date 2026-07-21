@@ -66,9 +66,7 @@ async def test_sink_dispatches_only_typed_outbound_messages() -> None:
         def __init__(self) -> None:
             self.outbound: list[tuple[ConnectionState, OutboundText]] = []
 
-        async def on_outbound_text(
-            self, state: ConnectionState, message: OutboundText
-        ) -> None:
+        async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
             self.outbound.append((state, message))
 
     sink = RecordingSink()
@@ -86,9 +84,7 @@ def test_duck_typed_two_method_sink_is_response_sink() -> None:
     """Protocol only requires the two on_* methods — no dispatch."""
 
     class TwoMethodSink:
-        async def on_outbound_text(
-            self, state: ConnectionState, message: OutboundText
-        ) -> None:
+        async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
             return None
 
         async def on_system_notification(
@@ -104,9 +100,7 @@ def test_custom_sink_can_subclass_default() -> None:
         def __init__(self) -> None:
             self.messages: list[OutboundText] = []
 
-        async def on_outbound_text(
-            self, state: ConnectionState, message: OutboundText
-        ) -> None:
+        async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
             self.messages.append(message)
 
     sink = HostSink()

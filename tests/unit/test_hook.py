@@ -21,6 +21,7 @@ def test_noop_hook_is_connection_hook() -> None:
 
 def test_noop_hook_is_protocol() -> None:
     import typing
+
     assert typing.get_origin(ConnectionHook) is None or True  # runtime_checkable Protocol
     assert issubclass(NoOpHook, ConnectionHook)
 

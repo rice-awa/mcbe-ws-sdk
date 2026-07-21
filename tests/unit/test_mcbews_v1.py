@@ -57,9 +57,10 @@ def test_mcbews_profile_rejects_invalid_delay_values(field: str, value: object) 
 def test_python_encoder_matches_shared_v2_vector() -> None:
     vectors = json.loads(Path("tests/fixtures/mcbews_v1_vectors.json").read_text("utf-8"))
     vector = vectors["bridge_requests"][1]
-    assert encode_bridge_request(
-        request_id="r-1", capability="greet", payload={"name": "Steve"}
-    ) == f"scriptevent mcbews:bridge_req {vector['message']}"
+    assert (
+        encode_bridge_request(request_id="r-1", capability="greet", payload={"name": "Steve"})
+        == f"scriptevent mcbews:bridge_req {vector['message']}"
+    )
 
 
 def test_text_response_encoder_is_byte_safe_and_round_trips() -> None:

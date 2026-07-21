@@ -26,10 +26,7 @@ import { BRIDGE_REQUEST_MESSAGE_ID } from "../scripts/bridge/constants";
 // ---------------------------------------------------------------------------
 
 const vectors = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL("../../tests/fixtures/mcbews_v1_vectors.json", import.meta.url)),
-    "utf-8",
-  ),
+  readFileSync(fileURLToPath(new URL("../../tests/fixtures/mcbews_v1_vectors.json", import.meta.url)), "utf-8")
 ) as { bridge_requests: Array<{ name: string; version: number; message: string }> };
 
 // ---------------------------------------------------------------------------
@@ -95,9 +92,7 @@ describe("source acceptance", () => {
     const handler = vi.fn<CapabilityHandler>().mockResolvedValue({ ok: true });
     setCapabilityHandler(handler);
 
-    await handleBridgeScriptEvent(serverEvent(
-      JSON.stringify({ request_id: "r2", capability: "test", payload: {} }),
-    ));
+    await handleBridgeScriptEvent(serverEvent(JSON.stringify({ request_id: "r2", capability: "test", payload: {} })));
 
     expect(handler).toHaveBeenCalledOnce();
     expect(sender).toHaveBeenCalledOnce();
@@ -121,10 +116,16 @@ describe("v1 and v2 request vectors", () => {
     }
 
     expect(handler).toHaveBeenNthCalledWith(
-      1, "greet", { name: "Steve" }, { caller: { kind: "server" }, requestVersion: 1 },
+      1,
+      "greet",
+      { name: "Steve" },
+      { caller: { kind: "server" }, requestVersion: 1 }
     );
     expect(handler).toHaveBeenNthCalledWith(
-      2, "greet", { name: "Steve" }, { caller: { kind: "server" }, requestVersion: 2 },
+      2,
+      "greet",
+      { name: "Steve" },
+      { caller: { kind: "server" }, requestVersion: 2 }
     );
   });
 });
@@ -139,7 +140,7 @@ describe("structured error responses", () => {
     await activateBridge(sender);
 
     await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ v: 99, request_id: "r99", capability: "x", payload: {} })),
+      serverEvent(JSON.stringify({ v: 99, request_id: "r99", capability: "x", payload: {} }))
     );
 
     expect(sender).toHaveBeenCalledWith(
@@ -147,7 +148,7 @@ describe("structured error responses", () => {
       JSON.stringify({
         ok: false,
         error: { code: "UNSUPPORTED_VERSION", message: "unsupported bridge version" },
-      }),
+      })
     );
   });
 
@@ -176,7 +177,7 @@ describe("structured error responses", () => {
     await activateBridge(sender);
 
     await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ request_id: "r3", capability: "nonexistent", payload: {} })),
+      serverEvent(JSON.stringify({ request_id: "r3", capability: "nonexistent", payload: {} }))
     );
 
     expect(sender).toHaveBeenCalledWith(
@@ -184,7 +185,7 @@ describe("structured error responses", () => {
       JSON.stringify({
         ok: false,
         error: { code: "UNSUPPORTED_CAPABILITY", message: "unsupported capability: nonexistent" },
-      }),
+      })
     );
   });
 
@@ -195,16 +196,14 @@ describe("structured error responses", () => {
     const handler = vi.fn<CapabilityHandler>().mockRejectedValue(new Error("boom"));
     setCapabilityHandler(handler);
 
-    await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ request_id: "r4", capability: "test", payload: {} })),
-    );
+    await handleBridgeScriptEvent(serverEvent(JSON.stringify({ request_id: "r4", capability: "test", payload: {} })));
 
     expect(sender).toHaveBeenCalledWith(
       "r4",
       JSON.stringify({
         ok: false,
         error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
-      }),
+      })
     );
   });
 
@@ -212,16 +211,14 @@ describe("structured error responses", () => {
     const sender = vi.fn(async (_rid: string, _body: string) => {});
     await activateBridge(sender);
 
-    await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ request_id: "r5", payload: {} })),
-    );
+    await handleBridgeScriptEvent(serverEvent(JSON.stringify({ request_id: "r5", payload: {} })));
 
     expect(sender).toHaveBeenCalledWith(
       "r5",
       JSON.stringify({
         ok: false,
         error: { code: "INVALID_REQUEST", message: "invalid bridge request" },
-      }),
+      })
     );
   });
 
@@ -233,7 +230,7 @@ describe("structured error responses", () => {
     setCapabilityHandler(handler);
 
     await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ request_id: "r6", capability: "test", payload: { password: "hunter2" } })),
+      serverEvent(JSON.stringify({ request_id: "r6", capability: "test", payload: { password: "hunter2" } }))
     );
 
     const sentBody = JSON.parse(sender.mock.calls[0][1]);
@@ -330,16 +327,12 @@ describe("response sender failure handling", () => {
     // This should not throw — the rejection is caught and logged
     await expect(
       handleBridgeScriptEvent(
-        serverEvent(JSON.stringify({ request_id: "r99", capability: "get_player_snapshot", payload: {} })),
-      ),
+        serverEvent(JSON.stringify({ request_id: "r99", capability: "get_player_snapshot", payload: {} }))
+      )
     ).resolves.toBeUndefined();
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("r99"),
-    );
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("network down"),
-    );
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("r99"));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("network down"));
     consoleSpy.mockRestore();
   });
 });
@@ -359,9 +352,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("returns valid BridgeRequest for v1 (missing v)", () => {
-    const result = parseBridgeRequest(
-      '{"request_id":"r1","capability":"greet","payload":{"name":"Steve"}}',
-    );
+    const result = parseBridgeRequest('{"request_id":"r1","capability":"greet","payload":{"name":"Steve"}}');
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.request.v).toBe(1);
@@ -372,9 +363,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("returns valid BridgeRequest for v2", () => {
-    const result = parseBridgeRequest(
-      '{"v":2,"request_id":"r2","capability":"greet","payload":{"x":1}}',
-    );
+    const result = parseBridgeRequest('{"v":2,"request_id":"r2","capability":"greet","payload":{"x":1}}');
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.request.v).toBe(2);
@@ -382,9 +371,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("rejects version 3 as UNSUPPORTED_VERSION", () => {
-    const result = parseBridgeRequest(
-      '{"v":3,"request_id":"r3","capability":"x","payload":{}}',
-    );
+    const result = parseBridgeRequest('{"v":3,"request_id":"r3","capability":"x","payload":{}}');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.response.error.code).toBe("UNSUPPORTED_VERSION");
@@ -393,9 +380,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("rejects request_id as empty string", () => {
-    const result = parseBridgeRequest(
-      '{"v":1,"request_id":"","capability":"x","payload":{}}',
-    );
+    const result = parseBridgeRequest('{"v":1,"request_id":"","capability":"x","payload":{}}');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.response.error.code).toBe("INVALID_REQUEST");
@@ -404,9 +389,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("rejects missing capability", () => {
-    const result = parseBridgeRequest(
-      '{"v":1,"request_id":"r4","payload":{}}',
-    );
+    const result = parseBridgeRequest('{"v":1,"request_id":"r4","payload":{}}');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.response.error.code).toBe("INVALID_REQUEST");
@@ -415,9 +398,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("accepts null payload as empty object", () => {
-    const result = parseBridgeRequest(
-      '{"v":2,"request_id":"r5","capability":"test"}',
-    );
+    const result = parseBridgeRequest('{"v":2,"request_id":"r5","capability":"test"}');
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.request.payload).toEqual({});
@@ -425,9 +406,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("rejects non-object payload", () => {
-    const result = parseBridgeRequest(
-      '{"v":1,"request_id":"r6","capability":"x","payload":"string"}',
-    );
+    const result = parseBridgeRequest('{"v":1,"request_id":"r6","capability":"x","payload":"string"}');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.response.error.code).toBe("INVALID_REQUEST");
@@ -435,7 +414,7 @@ describe("parseBridgeRequest", () => {
   });
 
   it("rejects array as root value", () => {
-    const result = parseBridgeRequest('[1, 2, 3]');
+    const result = parseBridgeRequest("[1, 2, 3]");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.response.error.code).toBe("INVALID_REQUEST");

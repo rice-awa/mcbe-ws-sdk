@@ -99,6 +99,8 @@ pip install -e ".[dev,docs]"
 ruff check --no-cache src tests examples
 mypy --no-incremental src
 pytest -p no:cacheprovider -q
+python tools/format.py          # ruff format+fix (Python); prettier (Addon if Node)
+python tools/format.py --check  # CI-style check
 ```
 
 ## License

@@ -41,7 +41,9 @@ setCapabilityHandler((capability, payload) => {
 import { initializeEarly, initializeAfterWorldLoad } from "./bootstrap";
 
 initializeEarly();
-initializeAfterWorldLoad(() => { /* 在此注册处理器 */ });
+initializeAfterWorldLoad(() => {
+  /* 在此注册处理器 */
+});
 ```
 
 ## 构建
@@ -79,11 +81,11 @@ npm run mcaddon     # 在构建产物基础上组装 .mcaddon
 Addon 内置一套开箱即用的能力注册表（`scripts/bridge/capabilities/index.ts`），
 作为可运行的参考示例。
 
-| 能力名 | 文件 | 说明 |
-| --- | --- | --- |
-| `get_player_snapshot` | `getPlayerSnapshot.ts` | 获取玩家快照（名称、生命值、标签、坐标、维度、游戏模式） |
-| `get_inventory_snapshot` | `getInventorySnapshot.ts` | 获取玩家背包快照（槽位、物品 ID、数量、自定义名称） |
-| `run_world_command` | `runWorldCommand.ts` | 在世界上执行一条 MC 命令（受 `commandSafety.ts` 黑名单保护） |
+| 能力名                   | 文件                      | 说明                                                         |
+| ------------------------ | ------------------------- | ------------------------------------------------------------ |
+| `get_player_snapshot`    | `getPlayerSnapshot.ts`    | 获取玩家快照（名称、生命值、标签、坐标、维度、游戏模式）     |
+| `get_inventory_snapshot` | `getInventorySnapshot.ts` | 获取玩家背包快照（槽位、物品 ID、数量、自定义名称）          |
+| `run_world_command`      | `runWorldCommand.ts`      | 在世界上执行一条 MC 命令（受 `commandSafety.ts` 黑名单保护） |
 
 开发者通过在 `capabilities/index.ts` 的能力注册表中追加新条目来
 添加自定义能力，与内置能力共存，仍由 `router.ts` 按能力名查找调用。
@@ -104,6 +106,5 @@ addon 仅在世界命令路径上提供防御性命令过滤。
   即便宿主放宽 allowlist 仍然生效。
 
 ## 许可证
-
 
 MIT

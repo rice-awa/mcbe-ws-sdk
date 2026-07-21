@@ -17,7 +17,7 @@ def test_encode_bridge_request_uses_bridge_message_id_and_json_body() -> None:
 
     prefix = "scriptevent mcbews:bridge_req "
     assert command.startswith(prefix)
-    assert json.loads(command[len(prefix):]) == {
+    assert json.loads(command[len(prefix) :]) == {
         "v": 2,
         "request_id": "r1",
         "capability": "get_greeting",

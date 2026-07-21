@@ -12,12 +12,7 @@ type PackManifest = {
 };
 
 const readJson = <T>(relativePath: string): T =>
-  JSON.parse(
-    readFileSync(
-      fileURLToPath(new URL(`../${relativePath}`, import.meta.url)),
-      "utf-8",
-    ),
-  ) as T;
+  JSON.parse(readFileSync(fileURLToPath(new URL(`../${relativePath}`, import.meta.url)), "utf-8")) as T;
 
 describe("Minecraft test baseline", () => {
   it("keeps package and pack API versions consistent", () => {
@@ -26,21 +21,15 @@ describe("Minecraft test baseline", () => {
     const resource = readJson<PackManifest>("resource_packs/mc-ws-sdk/manifest.json");
     const moduleVersions = Object.fromEntries(
       (behavior.dependencies ?? [])
-        .filter(
-          (item): item is ModuleDependency =>
-            "module_name" in item && typeof item.module_name === "string",
-        )
-        .map((item) => [item.module_name, item.version]),
+        .filter((item): item is ModuleDependency => "module_name" in item && typeof item.module_name === "string")
+        .map((item) => [item.module_name, item.version])
     );
-    const resourceDependency = (behavior.dependencies ?? []).find(
-      (item): item is PackDependency => "uuid" in item,
-    );
+    const resourceDependency = (behavior.dependencies ?? []).find((item): item is PackDependency => "uuid" in item);
     expect(packageJson.dependencies["@minecraft/server"]).toBe("2.0.0");
     expect(packageJson.dependencies["@minecraft/server-ui"]).toBe("2.0.0");
     expect(moduleVersions["@minecraft/server"]).toBe("2.0.0");
     expect(moduleVersions["@minecraft/server-ui"]).toBe("2.0.0");
-    expect(packageJson.dependencies["@minecraft/server-gametest"])
-      .toMatch(/^1\.0\.0-beta\./);
+    expect(packageJson.dependencies["@minecraft/server-gametest"]).toMatch(/^1\.0\.0-beta\./);
     expect(moduleVersions["@minecraft/server-gametest"]).toBe("1.0.0-beta");
     expect(behavior.header.min_engine_version).toEqual([1, 21, 80]);
     expect(resource.header.min_engine_version).toEqual([1, 21, 80]);

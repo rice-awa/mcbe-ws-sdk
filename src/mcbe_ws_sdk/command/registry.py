@@ -105,7 +105,7 @@ class CommandRegistry:
         """解析消息，返回带匹配来源的 typed command。"""
         for prefix, cmd_config in self._commands.items():
             if self._matches_token(message, prefix):
-                content = message[len(prefix):].strip()
+                content = message[len(prefix) :].strip()
                 return ParsedCommand(
                     type=cmd_config.type,
                     content=content,
@@ -115,7 +115,7 @@ class CommandRegistry:
 
         for alias, main_prefix in self._alias_map.items():
             if self._matches_token(message, alias):
-                content = message[len(alias):].strip()
+                content = message[len(alias) :].strip()
                 cmd_config = self._commands[main_prefix]
                 return ParsedCommand(
                     type=cmd_config.type,
@@ -170,10 +170,7 @@ class CommandRegistry:
 
     def list_all_commands(self) -> list[tuple[str, str, tuple[str, ...]]]:
         """列出所有命令 (前缀, 类型, 别名元组)"""
-        return [
-            (prefix, config.type, config.aliases)
-            for prefix, config in self._commands.items()
-        ]
+        return [(prefix, config.type, config.aliases) for prefix, config in self._commands.items()]
 
     def get_command_prefix(self, cmd_type: str) -> str | None:
         """根据命令类型获取主命令前缀"""

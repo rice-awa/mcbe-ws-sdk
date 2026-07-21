@@ -61,10 +61,7 @@ class MessageSurfaceConfig:
     """
 
     welcome_message_template: str = (
-        "-----------\n"
-        "已连接到 MCBE WebSocket 网关\n"
-        "连接 ID: {connection_id}...\n"
-        "-----------"
+        "-----------\n已连接到 MCBE WebSocket 网关\n连接 ID: {connection_id}...\n-----------"
     )
     error_prefix: str = "❌ 错误: "
     info_prefix: str = "ℹ "

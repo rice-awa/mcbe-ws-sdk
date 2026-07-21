@@ -59,7 +59,7 @@ export function initializeAfterWorldLoad(onReady?: () => void | Promise<void>): 
       // 不置 completed —— 留给另一条路径（worldLoad / 后续重试）再试
       console.warn(
         `[bridge] initialization failed (${source})`,
-        error instanceof Error ? error.message : String(error),
+        error instanceof Error ? error.message : String(error)
       );
     } finally {
       inFlight = false;

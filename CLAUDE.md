@@ -30,6 +30,12 @@ pytest -p no:cacheprovider -q
 pytest tests/unit/test_flow_control.py
 pytest tests/unit/test_flow_control.py -k test_chunk_tellraw
 
+# Auto-format (Python via ruff; Addon via prettier when Node is available)
+python tools/format.py
+python tools/format.py --check
+python tools/format.py --python
+python tools/format.py --addon
+
 # Build distributable artifacts
 python -m build --sdist --wheel
 

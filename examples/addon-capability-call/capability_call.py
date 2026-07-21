@@ -37,10 +37,7 @@ async def main() -> None:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        chat = (
-            f"{MCBEWS_V1.bridge_response_prefix}|"
-            f"{request['request_id']}|1/1|{response}"
-        )
+        chat = f"{MCBEWS_V1.bridge_response_prefix}|{request['request_id']}|1/1|{response}"
         result = await service.handle_player_message(
             connection_id,
             MCBEWS_V1.bridge_sender,

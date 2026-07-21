@@ -45,7 +45,9 @@ Then in `main.ts`:
 import { initializeEarly, initializeAfterWorldLoad } from "./bootstrap";
 
 initializeEarly();
-initializeAfterWorldLoad(() => { /* register handlers here */ });
+initializeAfterWorldLoad(() => {
+  /* register handlers here */
+});
 ```
 
 ## Build
@@ -84,11 +86,11 @@ The artifact that loads in-game is `scripts/main.js` — treat that as authorita
 The addon ships a ready-to-use capability registry
 (`scripts/bridge/capabilities/index.ts`) as a runnable reference example.
 
-| Capability | File | Description |
-| --- | --- | --- |
-| `get_player_snapshot` | `getPlayerSnapshot.ts` | Get a player snapshot (name, health, tags, coordinates, dimension, game mode) |
-| `get_inventory_snapshot` | `getInventorySnapshot.ts` | Get a player inventory snapshot (slots, item ID, count, custom name) |
-| `run_world_command` | `runWorldCommand.ts` | Run an MC command in the world (guarded by the `commandSafety.ts` blacklist) |
+| Capability               | File                      | Description                                                                   |
+| ------------------------ | ------------------------- | ----------------------------------------------------------------------------- |
+| `get_player_snapshot`    | `getPlayerSnapshot.ts`    | Get a player snapshot (name, health, tags, coordinates, dimension, game mode) |
+| `get_inventory_snapshot` | `getInventorySnapshot.ts` | Get a player inventory snapshot (slots, item ID, count, custom name)          |
+| `run_world_command`      | `runWorldCommand.ts`      | Run an MC command in the world (guarded by the `commandSafety.ts` blacklist)  |
 
 Developers add custom capabilities by appending entries to
 the default registry in `capabilities/index.ts`, coexisting with the
@@ -110,6 +112,5 @@ command filter on the world-command path.
   second line of defense and still applies even if a host widens the allowlist.
 
 ## License
-
 
 MIT

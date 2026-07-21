@@ -76,10 +76,7 @@ export function findDeniedCommand(command: string): string | undefined {
  *
  * Returns the first disallowed entrypoint name, or `undefined` if allowed.
  */
-export function findDisallowedCommand(
-  command: string,
-  allowlist: string[] | null,
-): string | undefined {
+export function findDisallowedCommand(command: string, allowlist: string[] | null): string | undefined {
   const denied = findDeniedCommand(command);
   if (denied !== undefined) {
     return denied;

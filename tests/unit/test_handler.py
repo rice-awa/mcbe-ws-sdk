@@ -78,9 +78,7 @@ def test_get_help_text_lists_all_commands_no_hiding() -> None:
 
 def test_message_renderers_use_surface_prefix_and_color() -> None:
     handler = MinecraftProtocolHandler(_registry())
-    assert handler.create_error_message("boom") == TellrawMessage(
-        text="❌ 错误: boom", color="§c"
-    )
+    assert handler.create_error_message("boom") == TellrawMessage(text="❌ 错误: boom", color="§c")
     assert handler.create_success_message("ok") == TellrawMessage(text="✅ ok", color="§a")
     assert handler.create_info_message("hi") == TellrawMessage(text="ℹ hi", color="§b")
 

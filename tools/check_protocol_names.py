@@ -102,9 +102,13 @@ TEXT_SUFFIXES: frozenset[str] = frozenset(
     }
 )
 
-# docs/addon-bridge-protocol.md migration section: skip lines between this
-# heading and the next top-level ``## `` heading.
-MIGRATION_HEADING = "## 与旧协议（mcbeai）的关系"
+# docs/addon-bridge-protocol.md migration section: skip lines between these
+# headings (EN + 中文) and the next top-level ``## `` heading. Legacy token
+# names are intentionally documented there and must not trip the scanner.
+MIGRATION_HEADINGS: tuple[str, ...] = (
+    "## Relation to the legacy protocol (mcbeai)",
+    "## 与旧协议（mcbeai）的关系",
+)
 MIGRATION_DOC = "docs/addon-bridge-protocol.md"
 
 SCAN_DIRS: tuple[str, ...] = (
@@ -166,10 +170,8 @@ def _is_whitelisted(rel: str) -> bool:
 
 
 def _is_text_file(path: Path) -> bool:
-    if path.suffix.lower() in TEXT_SUFFIXES:
-        return True
     # Extensionless files under scan roots are rare; skip them.
-    return False
+    return path.suffix.lower() in TEXT_SUFFIXES
 
 
 def _iter_scan_files() -> Iterator[Path]:
@@ -262,15 +264,15 @@ def check_parity() -> list[Violation]:
 def _lines_with_migration_skip(rel: str, text: str) -> Iterable[tuple[int, str]]:
     """Yield (1-based line number, line) skipping the migration section.
 
-    For ``docs/addon-bridge-protocol.md`` only, lines from
-    ``## 与旧协议（mcbeai）的关系`` through the line before the next ``## ``
-    heading are skipped. The heading line itself is also skipped.
+    For ``docs/addon-bridge-protocol.md`` only, lines from either the English
+    or Chinese legacy-protocol heading through the line before the next
+    ``## `` heading are skipped. The heading line itself is also skipped.
     """
     in_migration = False
     for lineno, line in enumerate(text.splitlines(), start=1):
         if rel == MIGRATION_DOC:
             stripped = line.lstrip()
-            if stripped.startswith(MIGRATION_HEADING):
+            if any(stripped.startswith(heading) for heading in MIGRATION_HEADINGS):
                 in_migration = True
                 continue
             if in_migration and stripped.startswith("## "):
@@ -362,7 +364,7 @@ def check_delay_kinds() -> list[Violation]:
         ]
 
     expected = frozenset({"tellraw", "scriptevent", "text_resp"})
-    if FlowControlSettings.VALID_DELAY_KINDS != expected:
+    if expected != FlowControlSettings.VALID_DELAY_KINDS:
         violations.append(
             Violation(
                 kind="delay_kind",

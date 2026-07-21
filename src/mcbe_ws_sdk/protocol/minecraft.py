@@ -66,9 +66,9 @@ class MinecraftHeader(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     requestId: str = Field(default_factory=lambda: str(uuid4()))
-    messagePurpose: Literal[
-        "subscribe", "commandRequest", "commandResponse", "event", "error"
-    ] = "commandRequest"
+    messagePurpose: Literal["subscribe", "commandRequest", "commandResponse", "event", "error"] = (
+        "commandRequest"
+    )
     version: int = 1
     EventName: str | None = None
     eventName: str | None = None  # 事件名称（小写）
@@ -158,9 +158,7 @@ class MinecraftCommand(BaseModel):
     @classmethod
     def create_raw(cls, command: str) -> MinecraftCommand:
         """创建原始命令"""
-        return cls(
-            body=MinecraftCommandBody(commandLine=command)
-        )
+        return cls(body=MinecraftCommandBody(commandLine=command))
 
 
 class MinecraftSubscribe(BaseModel):

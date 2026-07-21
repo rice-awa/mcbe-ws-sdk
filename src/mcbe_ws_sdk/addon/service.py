@@ -134,16 +134,14 @@ class AddonBridgeService:
 
     def is_bridge_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is an addon response fragment."""
-        return (
-            sender == self._profile.bridge_sender
-            and message.startswith(self._profile.bridge_response_prefix)
+        return sender == self._profile.bridge_sender and message.startswith(
+            self._profile.bridge_response_prefix
         )
 
     def is_ui_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is a UI chat fragment."""
-        return (
-            sender == self._profile.bridge_sender
-            and message.startswith(self._profile.ui_chat_prefix)
+        return sender == self._profile.bridge_sender and message.startswith(
+            self._profile.ui_chat_prefix
         )
 
     async def handle_player_message(

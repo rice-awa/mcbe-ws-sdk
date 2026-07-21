@@ -152,6 +152,7 @@ class FlowControlMiddleware:
                 )
             refined_parts: list[str] = []
             for part in text_parts:
+
                 def command_line_for(fragment: str, probe_total: int = total_hint) -> str:
                     return MinecraftCommand.create_scriptevent(
                         encode_frame(fragment, probe_total, probe_total),
@@ -196,12 +197,11 @@ class FlowControlMiddleware:
         return self._split_by_command_fit(
             text,
             max_length,
-            lambda part: MinecraftCommand.create_tellraw(
-                part, color=color, target=target
-            ).body.commandLine,
+            lambda part: (
+                MinecraftCommand.create_tellraw(part, color=color, target=target).body.commandLine
+            ),
             error_message=(
-                "tellraw wrapper exceeds byte budget; "
-                "target/color leave no room for content"
+                "tellraw wrapper exceeds byte budget; target/color leave no room for content"
             ),
         )
 
@@ -257,8 +257,7 @@ class FlowControlMiddleware:
             segment = parts[i]
             delimiter = (
                 parts[i + 1]
-                if i + 1 < len(parts)
-                and _SENTENCE_DELIMITER_RE.match(parts[i + 1])
+                if i + 1 < len(parts) and _SENTENCE_DELIMITER_RE.match(parts[i + 1])
                 else ""
             )
             combined = segment + delimiter if delimiter else segment

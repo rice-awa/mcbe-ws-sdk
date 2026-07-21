@@ -64,17 +64,13 @@ class ResponseSink(Protocol):
     directly so a duck-typed host only needs these two hooks.
     """
 
-    async def on_outbound_text(
-        self, state: ConnectionState, message: OutboundText
-    ) -> None:
-        ...
+    async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None: ...
 
     async def on_system_notification(
         self,
         state: ConnectionState,
         message: SystemNotification,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class DefaultResponseSink:
@@ -88,9 +84,7 @@ class DefaultResponseSink:
     envelope-based routing; the manager never requires it.
     """
 
-    async def on_outbound_text(
-        self, state: ConnectionState, message: OutboundText
-    ) -> None:
+    async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
         logger.debug(
             "sink_outbound_text",
             connection_id=str(state.id),

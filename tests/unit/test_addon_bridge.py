@@ -106,9 +106,7 @@ def test_session_reassembles_ui_chat() -> None:
     assert isinstance(first_chunk, UiChatChunk)
     assert first_message is None
 
-    second_chunk, second_message = session.handle_ui_chat_chunk(
-        'MCBEWS|UI_CHAT|m1|2/2|llo"}'
-    )
+    second_chunk, second_message = session.handle_ui_chat_chunk('MCBEWS|UI_CHAT|m1|2/2|llo"}')
     assert isinstance(second_chunk, UiChatChunk)
     assert second_message == UiChatMessage(msg_id="m1", player_name="Steve", message="hello")
 
@@ -140,7 +138,7 @@ def test_legacy_wire_models_preserve_unknown_fields() -> None:
             "msg_id": "m1",
             "chunk_index": 1,
             "total_chunks": 1,
-            "content": "{\"player\":\"Steve\",\"message\":\"hi\"}",
+            "content": '{"player":"Steve","message":"hi"}',
             "trace": "ui-extra",
         }
     )
@@ -194,9 +192,7 @@ async def test_service_request_capability_end_to_end() -> None:
             await asyncio.sleep(0.005)
 
     request = asyncio.create_task(
-        service.request_capability(
-            connection_id, "get_greeting", {"player": "Steve"}, send_command
-        )
+        service.request_capability(connection_id, "get_greeting", {"player": "Steve"}, send_command)
     )
     resolver = asyncio.create_task(resolve_once_pending())
 

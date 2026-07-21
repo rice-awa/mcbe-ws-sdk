@@ -82,7 +82,9 @@ class RecordingSink(DefaultResponseSink):
         self.envelopes.append((state.id, RouteEnvelope(ResponseKind.OUTBOUND_TEXT, message)))
 
     async def on_system_notification(
-        self, state: ConnectionState, note: SystemNotification,
+        self,
+        state: ConnectionState,
+        note: SystemNotification,
     ) -> None:
         self.envelopes.append((state.id, RouteEnvelope(ResponseKind.SYSTEM_NOTIFICATION, note)))
 
@@ -115,7 +117,10 @@ class RecordingHook(NoOpHook):
         self.parsed.append(parsed)
 
     async def on_ui_chat_reassembled(
-        self, state: ConnectionState, player_name: str, message: str,
+        self,
+        state: ConnectionState,
+        player_name: str,
+        message: str,
     ) -> None:
         self.ui_chat_reassembled.append((player_name, message))
 
@@ -209,9 +214,7 @@ def _command_response_frame(
     }
     if extra_envelope is not None:
         envelope.update(extra_envelope)
-    return json.dumps(
-        envelope
-    )
+    return json.dumps(envelope)
 
 
 def _error_frame(
@@ -226,9 +229,7 @@ def _error_frame(
     }
     if extra_envelope is not None:
         envelope.update(extra_envelope)
-    return json.dumps(
-        envelope
-    )
+    return json.dumps(envelope)
 
 
 def _send_noop(payload: str) -> Any:  # pragma: no cover - transport stub
@@ -270,9 +271,7 @@ async def test_run_lifetime_stop_unwinds_and_clears_state(
         async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
             return None
 
-    def fake_serve(
-        handler: object, host: str, port: int, **kwargs: object
-    ) -> FakeServerContext:
+    def fake_serve(handler: object, host: str, port: int, **kwargs: object) -> FakeServerContext:
         return FakeServerContext()
 
     monkeypatch.setattr("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve)
@@ -302,9 +301,7 @@ async def test_run_lifetime_enter_failure_cleans_manager_state(
         async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
             return None
 
-    def fake_serve(
-        handler: object, host: str, port: int, **kwargs: object
-    ) -> FailingServerContext:
+    def fake_serve(handler: object, host: str, port: int, **kwargs: object) -> FailingServerContext:
         return FailingServerContext()
 
     monkeypatch.setattr("mcbe_ws_sdk.gateway.server_facade.websockets.serve", fake_serve)
@@ -392,10 +389,14 @@ async def test_on_connection_emits_connected_and_disconnects() -> None:
     connected: list[UUID] = []
     disconnected: list[UUID] = []
     facade.manager.event_bus.subscribe(
-        WsEventType.CONNECTED, lambda s: connected.append(s.id), weak=False,
+        WsEventType.CONNECTED,
+        lambda s: connected.append(s.id),
+        weak=False,
     )
     facade.manager.event_bus.subscribe(
-        WsEventType.DISCONNECTED, lambda s: disconnected.append(s.id), weak=False,
+        WsEventType.DISCONNECTED,
+        lambda s: disconnected.append(s.id),
+        weak=False,
     )
 
     await facade._on_connection(FakeWebSocket(frames=[]))
@@ -426,9 +427,7 @@ async def test_connection_sends_init_and_subscribe_before_hook() -> None:
     async def on_connected_event(state: ConnectionState) -> None:
         order.append("connected_event")
 
-    facade.manager.event_bus.subscribe(
-        WsEventType.CONNECTED, on_connected_event, weak=False
-    )
+    facade.manager.event_bus.subscribe(WsEventType.CONNECTED, on_connected_event, weak=False)
     websocket.send = record_send  # type: ignore[method-assign]
     await facade._on_connection(websocket)
 
@@ -476,7 +475,10 @@ async def test_malformed_ui_frame_does_not_block_following_player_frame() -> Non
 
 class FailingUiHook(RecordingHook):
     async def on_ui_chat_reassembled(
-        self, state: ConnectionState, player_name: str, message: str,
+        self,
+        state: ConnectionState,
+        player_name: str,
+        message: str,
     ) -> None:
         raise LookupError("callback failed")
 
@@ -608,9 +610,7 @@ async def test_facade_emits_bridge_and_ui_semantic_events() -> None:
     facade.manager.event_bus.subscribe(WsEventType.CONNECTED, on_connected, weak=False)
     facade.manager.event_bus.subscribe(WsEventType.BRIDGE_CHUNK, on_bridge, weak=False)
     facade.manager.event_bus.subscribe(WsEventType.UI_CHAT_CHUNK, on_ui_chunk, weak=False)
-    facade.manager.event_bus.subscribe(
-        WsEventType.UI_CHAT_REASSEMBLED, on_ui_message, weak=False
-    )
+    facade.manager.event_bus.subscribe(WsEventType.UI_CHAT_REASSEMBLED, on_ui_message, weak=False)
 
     with patch(
         "mcbe_ws_sdk.addon.session.uuid4",
@@ -621,7 +621,7 @@ async def test_facade_emits_bridge_and_ui_semantic_events() -> None:
                 [
                     _player_message_frame(
                         "MCBEWS_BRIDGE",
-                        "MCBEWS|BRIDGE|addon-00000000000000000000000000000001|1/1|{\"ok\":true}",
+                        'MCBEWS|BRIDGE|addon-00000000000000000000000000000001|1/1|{"ok":true}',
                     ),
                     _player_message_frame(
                         "MCBEWS_BRIDGE",
@@ -755,7 +755,8 @@ async def test_sink_receives_outbound_text() -> None:
     facade = McbeServerFacade(hook=RecordingHook(), sink=sink)
 
     state = await facade.manager.create_connection(
-        connection_id=UUID(int=5), send_payload=_send_noop,
+        connection_id=UUID(int=5),
+        send_payload=_send_noop,
     )
     assert state.response_queue is not None
 
@@ -788,7 +789,8 @@ async def test_shutdown_all_on_stop_cancels_senders() -> None:
     facade = McbeServerFacade(hook=RecordingHook(), sink=RecordingSink())
 
     await facade.manager.create_connection(
-        connection_id=UUID(int=9), send_payload=_send_noop,
+        connection_id=UUID(int=9),
+        send_payload=_send_noop,
     )
     assert UUID(int=9) in facade.manager._sender_tasks
     # The sender task should be alive (waiting on the queue).

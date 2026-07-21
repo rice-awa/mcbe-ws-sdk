@@ -209,9 +209,7 @@ async def test_connection_shutdown_is_idempotent(manager: ConnectionManager) -> 
 
 
 @pytest.mark.asyncio
-async def test_response_queue_overflow_drops_oldest(
-    bus: EventBus, sink: RecordingSink
-) -> None:
+async def test_response_queue_overflow_drops_oldest(bus: EventBus, sink: RecordingSink) -> None:
     manager = ConnectionManager(sink=sink, event_bus=bus, response_queue_maxsize=2)
     state = await manager.create_connection(connection_id=UUID(int=50), send_payload=_send_noop)
     # Keep the sender from draining the queue so overflow behaviour is visible.

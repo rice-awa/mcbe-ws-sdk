@@ -7,7 +7,7 @@ const DEFAULT_ALLOWLIST = ["say"];
 
 export function handleRunWorldCommand(
   payload: { command?: string },
-  allowlist: string[] | null = DEFAULT_ALLOWLIST,
+  allowlist: string[] | null = DEFAULT_ALLOWLIST
 ): {
   ok: boolean;
   payload: { output: string; successCount: number };

@@ -37,6 +37,7 @@ def test_tellraw_short_text_single_chunk_under_budget():
     payloads = mid.chunk_tellraw("Hello world")
     assert len(payloads) == 1
     import json
+
     data = json.loads(payloads[0])
     assert len(data["body"]["commandLine"].encode("utf-8")) <= 461
 
@@ -48,6 +49,7 @@ def test_tellraw_long_text_chunks_within_budget():
     assert len(payloads) >= 2
     for payload in payloads:
         import json
+
         data = json.loads(payload)
         assert len(data["body"]["commandLine"].encode("utf-8")) <= 461
 

@@ -1,4 +1,5 @@
 """Tests for the relocated MCBE protocol models."""
+
 from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
     AddonBridgeResponse,
@@ -105,7 +106,7 @@ def test_sanitize_tellraw_target_keeps_unicode_names_unquoted() -> None:
     assert sanitize_tellraw_target('A"B') == '"A\\"B"'
 
     cmd = MinecraftCommand.create_tellraw("hi", color="", target="玩家")
-    assert cmd.body.commandLine.startswith('tellraw 玩家 ')
+    assert cmd.body.commandLine.startswith("tellraw 玩家 ")
     assert '"玩家"' not in cmd.body.commandLine
 
 

@@ -114,7 +114,7 @@ describe("ResponseAssembler", () => {
         maxChunksPerMessage: DEFAULT_RESPONSE_SYNC_LIMITS.maxChunksPerMessage,
         maxMessageBytes: DEFAULT_RESPONSE_SYNC_LIMITS.maxMessageBytes,
       },
-      () => now,
+      () => now
     );
     assembler.push({ id: "x", i: 1, n: 2, p: "A", r: "user", c: "a" });
     expect(assembler.bufferCount).toBe(1);
@@ -176,7 +176,7 @@ describe("ResponseAssembler", () => {
         maxChunksPerMessage: DEFAULT_RESPONSE_SYNC_LIMITS.maxChunksPerMessage,
         maxMessageBytes: DEFAULT_RESPONSE_SYNC_LIMITS.maxMessageBytes,
       },
-      () => now,
+      () => now
     );
 
     // First buffer with id "x"
@@ -202,20 +202,14 @@ describe("ResponseAssembler", () => {
   });
 
   it("drops chunk when n exceeds maxChunksPerMessage", () => {
-    const assembler = new ResponseAssembler(
-      { ...DEFAULT_RESPONSE_SYNC_LIMITS, maxChunksPerMessage: 2 },
-      () => 0,
-    );
+    const assembler = new ResponseAssembler({ ...DEFAULT_RESPONSE_SYNC_LIMITS, maxChunksPerMessage: 2 }, () => 0);
     expect(assembler.push({ id: "x", i: 1, n: 3, p: "P", r: "user", c: "a" })).toBeNull();
     // Chunk is silently dropped — buffer never created
     expect(assembler.bufferCount).toBe(0);
   });
 
   it("drops new buffer when maxBuffers limit would be exceeded", () => {
-    const assembler = new ResponseAssembler(
-      { ...DEFAULT_RESPONSE_SYNC_LIMITS, maxBuffers: 2 },
-      () => 0,
-    );
+    const assembler = new ResponseAssembler({ ...DEFAULT_RESPONSE_SYNC_LIMITS, maxBuffers: 2 }, () => 0);
 
     // Fill both slots (n=2 so chunks don't complete immediately)
     assembler.push({ id: "a", i: 1, n: 2, p: "P", r: "user", c: "a" });
@@ -228,10 +222,7 @@ describe("ResponseAssembler", () => {
   });
 
   it("drops buffer when total byte length exceeds maxMessageBytes", () => {
-    const assembler = new ResponseAssembler(
-      { ...DEFAULT_RESPONSE_SYNC_LIMITS, maxMessageBytes: 10 },
-      () => 0,
-    );
+    const assembler = new ResponseAssembler({ ...DEFAULT_RESPONSE_SYNC_LIMITS, maxMessageBytes: 10 }, () => 0);
 
     // 4 bytes each for two 2-byte chars, plus 4 = 8, then next would exceed
     // Actually: "aaaa" = 4 bytes, "bbbb" = 4 bytes, total 8 < 10
@@ -304,7 +295,7 @@ describe("registerResponseSyncHandler source acceptance", () => {
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
-      entityEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" })),
+      entityEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" }))
     );
 
     expect(handler).toHaveBeenCalledOnce();
@@ -317,7 +308,7 @@ describe("registerResponseSyncHandler source acceptance", () => {
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
-      serverEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" })),
+      serverEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" }))
     );
 
     expect(handler).toHaveBeenCalledOnce();
@@ -335,9 +326,7 @@ describe("registerResponseSyncHandler malformed input", () => {
     setTextRespHandler(handler);
     registerResponseSyncHandler();
 
-    system.afterEvents.scriptEventReceive.emit(
-      serverEvent("{{{ invalid json"),
-    );
+    system.afterEvents.scriptEventReceive.emit(serverEvent("{{{ invalid json"));
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -347,9 +336,7 @@ describe("registerResponseSyncHandler malformed input", () => {
     setTextRespHandler(handler);
     registerResponseSyncHandler();
 
-    system.afterEvents.scriptEventReceive.emit(
-      serverEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P" })),
-    );
+    system.afterEvents.scriptEventReceive.emit(serverEvent(JSON.stringify({ id: "x", i: 1, n: 1, p: "P" })));
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -360,7 +347,7 @@ describe("registerResponseSyncHandler malformed input", () => {
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
-      serverEvent(JSON.stringify([{ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" }])),
+      serverEvent(JSON.stringify([{ id: "x", i: 1, n: 1, p: "P", r: "user", c: "hello" }]))
     );
 
     expect(handler).not.toHaveBeenCalled();
@@ -372,7 +359,7 @@ describe("registerResponseSyncHandler malformed input", () => {
     registerResponseSyncHandler();
 
     system.afterEvents.scriptEventReceive.emit(
-      serverEvent(JSON.stringify({ id: "x", i: "1", n: 1, p: "P", r: "user", c: "hello" })),
+      serverEvent(JSON.stringify({ id: "x", i: "1", n: 1, p: "P", r: "user", c: "hello" }))
     );
 
     expect(handler).not.toHaveBeenCalled();
