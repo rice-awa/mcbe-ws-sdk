@@ -76,7 +76,7 @@
 - **类型安全**：Pydantic v2 模型，mypy strict 全量通过
 - **异步原生**：asyncio 架构，async for WS 消息循环
 - **结构化日志**：structlog
-- **测试覆盖**（NFR / 可选 CI）：核心层（flow / gateway / addon）目标 ≥85%；当前不作为硬门禁，工程化见后续 Task 7（pytest-cov + CI）
+- **测试覆盖**（NFR / CI 硬门禁）：核心层（flow / gateway / addon）line coverage ≥85%（`pyproject.toml` `fail_under = 85` + CI `--cov`）；覆盖率工具仅是开发/CI 依赖，不是打包/运行时依赖
 - **依赖最小闭包**：仅 `pydantic>=2`、`websockets>=12`、`structlog>=24`；不拖 httpx/PyJWT/pydantic-ai 进包
 - **Python 3.11+**
 
@@ -117,5 +117,5 @@
 
 - 包内 e2e（内存 WS 跑 `run_lifetime` 全链路）
 - `examples/addon-capability-call` 端到端可用
-- mypy strict + ruff + pytest 全绿；覆盖率 ≥85% 为 NFR / 可选 CI 目标（非发版硬门禁）
+- mypy strict + ruff + pytest 全绿；CI hard gate：核心层 line coverage ≥85%（非打包/运行时依赖）
 - PyPI 发版（MIT）

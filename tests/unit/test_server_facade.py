@@ -483,6 +483,7 @@ class FailingUiHook(RecordingHook):
 
 @pytest.mark.asyncio
 async def test_ui_callback_failure_does_not_block_following_frame() -> None:
+    """Facade isolates on_ui_chat_reassembled like other hooks; connection stays up."""
     hook = FailingUiHook()
     frames = [
         _complete_ui_player_frame("Alice", "first"),
@@ -490,6 +491,8 @@ async def test_ui_callback_failure_does_not_block_following_frame() -> None:
     ]
     await McbeServerFacade(hook=hook)._on_connection(FakeWebSocket(frames))
     assert [event.message for event in hook.player_messages] == ["second"]
+    # Natural disconnect still runs — hook failure must not tear the connection early.
+    assert len(hook.disconnected) == 1
 
 
 # --------------------------------------------------------------------------- #

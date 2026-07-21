@@ -55,4 +55,5 @@ def test_public_api_snapshot() -> None:
         "WsEventType",
         "configure_logging",
         "encode_text_response_commands",
+        "enqueue_response",
     }

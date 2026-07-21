@@ -58,6 +58,7 @@ from mcbe_ws_sdk.gateway import (
     SystemNotification,
     WebsocketTransportConfig,
     WsEventType,
+    enqueue_response,
 )
 from mcbe_ws_sdk.logging import configure_logging
 from mcbe_ws_sdk.profiles import MCBEWS_V1, AddonBridgeProfile, McbewsV1Profile
@@ -121,4 +122,5 @@ __all__ = (
     "WsEventType",
     "configure_logging",
     "encode_text_response_commands",
+    "enqueue_response",
 )

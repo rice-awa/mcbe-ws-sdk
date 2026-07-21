@@ -370,7 +370,16 @@ class McbeServerFacade:
                 player=player_name,
             )
             return
-        await self._hook.on_ui_chat_reassembled(state, player_name, message)
+        try:
+            await self._hook.on_ui_chat_reassembled(state, player_name, message)
+        except Exception:
+            # Isolate host hook failures so a broken UI-chat handler cannot tear
+            # the connection or poison the addon reassembly path.
+            logger.exception(
+                "hook_on_ui_chat_reassembled_failed",
+                connection_id=str(connection_id),
+                player=player_name,
+            )
 
     def _wrap_send(
         self,

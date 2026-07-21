@@ -9,7 +9,11 @@ repo) injects behaviour by implementing
 """
 
 from mcbe_ws_sdk.config import GatewaySettings, WebsocketTransportConfig
-from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState
+from mcbe_ws_sdk.gateway.connection import (
+    ConnectionManager,
+    ConnectionState,
+    enqueue_response,
+)
 from mcbe_ws_sdk.gateway.events import EventBus, SubscriptionToken, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
 from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
@@ -41,4 +45,5 @@ __all__ = [
     "SystemNotification",
     "WebsocketTransportConfig",
     "WsEventType",
+    "enqueue_response",
 ]
