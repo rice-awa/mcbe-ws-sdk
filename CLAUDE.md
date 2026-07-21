@@ -77,17 +77,19 @@ facade = McbeServerFacade(
 )
 ```
 
-The host implements `ConnectionHook` (6 hooks: `on_connected`, `on_disconnected`, `on_player_message`, `on_ui_chat_reassembled`, `on_command_response`, `on_error`) and a `ResponseSink` (routes `OutboundText` / `SystemNotification` → MC commands via `McbeOutboundDelivery`). `NoOpHook` and `DefaultResponseSink` define the complete contract; a host subclasses only what it needs.
+The host implements `ConnectionHook` (6 side-effecting hooks, all `-> None`: `on_connected`, `on_disconnected`, `on_player_message(state, event, parsed=None)`, `on_ui_chat_reassembled`, `on_command_response`, `on_error`) and a `ResponseSink` (routes `OutboundText` / `SystemNotification` → MC commands via `McbeOutboundDelivery`). `parsed` is an optional pre-parsed `ParsedCommand` from the registry, not a consumed-bool return. `NoOpHook` and `DefaultResponseSink` define the complete contract; a host subclasses only what it needs.
+
+There is **no** SDK-owned `PlayerSession`. Multiplayer isolation is a **host** concern: bucket history / locks / context by `(connection_id, sender)` using `PlayerMessageEvent.sender`. `ConnectionState.player_name` is a deprecated convenience pointer only.
 
 ### Per-connection message routing flow
 
-1. `McbeServerFacade._on_connection` — creates connection state, starts a `_response_sender` coroutine, sends subscribe + welcome
+1. `McbeServerFacade._on_connection` — creates connection state, starts a `_response_sender` coroutine, sends handshake + subscribe; after those succeed, emits `CONNECTED` then calls `hook.on_connected` (welcome is host-owned — the facade never sends a welcome banner)
 2. `_handle_raw` classifies each inbound frame:
    - **error** frame → emits `WsEventType.ERROR` + calls `hook.on_error`
    - **commandResponse** → emits `WsEventType.COMMAND_RESPONSE` + calls `hook.on_command_response`
    - **addon prefix match** → routes to `AddonBridgeService.handle_player_message` (bridge chunk reassembly or UI chat reassembly)
-   - **PlayerMessage** → emits `WsEventType.PLAYER_MESSAGE` + calls `hook.on_player_message`
-3. The response-sender coroutine drains `state.response_queue`, wrapping each message via `RouteEnvelope.from_message()` and dispatching through the sink
+   - **PlayerMessage** → emits `WsEventType.PLAYER_MESSAGE` + calls `hook.on_player_message(state, event, parsed=...)`
+3. The response-sender coroutine drains `state.response_queue`, wrapping each message via `RouteEnvelope.from_message()` and routing inline to the sink's two `on_*` methods (no `dispatch` on the protocol)
 4. The host's `HostSink` turns queued messages into MC WebSocket payloads using `McbeOutboundDelivery`
 
 ### Protocol profiles
@@ -105,6 +107,8 @@ Protocol profiles live under `profiles/` and define wire-format constants for di
 ### Addon bridge protocol
 
 The bridge carries structured capability requests/responses over `scriptevent` via a simulated bridge player (`MCBEWS_BRIDGE`). Messages are piped through chat with a `namespace|prefix|request_id|index/total|content` format (`MCBEWS|BRIDGE`, `MCBEWS|UI_CHAT`). `AddonBridgeSession` handles chunk reassembly with TTL-based buffer expiry, byte limits, and per-connection future management. There is no global singleton — `AddonBridgeService` instances are constructed with explicit `AddonBridgeSettings`.
+
+**Trust boundary:** the bridge is not a security boundary. The host must authenticate/authorize capability callers; the addon only applies a defensive allow/denylist on the world-command path. See `addon/README.md` (Trust boundary).
 
 ### No host imports
 

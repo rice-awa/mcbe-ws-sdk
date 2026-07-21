@@ -18,6 +18,10 @@ McbeServerFacade          ← host entry point; owns the full WS lifetime
 └── McbeOutboundDelivery  ← unified outbound adapter
 ```
 
+There is **no** SDK-owned `PlayerSession`. Multiplayer isolation is a **host**
+concern: the gateway only forwards `PlayerMessageEvent.sender`; the host buckets
+history / locks / context by `(connection_id, sender)`.
+
 ## Dependency inversion
 
 `McbeServerFacade.__init__` is keyword-only; every collaborator collapses to a
@@ -25,6 +29,21 @@ gateway default when `None`. The host subclasses only what it needs:
 
 - `NoOpHook` / `ConnectionHook`
 - `DefaultResponseSink` / `ResponseSink`
+
+`ConnectionHook` has six side-effecting hooks (all `-> None`). The chat hook
+signature is:
+
+```python
+async def on_player_message(
+    self,
+    state: ConnectionState,
+    player_event: PlayerMessageEvent,
+    parsed: ParsedCommand | None = None,
+) -> None: ...
+```
+
+`parsed` is the registry match when one exists; it is **not** a consumed-bool
+return value — the host decides what to do with free-form chat and commands.
 
 ## Per-connection message routing
 
@@ -37,7 +56,8 @@ gateway default when `None`. The host subclasses only what it needs:
    - **error** → `WsEventType.ERROR` + `hook.on_error`
    - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
    - **addon prefix match** → `AddonBridgeService` (bridge / UI chat reassembly)
-   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` + `hook.on_player_message`
+   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` +
+     `hook.on_player_message(state, event, parsed=...)`
 3. The response-sender drains `state.response_queue`, wrapping each message via
    `RouteEnvelope.from_message()` and routing inline to the sink's two `on_*`
    methods (no `dispatch` on the protocol).
@@ -60,6 +80,13 @@ empirically determined):
 Protocol profiles live under `profiles/` and define wire-format constants.
 `McbewsV1Profile` is the sole built-in profile (module-level singleton
 `MCBEWS_V1`). See [Protocol](addon-bridge-protocol.md) for the wire format.
+
+## Addon bridge trust boundary
+
+The bridge is **not** a security boundary. The host must authenticate and
+authorize who can invoke capabilities; the addon only applies a defensive
+command allow/denylist on the world-command path. See
+[addon/README.md — Trust boundary](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#trust-boundary).
 
 ## No host imports
 

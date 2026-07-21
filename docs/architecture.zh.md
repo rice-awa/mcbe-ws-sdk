@@ -18,6 +18,10 @@ McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
 └── McbeOutboundDelivery  ← 统一出站适配器
 ```
 
+SDK **没有**自带 `PlayerSession`。多人会话隔离是**宿主**职责：网关只透传
+`PlayerMessageEvent.sender`；宿主按 `(connection_id, sender)` 分桶历史 / 锁 /
+上下文。
+
 ## 依赖倒置
 
 `McbeServerFacade.__init__` 是 keyword-only 的；每个协作者在 `None` 时折叠为网关默认值。
@@ -25,6 +29,20 @@ McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
 
 - `NoOpHook` / `ConnectionHook`
 - `DefaultResponseSink` / `ResponseSink`
+
+`ConnectionHook` 共六个纯副作用钩子（全部 `-> None`）。聊天钩子签名为：
+
+```python
+async def on_player_message(
+    self,
+    state: ConnectionState,
+    player_event: PlayerMessageEvent,
+    parsed: ParsedCommand | None = None,
+) -> None: ...
+```
+
+`parsed` 是 registry 的预解析匹配结果（若有）；**不是**"已消费"布尔返回值 ——
+宿主自行决定如何处理自由聊天与命令。
 
 ## 每连接消息路由
 
@@ -36,7 +54,8 @@ McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
    - **error** → `WsEventType.ERROR` + `hook.on_error`
    - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
    - **addon 前缀匹配** → `AddonBridgeService`（桥接 / UI 聊天重组）
-   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` + `hook.on_player_message`
+   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` +
+     `hook.on_player_message(state, event, parsed=...)`
 3. response-sender 排空 `state.response_queue`，经 `RouteEnvelope.from_message()` 包装后
    内联路由到 sink 的两个 `on_*` 方法（协议上不含 `dispatch`）。
 4. 宿主 sink 使用 `McbeOutboundDelivery` 把排队消息变成 MC WebSocket 负载。
@@ -54,6 +73,13 @@ McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
 协议 profile 位于 `profiles/`，定义互操作层的线格式常量。
 `McbewsV1Profile` 是唯一内置 profile（模块级单例 `MCBEWS_V1`）。线格式详见
 [协议](addon-bridge-protocol.md)。
+
+## Addon 桥信任边界
+
+桥接层**不是**安全边界。宿主必须自行认证 / 授权谁可以调用能力；addon 仅在
+世界命令路径上提供防御性 allow/denylist。详见
+[addon/README.md — Trust boundary](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#trust-boundary)
+（中文见 [addon/README.zh.md — 信任边界](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md#%E4%BF%A1%E4%BB%BB%E8%BE%B9%E7%95%8C)）。
 
 ## 不导入宿主
 

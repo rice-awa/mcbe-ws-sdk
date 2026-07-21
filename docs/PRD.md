@@ -14,7 +14,7 @@
 - 抽出 **通用 MCBE WS 网关** 作为独立、可发布的 Python 包。
 - 提供**双层接口**：底层事件总线 + 高层钩子/sink 协议。
 - **绝对不污染**主仓 `services/` / `models/` — 新包放独立文件夹 `mcbe-ws-sdk/`，独立 git 仓库。
-- 兼容现有行为：多人会话隔离 `(connection_id, player_name)`，addon 桥 capability 请求-响应生命周期。
+- 兼容现有行为：SDK 透传 `PlayerMessageEvent.sender`，由**宿主**按 `(connection_id, sender)` 分桶做多人会话隔离；addon 桥 capability 请求-响应生命周期。
 
 ### 非目标（明确不做）
 
@@ -51,18 +51,19 @@
 - `McbeOutboundDelivery` 串联流控分片+延迟+raw 日志
 
 ### 网关层（gateway）
-- 连接状态机：`ConnectionState` / `PlayerSession`（按玩家隔离）/ `ConnectionManager`
-- 多人隔离：主推 `(connection_id, player_name)` 分桶；连接级 `player_name` 仅作"最近发言者"便捷指针
+- 连接状态机：`ConnectionState` / `ConnectionManager`（无 SDK 内 `PlayerSession`）
+- 多人隔离：**宿主职责** — SDK 只透传 `PlayerMessageEvent.sender`；宿主按 `(connection_id, sender)` 分桶历史 / 锁 / 上下文。`ConnectionState.player_name` 仅为弃用的"最近发言者"便捷指针，权威身份以 `sender` 为准
 - 字节级出站经由 `FlowControlMiddleware`，不重复实现分片
 - **事件总线** `EventBus` + `WsEventType` 枚举：CONNECTED / DISCONNECTED / PLAYER_MESSAGE / BRIDGE_CHUNK / UI_CHAT_CHUNK / UI_CHAT_REASSEMBLED / COMMAND_RESPONSE / RAW_INBOUND / RAW_OUTBOUND
-- **钩子协议** `ConnectionHook`（6 个钩子点）：on_connected / on_disconnected / on_player_message / on_ui_chat_reassembled / on_command_response / on_error
-- **响应上抛** `ResponseSink`（2 路）：on_outbound_text / on_system_notification
-- `McbeServerFacade` + `run_lifetime`：宿主注入 hook/sink/addon/registry
+- **钩子协议** `ConnectionHook`（6 个钩子点，全部 `-> None`）：on_connected / on_disconnected / `on_player_message(state, event, parsed=None) -> None` / on_ui_chat_reassembled / on_command_response / on_error。`parsed` 为 registry 预解析结果，非"已消费"布尔
+- **响应上抛** `ResponseSink`（2 路）：on_outbound_text / on_system_notification（协议上无 `dispatch`）
+- `McbeServerFacade` + `run_lifetime`：宿主注入 hook/sink/addon/registry；facade 仅 handshake + subscribe，welcome 由宿主 `on_connected` 负责
 
 ### addon 桥（addon）
 - `BridgeCodec`：`encode_bridge_request` / `decode_bridge_chat_chunk` / `reassemble_bridge_chunks` / `decode_ui_chat_chunk` / `reassemble_ui_chat_chunks`
 - `AddonBridgeSession`：分片缓存 + request future + 5s 超时
 - `AddonBridgeService` / `AddonBridgeClient`：请求-响应生命周期（**无全局单例**）
+- **信任边界**：bridge **不是**安全边界；宿主必须鉴权谁可调用能力。addon 仅对 `run_world_command` 做防御性 allow/denylist（详见 [`addon/README.md`](../addon/README.md#trust-boundary)）
 
 ### 协议 profile
 - `McbewsV1Profile` — 唯一内置协议 profile，支持 mcbews v1 addon 互操作
@@ -75,7 +76,7 @@
 - **类型安全**：Pydantic v2 模型，mypy strict 全量通过
 - **异步原生**：asyncio 架构，async for WS 消息循环
 - **结构化日志**：structlog
-- **测试覆盖**：核心层（flow / gateway / addon）≥85%
+- **测试覆盖**（NFR / 可选 CI）：核心层（flow / gateway / addon）目标 ≥85%；当前不作为硬门禁，工程化见后续 Task 7（pytest-cov + CI）
 - **依赖最小闭包**：仅 `pydantic>=2`、`websockets>=12`、`structlog>=24`；不拖 httpx/PyJWT/pydantic-ai 进包
 - **Python 3.11+**
 
@@ -116,5 +117,5 @@
 
 - 包内 e2e（内存 WS 跑 `run_lifetime` 全链路）
 - `examples/addon-capability-call` 端到端可用
-- mypy strict + ruff + pytest 覆盖率（核心层 ≥85%）
+- mypy strict + ruff + pytest 全绿；覆盖率 ≥85% 为 NFR / 可选 CI 目标（非发版硬门禁）
 - PyPI 发版（MIT）
