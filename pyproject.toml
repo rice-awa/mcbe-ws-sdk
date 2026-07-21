@@ -22,6 +22,7 @@ dev = [
     "mypy",
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "PyYAML>=6,<7",
     "types-PyYAML>=6,<7",
 ]
@@ -93,3 +94,11 @@ strict = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["mcbe_ws_sdk"]
+branch = false
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
