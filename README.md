@@ -17,6 +17,38 @@ in the host application.
 Minecraft client  ←── /wsserver IP:port ──→  Your Python host (this SDK)
 ```
 
+## In-game addon capability bridge
+
+Use the companion TypeScript addon when your host needs structured information
+or Script API actions from inside the world—not just player chat. A capability
+call follows one correlated, chunk-safe round trip:
+
+```text
+Python host
+  → AddonBridgeService request(capability, payload)
+  → scriptevent mcbews:bridge_req
+  → addon capability handler in the Bedrock world
+  → MCBEWS_BRIDGE simulated-player chat chunks
+  → WebSocket PlayerMessage stream
+  → AddonBridgeSession reassembles by request_id and resolves the request
+  → your host renders the result (tellraw or mcbews:text_resp)
+```
+
+- **Bidirectional by design.** Python calls addon capabilities; the addon can
+  also send UI-originated player messages back through the same bridge. Python
+  can send framed text responses to the addon UI with `mcbews:text_resp`.
+- **Safe on the actual transport.** Requests and responses carry a
+  `request_id`; large payloads are chunked and reassembled rather than relying
+  on a direct addon-to-WebSocket connection.
+- **Clear ownership.** The addon owns its capability registry; the Python host
+  owns authentication and authorization. The bridge itself is not a security
+  boundary.
+
+Start with the runnable [`addon-server`](./examples/addon-server/) example and
+the [bridge protocol](./docs/addon-bridge-protocol.md). To load the companion
+addon, the target world must enable **Experiments → Beta APIs**; otherwise its
+scripts do not load and capability calls time out.
+
 ## Install
 
 ```bash

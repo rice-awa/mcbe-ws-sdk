@@ -15,6 +15,31 @@ SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属
 Minecraft 客户端  ←── /wsserver IP:端口 ──→  你的 Python 宿主（本 SDK）
 ```
 
+## 游戏内 addon 能力桥接
+
+当宿主需要从世界内取得结构化信息或调用 Script API，而不只是接收玩家聊天时，使用配套的
+TypeScript addon。一条能力调用会走完这条带关联 ID、支持分片的往返链路：
+
+```text
+Python 宿主
+  → AddonBridgeService.request(capability, payload)
+  → scriptevent mcbews:bridge_req
+  → 基岩版世界内的 addon 能力处理器
+  → MCBEWS_BRIDGE 模拟玩家聊天分片
+  → WebSocket PlayerMessage 流
+  → AddonBridgeSession 按 request_id 重组并完成请求
+  → 宿主渲染结果（tellraw 或 mcbews:text_resp）
+```
+
+- **为双向通信而设计。** Python 可调用 addon 能力；addon UI 也可经同一桥接将玩家消息传回
+  Python。Python 还可通过 `mcbews:text_resp` 向 addon UI 发送带帧的文本回复。
+- **适配真实传输限制。** 请求和响应携带 `request_id`；大载荷会被分片、再重组，而非假设
+  addon 能直接连接 WebSocket。
+- **职责清晰。** addon 拥有能力注册表；Python 宿主负责认证与授权。桥接本身不是安全边界。
+
+从可运行的 [`addon-server`](./examples/addon-server/) 示例和[桥接协议](./docs/addon-bridge-protocol.zh.md)开始。
+加载配套 addon 的目标世界必须开启 **实验 → 测试版 API**；否则脚本不会加载，能力调用会超时。
+
 ## 安装
 
 ```bash
