@@ -25,6 +25,8 @@ dev = [
     "pytest-cov",
     "PyYAML>=6,<7",
     "types-PyYAML>=6,<7",
+    # Required by tests/release/test_distribution.py (python -m build).
+    "build",
 ]
 docs = [
     "mkdocs>=1.6",

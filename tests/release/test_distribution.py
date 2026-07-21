@@ -63,13 +63,18 @@ def _build_artifacts() -> tuple[Path, Path]:
     """Return (wheel_path, sdist_path)."""
     with __import__("tempfile").TemporaryDirectory() as tmp:
         dist_dir = Path(tmp)
-        subprocess.run(
+        result = subprocess.run(
             [_PYTHON, "-m", "build", "--sdist", "--wheel", "--outdir", str(dist_dir)],
             cwd=str(_project_root),
-            check=True,
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            pytest.fail(
+                "python -m build failed (install the 'build' package via "
+                f"pip install -e '.[dev]'):\n{detail}"
+            )
         wheels = sorted(dist_dir.glob("*.whl"))
         sdists = sorted(dist_dir.glob("*.tar.gz"))
         if not wheels:
