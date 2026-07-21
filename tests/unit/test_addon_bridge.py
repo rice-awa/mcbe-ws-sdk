@@ -292,13 +292,16 @@ async def test_session_rejects_excessive_chunk_count() -> None:
 
 @pytest.mark.asyncio
 async def test_session_prunes_expired_buffers_before_accepting_new_chunk() -> None:
+    """Expired buffers prune on every accept, even far below the old 75% watermark."""
     now = 100.0
 
     def clock() -> float:
         return now
 
+    # max_buffer_ids large enough that one buffer is well under 75% of the limit,
+    # so prune must run unconditionally (not only at high watermark).
     session = AddonBridgeSession(
-        AddonBridgeSettings(buffer_ttl_seconds=1.0, max_buffer_ids=1),
+        AddonBridgeSettings(buffer_ttl_seconds=1.0, max_buffer_ids=10),
         clock=clock,
     )
     request = session.create_request("x", {})
@@ -315,6 +318,9 @@ async def test_session_prunes_expired_buffers_before_accepting_new_chunk() -> No
     assert ui_message is None
     assert request.request_id not in session._chunk_buffers
     assert "m1" in session._ui_chat_chunk_buffers
+    assert request.future.done()
+    with pytest.raises(BridgeLimitError, match="chunk buffer expired"):
+        await request.future
 
 
 @pytest.mark.asyncio

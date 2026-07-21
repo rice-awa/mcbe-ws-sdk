@@ -16,6 +16,7 @@ Changes vs. the original:
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -88,7 +89,17 @@ class AddonBridgeService:
             payload=payload,
             profile=self._profile,
         )
+        payload_bytes = len(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        # INFO stays free of payload/command content (may contain player data).
         logger.info(
+            "bridge_request_outbound",
+            request_id=request.request_id,
+            capability=capability,
+            payload_bytes=payload_bytes,
+        )
+        logger.debug(
             "bridge_request_outbound",
             connection_id=str(connection_id),
             request_id=request.request_id,
