@@ -138,9 +138,11 @@ class MinecraftCommand(BaseModel):
         )
         safe_target = sanitize_tellraw_target(target)
         command_line = f"tellraw {safe_target} {rawtext}"
+        # Use the MinecraftCommandBody default origin (type="player").
+        # "say" is a PlayerMessage event type, not a CommandRequest origin; using
+        # it can leave remote clients without the tellraw in multiplayer.
         return cls(
             body=MinecraftCommandBody(
-                origin=MinecraftOrigin(type="say"),
                 commandLine=command_line,
             )
         )

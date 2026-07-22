@@ -86,6 +86,10 @@ def test_minecraft_command_create_tellraw_builds_valid_command():
     data = cmd.model_dump()
     assert data["body"]["commandLine"].startswith("tellraw ")
     assert "§aHello" in data["body"]["commandLine"]
+    # CommandRequest origin must be "player"; "say" is a PlayerMessage type and
+    # can prevent remote multiplayer clients from rendering tellraw.
+    assert data["body"]["origin"]["type"] == "player"
+    assert cmd.body.origin.type == "player"
 
 
 def test_tellraw_escapes_percent():

@@ -35,7 +35,7 @@ async def test_send_tellraw_long_text_chunked_within_byte_budget():
         cmd_line = data["body"]["commandLine"]
         assert cmd_line.startswith("tellraw ")
         assert len(cmd_line.encode("utf-8")) <= 461
-        assert data["body"]["origin"]["type"] == "say"
+        assert data["body"]["origin"]["type"] == "player"
 
 
 @pytest.mark.asyncio
