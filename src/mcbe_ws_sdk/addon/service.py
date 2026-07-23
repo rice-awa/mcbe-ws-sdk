@@ -109,7 +109,30 @@ class AddonBridgeService:
             timeout_seconds=self._timeout_seconds,
         )
         try:
-            await send_command(command)
+            try:
+                await send_command(command)
+            except Exception as exc:
+                # Fail-fast before waiting: host rejected the outbound frame
+                # (e.g. FrameTooLarge) or the connection is gone. Waiting for a
+                # RESP that can never arrive only produces a misleading timeout.
+                logger.warning(
+                    "bridge_request_send_failed",
+                    connection_id=str(connection_id),
+                    request_id=request.request_id,
+                    capability=capability,
+                    payload_bytes=payload_bytes,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise
+            logger.info(
+                "bridge_request_sent",
+                connection_id=str(connection_id),
+                request_id=request.request_id,
+                capability=capability,
+                payload_bytes=payload_bytes,
+                timeout_seconds=self._timeout_seconds,
+            )
             try:
                 result = await asyncio.wait_for(request.future, self._timeout_seconds)
             except TimeoutError as exc:
@@ -118,11 +141,20 @@ class AddonBridgeService:
                     connection_id=str(connection_id),
                     request_id=request.request_id,
                     capability=capability,
+                    payload_bytes=payload_bytes,
                     timeout_seconds=self._timeout_seconds,
                 )
                 raise BridgeTimeoutError(request.request_id) from exc
             logger.info(
                 "bridge_request_resolved",
+                connection_id=str(connection_id),
+                request_id=request.request_id,
+                capability=capability,
+                result_ok=result.get("ok") if isinstance(result, dict) else None,
+                result_keys=sorted(result.keys()) if isinstance(result, dict) else type(result).__name__,
+            )
+            logger.debug(
+                "bridge_request_resolved_payload",
                 connection_id=str(connection_id),
                 request_id=request.request_id,
                 capability=capability,
