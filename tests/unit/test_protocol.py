@@ -92,9 +92,15 @@ def test_minecraft_command_create_tellraw_builds_valid_command():
     assert cmd.body.origin.type == "player"
 
 
-def test_tellraw_escapes_percent():
+def test_tellraw_keeps_literal_percent():
+    """Percent signs must stay single so chat shows '100%' not '100%%'."""
     cmd = MinecraftCommand.create_tellraw("100% done")
-    assert "100%%" in cmd.body.commandLine
+    assert "100% done" in cmd.body.commandLine
+    assert "100%%" not in cmd.body.commandLine
+    # create_tellraw still routes through sanitize_tellraw_text
+    from mcbe_ws_sdk.protocol.minecraft import sanitize_tellraw_text
+
+    assert sanitize_tellraw_text("20.0%") == "20.0%"
 
 
 def test_sanitize_tellraw_target_keeps_unicode_names_unquoted() -> None:

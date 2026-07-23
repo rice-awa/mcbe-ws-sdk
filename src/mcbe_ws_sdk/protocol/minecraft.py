@@ -52,12 +52,14 @@ def _sanitize_tellraw_target(target: str) -> str:
 
 
 def sanitize_tellraw_text(message: str) -> str:
-    """Escape tellraw text before embedding in the rawtext JSON value.
+    """Prepare tellraw body text before embedding in the rawtext JSON value.
 
-    MCBE treats ``%`` as a format placeholder inside tellraw text; double it so
-    literal percents render. Quote/backslash escaping is left to ``json.dumps``.
+    Quote/backslash escaping is left to ``json.dumps``. Plain ``%`` is left
+    unchanged: Bedrock ``rawtext`` ``text`` components render a single percent
+    literally, and doubling it surfaces as ``%%`` in chat (e.g. context usage
+    tips like ``20.0%``).
     """
-    return message.replace("%", "%%")
+    return message
 
 
 class MinecraftHeader(BaseModel):
