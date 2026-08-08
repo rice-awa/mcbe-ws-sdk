@@ -151,7 +151,9 @@ class AddonBridgeService:
                 request_id=request.request_id,
                 capability=capability,
                 result_ok=result.get("ok") if isinstance(result, dict) else None,
-                result_keys=sorted(result.keys()) if isinstance(result, dict) else type(result).__name__,
+                result_keys=(
+                    sorted(result.keys()) if isinstance(result, dict) else type(result).__name__
+                ),
             )
             logger.debug(
                 "bridge_request_resolved_payload",
