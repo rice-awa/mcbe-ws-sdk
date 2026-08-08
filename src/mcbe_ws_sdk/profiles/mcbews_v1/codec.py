@@ -169,10 +169,16 @@ def reassemble_ui_chat_chunks(chunks: list[UiChatChunk]) -> UiChatMessage:
 
     player_name = payload.get("player", "")
     message = payload.get("message", "")
+    conversation_id = payload.get("cid")  # optional conversation_id
     if not message:
         raise ValueError("Invalid UI chat payload: missing message")
 
-    return UiChatMessage(msg_id=msg_id, player_name=player_name, message=message)
+    return UiChatMessage(
+        msg_id=msg_id,
+        player_name=player_name,
+        message=message,
+        conversation_id=conversation_id,
+    )
 
 
 def encode_text_response_commands(
@@ -182,20 +188,31 @@ def encode_text_response_commands(
     text: str,
     flow: FlowControlMiddleware,
     response_id: str | None = None,
+    conversation_id: str | None = None,
+    title: str | None = None,
+    usage: dict[str, int] | None = None,
     profile: McbewsV1Profile = MCBEWS_V1,
 ) -> list[str]:
     message_id = response_id or f"resp-{uuid4().hex}"
 
     def encode_frame(content: str, index: int, total: int) -> str:
+        frame: dict[str, object] = {
+            "id": message_id,
+            "i": index,
+            "n": total,
+            "p": player_name,
+            "r": role,
+            "c": content,
+        }
+        # Optional fields — omit when None for backward compat
+        if conversation_id is not None:
+            frame["cid"] = conversation_id
+        if title is not None:
+            frame["t"] = title
+        if usage is not None:
+            frame["u"] = usage
         return json.dumps(
-            {
-                "id": message_id,
-                "i": index,
-                "n": total,
-                "p": player_name,
-                "r": role,
-                "c": content,
-            },
+            frame,
             ensure_ascii=False,
             separators=(",", ":"),
         )
