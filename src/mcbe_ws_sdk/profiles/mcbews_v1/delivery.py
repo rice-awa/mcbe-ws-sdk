@@ -29,6 +29,9 @@ class McbewsV1Delivery:
         role: str,
         text: str,
         response_id: str | None = None,
+        conversation_id: str | None = None,
+        title: str | None = None,
+        usage: dict[str, int] | None = None,
     ) -> int:
         payloads = encode_text_response_commands(
             player_name=player_name,
@@ -36,6 +39,9 @@ class McbewsV1Delivery:
             text=text,
             flow=self._outbound.flow,
             response_id=response_id,
+            conversation_id=conversation_id,
+            title=title,
+            usage=usage,
             profile=self._profile,
         )
         await self._sleep(self._profile.response_prelude_delay)

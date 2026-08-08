@@ -45,3 +45,4 @@ class UiChatMessage(BaseModel):
     msg_id: str
     player_name: str
     message: str
+    conversation_id: str | None = None

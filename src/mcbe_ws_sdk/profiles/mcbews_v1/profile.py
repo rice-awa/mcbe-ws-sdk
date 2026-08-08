@@ -20,6 +20,8 @@ class McbewsV1Profile:
     ui_chat_prefix: str = "MCBEWS|UI_CHAT"
     bridge_sender: str = "MCBEWS_BRIDGE"
     response_message_id: str = "mcbews:text_resp"
+    session_request_message_id: str = "mcbews:session_req"
+    session_response_message_id: str = "mcbews:session_resp"
     request_version: Literal[2] = 2
     response_chunk_delay: float = 0.15
     response_prelude_delay: float = 0.5
