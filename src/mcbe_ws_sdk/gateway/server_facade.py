@@ -44,8 +44,15 @@ from mcbe_ws_sdk.errors import FacadeLifecycleError, ProtocolError
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
-from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
+from mcbe_ws_sdk.gateway.hook import (
+    ConnectionHook,
+    LegacyUiChatHook,
+    LegacyUiChatHookAdapter,
+    NoOpHook,
+)
 from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink
+from mcbe_ws_sdk.profiles.mcbews_v1.classifier import ToolPlayerMessage
+from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
 
 if TYPE_CHECKING:
@@ -67,6 +74,7 @@ class McbeServerFacade:
         *,
         settings: GatewaySettings | None = None,
         hook: ConnectionHook | None = None,
+        legacy_ui_chat_hook: LegacyUiChatHook | None = None,
         sink: ResponseSink | None = None,
         addon: AddonBridgeService | None = None,
         registry: CommandRegistry | None = None,
@@ -74,6 +82,11 @@ class McbeServerFacade:
     ) -> None:
         self._settings = settings if settings is not None else GatewaySettings()
         self._hook = hook if hook is not None else NoOpHook()
+        self._legacy_ui_chat_hook = (
+            LegacyUiChatHookAdapter(legacy_ui_chat_hook)
+            if legacy_ui_chat_hook is not None
+            else None
+        )
         self._sink = sink if sink is not None else DefaultResponseSink()
         self._registry = registry if registry is not None else CommandRegistry()
 
@@ -288,10 +301,12 @@ class McbeServerFacade:
 
         # Branch A — addon bridge response / UI chat (both arrive from the
         # simulated addon bridge tool player, not a real player command).
-        if self._addon is not None and (
-            self._addon.is_bridge_chat_message(event.sender, event.message)
-            or self._addon.is_ui_chat_message(event.sender, event.message)
-        ):
+        # Every reserved control prefix is consumed by the SDK.  This is
+        # important even for a wrong sender: forwarding a ``MCBEWS|SESSION`` or
+        # approval prefix to the Host would let the Host accidentally treat a
+        # real player as the ToolPlayer.  The service performs the trusted
+        # sender gate before decoding a typed control message.
+        if self._addon is not None and self._addon.is_tool_player_channel_message(event.message):
             try:
                 result = await self._addon.handle_player_message(
                     state.id,
@@ -326,13 +341,15 @@ class McbeServerFacade:
                     state,
                     result.ui_message,
                 )
+            if result.control_message is not None:
+                await self._invoke_addon_control_hook(state, result.control_message)
             return
 
         # Diagnostic: RESP/UI_CHAT content with the wrong sender never matches the
         # bridge filter above, so the request future times out with no clue. Surface
         # the mismatch so hosts can see what Bedrock actually delivered.
         profile = self._settings.addon.profile
-        root_token = profile.bridge_response_prefix.split("|", 1)[0]
+        root_token = profile.capability_response_chat_prefix.split("|", 1)[0]
         if event.message.startswith(f"{root_token}|"):
             logger.warning(
                 "bridge_prefix_not_matched",
@@ -340,7 +357,7 @@ class McbeServerFacade:
                 sender=event.sender,
                 message_type=event.type,
                 receiver=event.receiver,
-                message_preview=event.message[:160],
+                message_bytes=len(event.message.encode("utf-8")),
             )
 
         # Branch B — player command/chat. Pass the parsed command to the hook so
@@ -358,8 +375,7 @@ class McbeServerFacade:
     async def _on_ui_chat_reassembled(
         self,
         connection_id: UUID,
-        player_name: str,
-        message: str,
+        message: UiChatMessage,
     ) -> None:
         """Callback the addon fires when a fragmented UI_CHAT message reassembles."""
         state = self._manager.get_connection(connection_id)
@@ -367,18 +383,54 @@ class McbeServerFacade:
             logger.warning(
                 "ui_chat_reassembled_connection_missing",
                 connection_id=str(connection_id),
-                player=player_name,
+                player=message.player_name,
             )
             return
         try:
-            await self._hook.on_ui_chat_reassembled(state, player_name, message)
+            await self._invoke_ui_chat_hook(state, message)
         except Exception:
             # Isolate host hook failures so a broken UI-chat handler cannot tear
             # the connection or poison the addon reassembly path.
             logger.exception(
                 "hook_on_ui_chat_reassembled_failed",
                 connection_id=str(connection_id),
-                player=player_name,
+                player=message.player_name,
+            )
+
+    async def _invoke_ui_chat_hook(self, state: ConnectionState, message: UiChatMessage) -> None:
+        """Invoke the typed UI callback, or an explicitly supplied legacy adapter."""
+
+        if self._legacy_ui_chat_hook is not None:
+            await self._legacy_ui_chat_hook.invoke(state, message)
+            return
+        callback = self._hook.on_ui_chat_reassembled
+        await callback(state, message)
+
+    async def _invoke_addon_control_hook(
+        self,
+        state: ConnectionState,
+        message: ToolPlayerMessage,
+    ) -> None:
+        """Deliver authenticated session/approval DTOs without body guessing."""
+
+        callback = getattr(self._hook, "on_addon_control_message", None)
+        if callback is None:
+            # A structurally compatible pre-0.2.0 hook does not implement the
+            # optional control callback. It is safer to drop than to pass a
+            # reserved ToolPlayer frame through ``on_player_message``.
+            logger.warning(
+                "addon_control_hook_missing",
+                connection_id=str(state.id),
+                channel=message.channel,
+            )
+            return
+        try:
+            await callback(state, message)
+        except Exception:
+            logger.exception(
+                "hook_on_addon_control_message_failed",
+                connection_id=str(state.id),
+                channel=message.channel,
             )
 
     def _wrap_send(

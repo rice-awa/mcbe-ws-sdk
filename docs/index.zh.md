@@ -2,7 +2,7 @@
 
 面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
 
-本包拥有 **WS 传输**、**数据包协议**与**字节安全的命令分片**（461 字节硬上限）。
+本包拥有 **WS 传输**、**数据包协议**与**字节安全的命令分片**（461 字节实测默认可配置上限）。
 宿主通过两个协议注入行为——`ConnectionHook` 与 `ResponseSink`——并由
 `McbeServerFacade` 驱动整条链路。
 
@@ -29,6 +29,10 @@ SDK 从 Python 宿主向 Minecraft addon 发送桥接请求并接收响应。**�
 所有能力处理逻辑由 addon 端拥有。
 
 唯一内置协议 profile 是 `McbewsV1Profile`（`MCBEWS_V1`）。
+
+`ConnectionHook` 提供六个 typed 生命周期钩子；UI Chat 使用
+`on_ui_chat_reassembled(state, UiChatMessage)`。经过可信 sender 校验的
+session/approval frame 使用可选 `AddonControlHook` 回调。
 
 ## 双层接口
 

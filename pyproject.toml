@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcbe-ws-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generic WebSocket gateway SDK for Minecraft Bedrock Edition"
 readme = "README.md"
 license = { text = "MIT" }
@@ -46,6 +46,8 @@ force-include = { "src/mcbe_ws_sdk/py.typed" = "mcbe_ws_sdk/py.typed" }
 [tool.hatch.build.targets.sdist]
 include = [
     "src/mcbe_ws_sdk",
+    "src/mcbe_ws_sdk/profiles/mcbews_v1/manifest.json",
+    "src/mcbe_ws_sdk/profiles/mcbews_v1/vectors.json",
     "tests",
     "examples",
     "addon/scripts",
@@ -62,6 +64,7 @@ include = [
     "addon/README.zh.md",
     "README.md",
     "README.zh.md",
+    "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
 ]

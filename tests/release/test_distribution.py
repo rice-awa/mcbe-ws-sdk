@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -135,6 +137,13 @@ def test_wheel_contains_py_typed(built_wheel: Path) -> None:
         assert "mcbe_ws_sdk/py.typed" in archive.namelist()
 
 
+def test_wheel_contains_canonical_protocol_assets(built_wheel: Path) -> None:
+    with zipfile.ZipFile(built_wheel) as archive:
+        names = set(archive.namelist())
+        assert "mcbe_ws_sdk/profiles/mcbews_v1/manifest.json" in names
+        assert "mcbe_ws_sdk/profiles/mcbews_v1/vectors.json" in names
+
+
 def test_clean_wheel_passes(built_wheel: Path) -> None:
     # Should not raise
     check_wheel(built_wheel)
@@ -242,10 +251,16 @@ def test_sdist_rejects_too_large() -> None:
 
 def test_check_dist_script_main(built_wheel: Path, built_sdist: Path) -> None:
     """Run the check_dist.py script as a subprocess against built artifacts."""
-    dist_dir = built_wheel.parent
-    result = subprocess.run(
-        [_PYTHON, str(_project_root / "tools" / "check_dist.py"), str(dist_dir)],
-        capture_output=True,
-        text=True,
-    )
+    # The session cache intentionally survives test runs for inspection.  Use
+    # a fresh directory for the exact pair under test so an older release in
+    # that cache cannot make the command fail with "expected exactly 1".
+    with tempfile.TemporaryDirectory() as tmp:
+        dist_dir = Path(tmp)
+        shutil.copy2(built_wheel, dist_dir / built_wheel.name)
+        shutil.copy2(built_sdist, dist_dir / built_sdist.name)
+        result = subprocess.run(
+            [_PYTHON, str(_project_root / "tools" / "check_dist.py"), str(dist_dir)],
+            capture_output=True,
+            text=True,
+        )
     assert result.returncode == 0, f"stderr: {result.stderr}"

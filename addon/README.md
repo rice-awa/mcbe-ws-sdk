@@ -2,10 +2,15 @@
 
 # MCBE WS Bridge Addon
 
+This reference Addon is released with `mcbe-ws-sdk` `0.2.0`. Its
+`scripts/bridge/protocol.ts` projection is checked against the installed
+Python manifest and wire vectors; update both sides through the SDK contract.
+
 Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart of the
 `mcbe-ws-sdk` Python package. This addon handles the protocol layer:
 
-- `constants.ts` — wire protocol constants matching Python `McbewsV1Profile`
+- `protocol.ts` — manifest/version/limit/error/vector projection from the SDK
+- `constants.ts` — semantic wire constants matching Python `McbewsV1Profile`
 - `chunking.ts` — encode/decode for `MCBEWS|BRIDGE` and `MCBEWS|UI_CHAT` fragments
 - `router.ts` — subscribes to `mcbews:bridge_req` scriptevents, dispatches to the
   built-in capability registry, and ships the response back

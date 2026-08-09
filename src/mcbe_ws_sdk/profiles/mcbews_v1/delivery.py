@@ -4,7 +4,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from mcbe_ws_sdk.delivery.outbound import McbeOutboundDelivery
-from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_text_response_commands
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
+    encode_session_response_command,
+    encode_text_response_commands,
+)
+from mcbe_ws_sdk.profiles.mcbews_v1.models import SessionResponse
 from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1, McbewsV1Profile
 
 Sleeper = Callable[[float], Awaitable[None]]
@@ -52,3 +56,18 @@ class McbewsV1Delivery:
             delay=self._profile.response_chunk_delay,
         )
         return len(payloads)
+
+    async def send_session_response(self, response: SessionResponse) -> None:
+        """Send one atomic correlated session response.
+
+        Session responses deliberately bypass generic scriptevent chunking. A
+        result that does not fit is encoded as one ``SESSION_RESPONSE_TOO_LARGE``
+        error by :func:`encode_session_response_command`.
+        """
+
+        payload = encode_session_response_command(
+            response,
+            self._outbound.flow,
+            profile=self._profile,
+        )
+        await self._outbound.send_payload(payload, "session_resp")

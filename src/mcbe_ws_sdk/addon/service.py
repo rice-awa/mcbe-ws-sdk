@@ -27,6 +27,11 @@ import structlog
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import BridgeTimeoutError
+from mcbe_ws_sdk.profiles.mcbews_v1.classifier import (
+    ToolPlayerMessage,
+    classify_tool_player_message,
+    is_tool_player_channel_message,
+)
 from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_bridge_request
 from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     AddonBridgeChunk,
@@ -37,7 +42,18 @@ from mcbe_ws_sdk.profiles.mcbews_v1.models import (
 logger = structlog.get_logger(__name__)
 
 CommandSender = Callable[[str], Awaitable[None]]
-UiChatCallback = Callable[[UUID, str, str], Awaitable[None]]
+UiChatCallback = Callable[[UUID, UiChatMessage], Awaitable[None]]
+LegacyUiChatCallback = Callable[[UUID, str, str], Awaitable[None]]
+
+
+class LegacyUiChatCallbackAdapter:
+    """Adapt the pre-0.2.0 three-argument callback to the typed DTO callback."""
+
+    def __init__(self, callback: LegacyUiChatCallback) -> None:
+        self._callback = callback
+
+    async def __call__(self, connection_id: UUID, message: UiChatMessage) -> None:
+        await self._callback(connection_id, message.player_name, message.message)
 
 
 @dataclass(frozen=True)
@@ -46,6 +62,7 @@ class AddonMessageResult:
     bridge_chunk: AddonBridgeChunk | None = None
     ui_chunk: UiChatChunk | None = None
     ui_message: UiChatMessage | None = None
+    control_message: ToolPlayerMessage | None = None
 
 
 class AddonBridgeClient(Protocol):
@@ -96,7 +113,7 @@ class AddonBridgeService:
         logger.info(
             "bridge_request_outbound",
             request_id=request.request_id,
-            capability=capability,
+            channel="capability",
             payload_bytes=payload_bytes,
         )
         logger.debug(
@@ -104,8 +121,7 @@ class AddonBridgeService:
             connection_id=str(connection_id),
             request_id=request.request_id,
             capability=capability,
-            payload=payload,
-            command=command,
+            command_bytes=len(command.encode("utf-8")),
             timeout_seconds=self._timeout_seconds,
         )
         try:
@@ -119,19 +135,17 @@ class AddonBridgeService:
                     "bridge_request_send_failed",
                     connection_id=str(connection_id),
                     request_id=request.request_id,
-                    capability=capability,
+                    channel="capability",
                     payload_bytes=payload_bytes,
                     error_type=type(exc).__name__,
-                    error=str(exc),
                 )
                 raise
             logger.info(
                 "bridge_request_sent",
                 connection_id=str(connection_id),
                 request_id=request.request_id,
-                capability=capability,
+                channel="capability",
                 payload_bytes=payload_bytes,
-                timeout_seconds=self._timeout_seconds,
             )
             try:
                 result = await asyncio.wait_for(request.future, self._timeout_seconds)
@@ -140,27 +154,23 @@ class AddonBridgeService:
                     "bridge_request_timeout",
                     connection_id=str(connection_id),
                     request_id=request.request_id,
-                    capability=capability,
+                    channel="capability",
                     payload_bytes=payload_bytes,
-                    timeout_seconds=self._timeout_seconds,
                 )
                 raise BridgeTimeoutError(request.request_id) from exc
             logger.info(
                 "bridge_request_resolved",
                 connection_id=str(connection_id),
                 request_id=request.request_id,
-                capability=capability,
-                result_ok=result.get("ok") if isinstance(result, dict) else None,
-                result_keys=(
-                    sorted(result.keys()) if isinstance(result, dict) else type(result).__name__
-                ),
+                channel="capability",
+                result_type=type(result).__name__,
             )
             logger.debug(
                 "bridge_request_resolved_payload",
                 connection_id=str(connection_id),
                 request_id=request.request_id,
                 capability=capability,
-                result=result,
+                result_type=type(result).__name__,
             )
             return result
         finally:
@@ -168,34 +178,45 @@ class AddonBridgeService:
 
     def is_bridge_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is an addon response fragment."""
-        return sender == self._profile.bridge_sender and message.startswith(
-            self._profile.bridge_response_prefix
+        return sender == self._profile.trusted_bridge_player_name and message.startswith(
+            f"{self._profile.capability_response_chat_prefix}|"
         )
 
     def is_ui_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is a UI chat fragment."""
-        return sender == self._profile.bridge_sender and message.startswith(
-            self._profile.ui_chat_prefix
+        return sender == self._profile.trusted_bridge_player_name and message.startswith(
+            f"{self._profile.ui_chat_chunk_prefix}|"
         )
+
+    def is_tool_player_channel_message(self, message: str) -> bool:
+        """Return whether *message* is reserved for a ToolPlayer channel."""
+
+        return is_tool_player_channel_message(message, profile=self._profile)
+
+    def classify_tool_player_message(self, sender: str, message: str) -> ToolPlayerMessage | None:
+        """Authenticate and classify a reserved ToolPlayer message."""
+
+        return classify_tool_player_message(sender, message, profile=self._profile)
 
     async def handle_player_message(
         self, connection_id: UUID, sender: str, message: str
     ) -> AddonMessageResult:
         """Route a routed message from the simulated player."""
         if self.is_bridge_chat_message(sender, message):
-            # Log every RESP chunk at INFO: these never reach the host hook because
+            # Keep INFO body-free: these frames never reach the host hook because
             # the facade short-circuits bridge frames before on_player_message.
             logger.info(
                 "bridge_chat_chunk_raw",
                 connection_id=str(connection_id),
-                sender=sender,
-                message=message,
+                channel="capability",
+                message_bytes=len(message.encode("utf-8")),
             )
             session = self._sessions.get(connection_id)
             if session is None:
                 logger.warning(
                     "bridge_chat_no_session",
                     connection_id=str(connection_id),
+                    channel="capability",
                 )
                 return AddonMessageResult(handled=True)
 
@@ -206,8 +227,8 @@ class AddonBridgeService:
             logger.info(
                 "ui_chat_chunk_raw",
                 connection_id=str(connection_id),
-                sender=sender,
-                message=message,
+                channel="ui_chat",
+                message_bytes=len(message.encode("utf-8")),
             )
             session = self._session_for(connection_id)
 
@@ -216,26 +237,44 @@ class AddonBridgeService:
                 logger.info(
                     "ui_chat_reassembled",
                     connection_id=str(connection_id),
-                    player=ui_message.player_name,
-                    message_length=len(ui_message.message),
-                    callback_registered=True,
+                    channel="ui_chat",
+                    message_bytes=len(ui_message.message.encode("utf-8")),
                 )
-                await self._ui_chat_callback(
-                    connection_id,
-                    ui_message.player_name,
-                    ui_message.message,
-                )
+                await self._invoke_ui_chat_callback(connection_id, ui_message)
             return AddonMessageResult(
                 handled=True,
                 ui_chunk=ui_chunk,
                 ui_message=ui_message,
             )
 
+        if self.is_tool_player_channel_message(message):
+            # Session and approval frames are decoded only after the trusted
+            # sender gate.  The facade uses this branch to deliver typed control
+            # messages to the Host hook; they never fall through as player chat.
+            control_message = self.classify_tool_player_message(sender, message)
+            if control_message is None:
+                return AddonMessageResult(handled=True)
+            return AddonMessageResult(handled=True, control_message=control_message)
+
         return AddonMessageResult(handled=False)
 
-    def set_ui_chat_callback(self, callback: UiChatCallback) -> None:
-        """Register the UI chat message callback."""
+    def set_ui_chat_callback(
+        self,
+        callback: UiChatCallback,
+    ) -> None:
+        """Register the typed UI chat message callback."""
         self._ui_chat_callback = callback
+
+    def set_legacy_ui_chat_callback(self, callback: LegacyUiChatCallback) -> None:
+        """Register a legacy callback through an explicit migration adapter."""
+        self._ui_chat_callback = LegacyUiChatCallbackAdapter(callback)
+
+    async def _invoke_ui_chat_callback(self, connection_id: UUID, message: UiChatMessage) -> None:
+        """Invoke the registered typed callback."""
+
+        callback = self._ui_chat_callback
+        if callback is not None:
+            await callback(connection_id, message)
 
     def close_connection(self, connection_id: UUID) -> None:
         """Tear down the per-connection session on disconnect."""

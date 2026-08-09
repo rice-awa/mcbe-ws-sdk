@@ -11,10 +11,10 @@ McbeServerFacade          ← host entry point; owns the full WS lifetime
 ├── MinecraftProtocolHandler  ← parse PlayerMessage, resolve commands, status lines
 │   └── CommandRegistry
 ├── EventBus              ← typed in-process pub/sub keyed by WsEventType
-├── ConnectionHook        ← six lifecycle hooks the host implements
+├── ConnectionHook        ← six typed lifecycle hooks the host implements
 ├── AddonBridgeService    ← ScriptEvent bridge + chunk reassembly
 │   └── AddonBridgeSession
-├── FlowControlMiddleware ← byte-safe tellraw/scriptevent chunking (461 B limit)
+├── FlowControlMiddleware ← byte-safe tellraw/scriptevent chunking (461 B empirical default ceiling)
 └── McbeOutboundDelivery  ← unified outbound adapter
 ```
 
@@ -45,6 +45,12 @@ async def on_player_message(
 `parsed` is the registry match when one exists; it is **not** a consumed-bool
 return value — the host decides what to do with free-form chat and commands.
 
+The typed UI callback is `on_ui_chat_reassembled(state, UiChatMessage)` and the
+DTO carries `cid`/`conversation_id`. Authenticated session and approval frames
+use the optional `AddonControlHook.on_addon_control_message` callback. The old
+three-argument UI callback is supported only through the explicit
+`LegacyUiChatHookAdapter`.
+
 ## Per-connection message routing
 
 1. `McbeServerFacade._on_connection` creates connection state, starts a
@@ -64,10 +70,10 @@ return value — the host decides what to do with free-form chat and commands.
 4. The host sink turns queued messages into MC WebSocket payloads with
    `McbeOutboundDelivery`.
 
-## Flow control — 461 B hard limit
+## Flow control — 461 B empirical configurable ceiling
 
-`FlowControlMiddleware` enforces the MCBE `commandLine` byte budget (461 bytes,
-empirically determined):
+`FlowControlMiddleware` enforces the configured MCBE `commandLine` byte budget
+(default 461 bytes, empirically determined; deployments may lower it):
 
 - `chunk_tellraw()` / `chunk_scriptevent()` — sentence-aware splitting with a
   byte-safety guard
@@ -77,9 +83,13 @@ empirically determined):
 
 ## Protocol profiles
 
-Protocol profiles live under `profiles/` and define wire-format constants.
-`McbewsV1Profile` is the sole built-in profile (module-level singleton
-`MCBEWS_V1`). See [Protocol](addon-bridge-protocol.md) for the wire format.
+`McbewsV1Profile` is the sole concrete runtime profile (module-level singleton
+`MCBEWS_V1`). Installed `manifest.json`/`vectors.json` are authoritative and
+generate the reference Addon `protocol.ts` plus the Python fixture. Wire IDs,
+schema axes and safety bounds are fixed by the manifest; only lowering the
+empirical command budget and response delays are operational settings.
+`AddonBridgeProfile` is a deprecated type alias, not a runtime replacement
+seam. See [Protocol](addon-bridge-protocol.md) for the wire format.
 
 ## Addon bridge runtime requirement
 

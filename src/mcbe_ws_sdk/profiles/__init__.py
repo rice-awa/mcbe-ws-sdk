@@ -1,36 +1,24 @@
-"""Protocol profiles for MCBE wire compatibility layers."""
+"""MCBEWS/1 protocol profile exports.
+
+MCBEWS/1 is the sole runtime profile.  ``AddonBridgeProfile`` is retained as a
+deprecated type alias/re-export for source compatibility; it is not a runtime
+extension seam and SDK settings accept the concrete profile only.
+"""
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TypeAlias
 
 from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1, McbewsV1Profile
 
-
-@runtime_checkable
-class AddonBridgeProfile(Protocol):
-    """Wire-format contract for addon bridge interop."""
-
-    @property
-    def bridge_request_message_id(self) -> str: ...
-    @property
-    def bridge_response_prefix(self) -> str: ...
-    @property
-    def ui_chat_prefix(self) -> str: ...
-    @property
-    def bridge_sender(self) -> str: ...
-    @property
-    def response_message_id(self) -> str: ...
-    @property
-    def request_version(self) -> int: ...
-    @property
-    def response_chunk_delay(self) -> float: ...
-    @property
-    def response_prelude_delay(self) -> float: ...
-
+# Deprecated type alias/re-export; this intentionally has no runtime Protocol
+# or replaceable-profile contract.
+AddonBridgeProfile: TypeAlias = McbewsV1Profile
+McbewsV1Protocol = McbewsV1Profile
 
 __all__ = [
     "AddonBridgeProfile",
     "MCBEWS_V1",
+    "McbewsV1Protocol",
     "McbewsV1Profile",
 ]

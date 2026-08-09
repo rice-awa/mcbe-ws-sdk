@@ -7,8 +7,10 @@
 Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
 
 It owns the WS transport, packet protocol, and byte-safe command chunking
-(461-byte hard limit). Your host injects behaviour through `ConnectionHook` and
-`ResponseSink`, and drives the stack with `McbeServerFacade`.
+(461-byte empirically measured default ceiling; deployments may lower it).
+Your host injects behaviour through typed `ConnectionHook` and `ResponseSink`
+interfaces, with optional typed session/approval control callbacks, and drives
+the stack with `McbeServerFacade`.
 
 There is **no** message broker and **no** LLM worker inside the SDK — those stay
 in the host application.

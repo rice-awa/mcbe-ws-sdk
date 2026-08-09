@@ -22,6 +22,7 @@ from mcbe_ws_sdk.errors import (
     BridgeClosedError,
     BridgeLimitError,
     BridgeTimeoutError,
+    ConfigurationError,
     ProtocolError,
 )
 from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
@@ -162,10 +163,9 @@ def test_legacy_wire_models_preserve_unknown_fields() -> None:
     assert ui_message.model_dump()["trace"] == "msg-extra"
 
 
-def test_profile_can_override_bridge_request_message_id() -> None:
-    profile = McbewsV1Profile(bridge_request_message_id="custom:bridge")
-    command = encode_bridge_request("r1", "ping", {}, profile=profile)
-    assert command.startswith("scriptevent custom:bridge ")
+def test_profile_rejects_custom_bridge_request_message_id() -> None:
+    with pytest.raises(ConfigurationError, match="fixed by the MCBEWS/1 manifest"):
+        McbewsV1Profile(bridge_request_message_id="custom:bridge")
 
 
 @pytest.mark.asyncio
@@ -463,7 +463,7 @@ async def test_service_handle_player_message_returns_structured_ui_result() -> N
     async def on_ui(connection_id: UUID, player_name: str, message: str) -> None:
         seen.append((connection_id, player_name, message))
 
-    service.set_ui_chat_callback(on_ui)
+    service.set_legacy_ui_chat_callback(on_ui)
     connection_id = UUID(int=12)
 
     result = await service.handle_player_message(
@@ -492,7 +492,7 @@ async def test_ui_callback_failure_is_awaited_and_no_task_leaks() -> None:
     async def fail_callback(connection_id: UUID, player: str, message: str) -> None:
         raise LookupError("callback failed")
 
-    service.set_ui_chat_callback(fail_callback)
+    service.set_legacy_ui_chat_callback(fail_callback)
     before = set(asyncio.all_tasks())
     with pytest.raises(LookupError, match="callback failed"):
         await service.handle_player_message(

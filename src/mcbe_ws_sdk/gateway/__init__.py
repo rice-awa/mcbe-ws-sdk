@@ -16,7 +16,13 @@ from mcbe_ws_sdk.gateway.connection import (
 )
 from mcbe_ws_sdk.gateway.events import EventBus, SubscriptionToken, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
-from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
+from mcbe_ws_sdk.gateway.hook import (
+    AddonControlHook,
+    ConnectionHook,
+    LegacyUiChatHook,
+    LegacyUiChatHookAdapter,
+    NoOpHook,
+)
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.gateway.sink import (
@@ -28,6 +34,7 @@ from mcbe_ws_sdk.gateway.sink import (
 
 __all__ = [
     "ConnectionHook",
+    "AddonControlHook",
     "ConnectionManager",
     "ConnectionState",
     "DefaultResponseSink",
@@ -37,6 +44,8 @@ __all__ = [
     "MessageSurfaceConfig",
     "MinecraftProtocolHandler",
     "NoOpHook",
+    "LegacyUiChatHook",
+    "LegacyUiChatHookAdapter",
     "OutboundText",
     "ResponseKind",
     "ResponseSink",

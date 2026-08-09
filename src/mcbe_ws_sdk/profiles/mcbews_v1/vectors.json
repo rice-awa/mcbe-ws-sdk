@@ -32,10 +32,7 @@
         "c": "ok",
         "cid": "chat-a",
         "t": "Chat",
-        "u": {
-          "i": 3,
-          "o": 5
-        }
+        "u": {"i": 3, "o": 5}
       }
     },
     {
@@ -112,10 +109,7 @@
             "r": "assistant",
             "c": "done",
             "cid": "chat-a",
-            "u": {
-              "i": 1,
-              "o": 2
-            }
+            "u": {"i": 1, "o": 2}
           },
           {
             "id": "dup-1",
@@ -134,10 +128,7 @@
             "r": "assistant",
             "c": "done",
             "cid": "chat-a",
-            "u": {
-              "i": 1,
-              "o": 2
-            }
+            "u": {"i": 1, "o": 2}
           },
           {
             "id": "dup-1",
@@ -155,10 +146,7 @@
           "text": "answer done",
           "response_id": "dup-1",
           "conversation_id": "chat-a",
-          "usage": {
-            "i": 1,
-            "o": 2
-          }
+          "usage": {"i": 1, "o": 2}
         }
       },
       {

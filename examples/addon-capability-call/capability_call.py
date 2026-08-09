@@ -30,17 +30,17 @@ async def main() -> None:
 
     async def send_command(command: str) -> None:
         _, message_id, encoded = command.split(" ", 2)
-        assert message_id == MCBEWS_V1.bridge_request_message_id
+        assert message_id == MCBEWS_V1.capability_request_script_event_id
         request = json.loads(encoded)
         response = json.dumps(
             {"ok": True, "greeting": f"Hello, {request['payload']['name']}"},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        chat = f"{MCBEWS_V1.bridge_response_prefix}|{request['request_id']}|1/1|{response}"
+        chat = f"{MCBEWS_V1.capability_response_chat_prefix}|{request['request_id']}|1/1|{response}"
         result = await service.handle_player_message(
             connection_id,
-            MCBEWS_V1.bridge_sender,
+            MCBEWS_V1.trusted_bridge_player_name,
             chat,
         )
         assert result.handled

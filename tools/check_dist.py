@@ -19,6 +19,7 @@ Exits with return code 0 on success, 1 on any ``DistributionError``.
 
 from __future__ import annotations
 
+import json
 import sys
 import tarfile
 import zipfile
@@ -40,6 +41,10 @@ FORBIDDEN_PARTS: set[str] = {
 SDIST_MAX_BYTES: int = 5 * 1024 * 1024
 SDIST_MAX_FILES: int = 250
 WHEEL_MAX_BYTES: int = 1 * 1024 * 1024
+REQUIRED_WHEEL_ASSETS: tuple[str, ...] = (
+    "mcbe_ws_sdk/profiles/mcbews_v1/manifest.json",
+    "mcbe_ws_sdk/profiles/mcbews_v1/vectors.json",
+)
 
 
 class DistributionError(Exception):
@@ -63,6 +68,26 @@ def check_wheel(path: Path) -> None:
     validate_members(names)
     if "mcbe_ws_sdk/py.typed" not in names:
         raise DistributionError("wheel is missing mcbe_ws_sdk/py.typed")
+    for asset in REQUIRED_WHEEL_ASSETS:
+        if asset not in names:
+            raise DistributionError(f"wheel is missing canonical protocol asset: {asset}")
+    with zipfile.ZipFile(path) as archive:
+        try:
+            manifest = json.loads(archive.read(REQUIRED_WHEEL_ASSETS[0]))
+            vectors = json.loads(archive.read(REQUIRED_WHEEL_ASSETS[1]))
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise DistributionError("wheel canonical protocol assets are not valid JSON") from exc
+    if not isinstance(manifest, dict) or manifest.get("protocol_line") != "MCBEWS/1":
+        raise DistributionError("wheel manifest is not the MCBEWS/1 authority")
+    if not isinstance(vectors, dict) or not {
+        "bridge_requests",
+        "ui_chat",
+        "text_response",
+        "session",
+        "approval",
+        "behavior",
+    }.issubset(vectors):
+        raise DistributionError("wheel vectors are incomplete")
 
 
 def check_sdist(path: Path) -> None:
@@ -73,6 +98,9 @@ def check_sdist(path: Path) -> None:
     validate_members(names)
     if len(names) >= SDIST_MAX_FILES:
         raise DistributionError(f"sdist has too many files: {len(names)}")
+    for asset in REQUIRED_WHEEL_ASSETS:
+        if not any(name.endswith(f"/src/{asset}") for name in names):
+            raise DistributionError(f"sdist is missing canonical protocol asset: {asset}")
 
 
 def main() -> None:

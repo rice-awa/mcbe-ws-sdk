@@ -13,6 +13,7 @@ import {
   MAX_PRE_READY_REQUESTS,
   _testingGetQueueSize,
   _testingFlush,
+  _testingGetLastResponseSendOutcome,
   _testingReset,
   type BridgeRequest,
   type CapabilityHandler,
@@ -329,10 +330,29 @@ describe("response sender failure handling", () => {
       handleBridgeScriptEvent(
         serverEvent(JSON.stringify({ request_id: "r99", capability: "get_player_snapshot", payload: {} }))
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({
+      requestId: "r99",
+      ok: false,
+      delivered: false,
+      error: {
+        code: "RESPONSE_SEND_FAILED",
+        message: "bridge response sender failed",
+        errorType: "Error",
+      },
+    });
+    expect(_testingGetLastResponseSendOutcome()).toEqual({
+      requestId: "r99",
+      ok: false,
+      delivered: false,
+      error: {
+        code: "RESPONSE_SEND_FAILED",
+        message: "bridge response sender failed",
+        errorType: "Error",
+      },
+    });
 
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("r99"));
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("network down"));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("errorType=Error"));
     consoleSpy.mockRestore();
   });
 });

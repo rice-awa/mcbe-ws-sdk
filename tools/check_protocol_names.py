@@ -25,13 +25,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Python profile field → TypeScript constant name.
+# Python semantic profile field → generated TypeScript constant name.
 PAIRS: dict[str, str] = {
-    "bridge_request_message_id": "BRIDGE_REQUEST_MESSAGE_ID",
-    "response_message_id": "TEXT_RESP_MESSAGE_ID",
-    "bridge_response_prefix": "BRIDGE_RESPONSE_PREFIX",
-    "ui_chat_prefix": "BRIDGE_UI_CHAT_PREFIX",
-    "bridge_sender": "BRIDGE_SENDER",
+    "capability_request_script_event_id": "CAPABILITY_REQUEST_SCRIPT_EVENT_ID",
+    "text_response_script_event_id": "TEXT_RESPONSE_SCRIPT_EVENT_ID",
+    "capability_response_chat_prefix": "CAPABILITY_RESPONSE_CHAT_PREFIX",
+    "ui_chat_chunk_prefix": "UI_CHAT_CHUNK_PREFIX",
+    "trusted_bridge_player_name": "TRUSTED_BRIDGE_PLAYER_NAME",
 }
 
 FORBIDDEN: list[str] = [
@@ -129,6 +129,11 @@ SCAN_FILES: tuple[str, ...] = (
 )
 
 TS_CONST_RE = re.compile(r'export const ([A-Z0-9_]+) = "([^"]+)"')
+TS_NUMERIC_CONST_RE = re.compile(r"export const ([A-Z0-9_]+) = ([0-9]+)")
+TS_ROLE_ARRAY_RE = re.compile(
+    r'export const TEXT_RESPONSE_ALLOWED_ROLES = \[([^\]]+)\] as const'
+)
+TS_ERROR_ARRAY_RE = re.compile(r'export const MCBEWS_V1_ERROR_CODES = \[([^\]]+)\] as const')
 REQUIRED_PUBLIC = (
     "MCBEWS_V1",
     "McbewsV1Profile",
@@ -216,7 +221,7 @@ def check_parity() -> list[Violation]:
         ]
 
     profile = McbewsV1Profile()
-    ts_path = ROOT / "addon" / "scripts" / "bridge" / "constants.ts"
+    ts_path = ROOT / "addon" / "scripts" / "bridge" / "protocol.ts"
     if not ts_path.is_file():
         return [
             Violation(
@@ -259,6 +264,158 @@ def check_parity() -> list[Violation]:
                 )
             )
     return violations
+
+
+def check_asset_parity() -> list[Violation]:
+    """Check manifest fields, version axes, limits and vectors against TS assets."""
+
+    violations: list[Violation] = []
+    try:
+        from mcbe_ws_sdk.profiles.mcbews_v1.manifest import MCBEWS_V1_MANIFEST
+    except Exception as exc:  # noqa: BLE001 - report the asset import boundary
+        return [Violation("asset", "mcbews_v1.manifest", f"failed to import: {exc}")]
+
+    ts_path = ROOT / "addon" / "scripts" / "bridge" / "protocol.ts"
+    if not ts_path.is_file():
+        return [Violation("asset", _rel(ts_path), "generated protocol projection not found")]
+    ts_text = _read_text(ts_path)
+    ts_strings = dict(TS_CONST_RE.findall(ts_text))
+    ts_numbers = {name: int(value) for name, value in TS_NUMERIC_CONST_RE.findall(ts_text)}
+
+    wire_pairs = {
+        "capability_request_script_event_id": "CAPABILITY_REQUEST_SCRIPT_EVENT_ID",
+        "capability_response_chat_prefix": "CAPABILITY_RESPONSE_CHAT_PREFIX",
+        "ui_chat_chunk_prefix": "UI_CHAT_CHUNK_PREFIX",
+        "session_request_chat_prefix": "SESSION_REQUEST_CHAT_PREFIX",
+        "session_request_script_event_id": "SESSION_REQUEST_SCRIPT_EVENT_ID",
+        "session_response_script_event_id": "SESSION_RESPONSE_SCRIPT_EVENT_ID",
+        "text_response_script_event_id": "TEXT_RESPONSE_SCRIPT_EVENT_ID",
+        "approval_allow_chat_prefix": "APPROVAL_ALLOW_CHAT_PREFIX",
+        "approval_deny_chat_prefix": "APPROVAL_DENY_CHAT_PREFIX",
+        "trusted_bridge_player_name": "TRUSTED_BRIDGE_PLAYER_NAME",
+    }
+    for field, constant in wire_pairs.items():
+        expected = MCBEWS_V1_MANIFEST["wire"].get(field)
+        actual = ts_strings.get(constant)
+        if expected != actual:
+            violations.append(Violation("asset", constant, f"manifest={expected!r} TS={actual!r}"))
+
+    version_pairs = {
+        "capability_request_schema": "CAPABILITY_REQUEST_SCHEMA_VERSION",
+        "session_schema": "SESSION_SCHEMA_VERSION",
+        "text_response_framing": "TEXT_RESPONSE_FRAMING_VERSION",
+        "ddui_persistence": "DDUI_PERSISTENCE_VERSION",
+    }
+    for field, constant in version_pairs.items():
+        expected = MCBEWS_V1_MANIFEST["versions"].get(field)
+        actual = ts_numbers.get(constant)
+        if expected != actual:
+            violations.append(Violation("asset", constant, f"manifest={expected!r} TS={actual!r}"))
+
+    limit_pairs = {
+        "command_line_byte_budget": "COMMAND_LINE_BYTE_BUDGET",
+        "upstream_max_content_code_points": "UPSTREAM_MAX_CONTENT_CODE_POINTS",
+        "response_max_buffers": "RESPONSE_MAX_BUFFERS",
+        "response_max_chunks_per_message": "RESPONSE_MAX_CHUNKS_PER_MESSAGE",
+        "response_max_message_bytes": "RESPONSE_MAX_MESSAGE_BYTES",
+        "response_max_total_buffer_bytes": "RESPONSE_MAX_TOTAL_BUFFER_BYTES",
+        "response_buffer_ttl_ms": "RESPONSE_BUFFER_TTL_MS",
+        "session_response_max_command_bytes": "SESSION_RESPONSE_MAX_COMMAND_BYTES",
+    }
+    for field, constant in limit_pairs.items():
+        expected = MCBEWS_V1_MANIFEST["limits"].get(field)
+        actual = ts_numbers.get(constant)
+        if expected != actual:
+            violations.append(Violation("asset", constant, f"manifest={expected!r} TS={actual!r}"))
+
+    expected_roles = list(MCBEWS_V1_MANIFEST["text_response"].get("allowed_roles", ()))
+    role_match = TS_ROLE_ARRAY_RE.search(ts_text)
+    actual_roles = re.findall(r'"([^"]+)"', role_match.group(1)) if role_match else None
+    if expected_roles != actual_roles:
+        violations.append(
+            Violation(
+                "asset",
+                "TEXT_RESPONSE_ALLOWED_ROLES",
+                f"manifest={expected_roles!r} TS={actual_roles!r}",
+            )
+        )
+    expected_errors = list(MCBEWS_V1_MANIFEST.get("error_codes", ()))
+    error_match = TS_ERROR_ARRAY_RE.search(ts_text)
+    actual_errors = re.findall(r'"([^"]+)"', error_match.group(1)) if error_match else None
+    if expected_errors != actual_errors:
+        violations.append(
+            Violation(
+                "asset",
+                "MCBEWS_V1_ERROR_CODES",
+                f"manifest={expected_errors!r} TS={actual_errors!r}",
+            )
+        )
+    required_projection_fragments = (
+        "protocolLine: MCBEWS_PROTOCOL_LINE",
+        "sessionResponseMaxCommandBytes: SESSION_RESPONSE_MAX_COMMAND_BYTES",
+        "usageField: TEXT_RESPONSE_USAGE_FIELD",
+        "usageCompletionOnly: TEXT_RESPONSE_USAGE_COMPLETION_ONLY",
+        "conversationIdField: TEXT_RESPONSE_CONVERSATION_ID_FIELD",
+        "titleField: TEXT_RESPONSE_TITLE_FIELD",
+    )
+    for fragment in required_projection_fragments:
+        if fragment not in ts_text:
+            violations.append(
+                Violation("asset", fragment, "missing generated manifest projection field")
+            )
+
+    # Vector messages are executable fixtures, not just documentation.  The TS
+    # projection must contain every wire-bearing string and frame field.
+    vectors_path = ROOT / "src" / "mcbe_ws_sdk" / "profiles" / "mcbews_v1" / "vectors.json"
+    vectors_text = _read_text(vectors_path)
+    manifest_text = _read_text(
+        ROOT / "src" / "mcbe_ws_sdk" / "profiles" / "mcbews_v1" / "manifest.json"
+    )
+    for needle in (
+        "MCBEWS|",
+        "mcbews:",
+        "legacy-v1-without-version",
+        "current-v2",
+        "ui-chat-cid",
+        "assistant-final-usage",
+        "approval-role",
+        "session-list",
+        "approval-allow",
+        "approval-legacy-id",
+        "resp-1",
+        "chat-a",
+        "approval-1",
+        "sess-1",
+    ):
+        if needle not in vectors_text + manifest_text or needle not in ts_text:
+            violations.append(
+                Violation("vector", needle, "missing from Python/TypeScript projection")
+            )
+    return violations
+
+
+def check_generated_assets() -> list[Violation]:
+    """Require the complete generated projection and fixture to be current."""
+
+    try:
+        from generate_protocol_assets import check_outputs
+    except Exception as exc:  # noqa: BLE001 - report generator import failures
+        return [
+            Violation(
+                "generated",
+                "tools/generate_protocol_assets.py",
+                f"failed to import: {exc}",
+            )
+        ]
+    return [
+        Violation(
+            "generated",
+            path,
+            "generated output differs from manifest.json/vectors.json; "
+            "run generate_protocol_assets.py",
+        )
+        for path in check_outputs()
+    ]
 
 
 def _lines_with_migration_skip(rel: str, text: str) -> Iterable[tuple[int, str]]:
@@ -403,6 +560,8 @@ def check_delay_kinds() -> list[Violation]:
 def main() -> int:
     violations: list[Violation] = []
     violations.extend(check_parity())
+    violations.extend(check_generated_assets())
+    violations.extend(check_asset_parity())
     violations.extend(check_forbidden())
     violations.extend(check_public_api())
     violations.extend(check_delay_kinds())

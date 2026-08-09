@@ -5,7 +5,7 @@ This guide assumes you are new to the SDK. By the end you will have:
 1. Installed `mcbe-ws-sdk`
 2. Connected Minecraft Bedrock to a local Python server
 3. Echoed player chat back into the game with `tellraw`
-4. Understood the two surfaces you implement: `ConnectionHook` and `ResponseSink`
+4. Understood the two required surfaces you implement: `ConnectionHook` and `ResponseSink`; the optional `AddonControlHook` receives typed session/approval DTOs
 
 ---
 
@@ -48,7 +48,7 @@ Verify:
 python -c "import mcbe_ws_sdk; print(mcbe_ws_sdk.__version__)"
 ```
 
-A version string (e.g. `0.1.0`) means install succeeded.
+A version string (e.g. `0.2.0`) means install succeeded.
 
 ---
 
@@ -237,7 +237,7 @@ python my_bot.py
 | `event.sender` | **Player identity**. Do not use `state.player_name` (one connection can have many players) |
 
 !!! tip "Prefer `NoOpHook`"
-    `ConnectionHook` is a protocol. Day-to-day, subclass `NoOpHook` and override
+`ConnectionHook` is a typed protocol. Day-to-day, subclass `NoOpHook` and override
     only what you need — you don’t have to implement all six hooks.
 
 ---
@@ -268,7 +268,8 @@ also works).
 
 | Surface | Role |
 |---------|------|
-| `ConnectionHook` | Six lifecycle hooks (`on_connected`, `on_disconnected`, `on_player_message`, `on_ui_chat_reassembled`, `on_command_response`, `on_error`) |
+| `ConnectionHook` | Six typed lifecycle hooks (`on_connected`, `on_disconnected`, `on_player_message`, `on_ui_chat_reassembled(state, UiChatMessage)`, `on_command_response`, `on_error`) |
+| `AddonControlHook` | Optional typed `on_addon_control_message(state, ToolPlayerMessage)` for session/approval frames |
 | `ResponseSink` | Routes `OutboundText` / `SystemNotification` into Minecraft commands |
 | `AddonBridgeService` | ScriptEvent capability request/response (no global singleton) |
 | `CommandRegistry` | Prefix/alias command resolution (empty by default) |
@@ -340,7 +341,7 @@ and the example’s own README.
 
 **One message arrives as several pieces?**
 
-- Expected. Bedrock’s `commandLine` safe budget is about **461 bytes**; the SDK
+- Expected. Bedrock’s empirically measured `commandLine` default safety budget is about **461 bytes** (deployments may lower it); the SDK
   chunks and paces sends automatically.
 
 **Can multiple players use it at once?**

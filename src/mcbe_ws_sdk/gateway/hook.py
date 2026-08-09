@@ -17,6 +17,8 @@ from typing import Protocol, runtime_checkable
 
 from mcbe_ws_sdk.command.registry import ParsedCommand
 from mcbe_ws_sdk.gateway.connection import ConnectionState
+from mcbe_ws_sdk.profiles.mcbews_v1.classifier import ToolPlayerMessage
+from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -49,13 +51,9 @@ class ConnectionHook(Protocol):
         """
         ...
 
-    async def on_ui_chat_reassembled(
-        self,
-        state: ConnectionState,
-        player_name: str,
-        message: str,
-    ) -> None:
-        """Fired when a fragmented UI_CHAT message is fully reassembled."""
+    async def on_ui_chat_reassembled(self, state: ConnectionState, message: UiChatMessage) -> None:
+        """Fired when a fragmented UI_CHAT message is fully reassembled.
+        """
         ...
 
     async def on_command_response(
@@ -88,11 +86,13 @@ class NoOpHook:
     ) -> None:
         return None
 
-    async def on_ui_chat_reassembled(
+    async def on_ui_chat_reassembled(self, state: ConnectionState, message: UiChatMessage) -> None:
+        return None
+
+    async def on_addon_control_message(
         self,
         state: ConnectionState,
-        player_name: str,
-        message: str,
+        message: ToolPlayerMessage,
     ) -> None:
         return None
 
@@ -105,3 +105,40 @@ class NoOpHook:
 
     async def on_error(self, state: ConnectionState, error: MinecraftErrorFrame) -> None:
         return None
+
+
+class LegacyUiChatHook(Protocol):
+    """Pre-0.2.0 UI callback shape used only through an explicit adapter."""
+
+    async def on_ui_chat_reassembled(
+        self,
+        state: ConnectionState,
+        player_name: str,
+        message: str,
+    ) -> None:
+        ...
+
+
+class LegacyUiChatHookAdapter:
+    """Adapt a legacy three-argument UI hook to the typed callback boundary."""
+
+    def __init__(self, legacy_hook: LegacyUiChatHook) -> None:
+        self._legacy_hook = legacy_hook
+
+    async def invoke(self, state: ConnectionState, message: UiChatMessage) -> None:
+        await self._legacy_hook.on_ui_chat_reassembled(
+            state,
+            message.player_name,
+            message.message,
+        )
+
+
+class AddonControlHook(Protocol):
+    """Optional hook for authenticated session/approval ToolPlayer DTOs."""
+
+    async def on_addon_control_message(
+        self,
+        state: ConnectionState,
+        message: ToolPlayerMessage,
+    ) -> None:
+        ...
