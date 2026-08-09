@@ -9,4 +9,3 @@
 - Emit text-response usage on the completion frame only and deliver session
   responses atomically with correlated `SESSION_RESPONSE_TOO_LARGE` errors.
 - Synchronize the reference Addon protocol projection and bounded assembler.
-
