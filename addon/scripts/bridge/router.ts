@@ -1,15 +1,15 @@
 import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import { system } from "@minecraft/server";
 
-import { BRIDGE_REQUEST_MESSAGE_ID } from "./constants";
+import { CAPABILITY_REQUEST_SCRIPT_EVENT_ID, MCBEWS_V1_ERROR_CODES } from "./protocol";
 import { defaultCapabilityRegistry } from "./capabilities";
+import { utf8ByteLength } from "./chunking";
 
 // ---------------------------------------------------------------------------
 // Structured types
 // ---------------------------------------------------------------------------
 
-export type BridgeErrorCode =
-  "MALFORMED_JSON" | "INVALID_REQUEST" | "UNSUPPORTED_VERSION" | "UNSUPPORTED_CAPABILITY" | "CAPABILITY_FAILED";
+export type BridgeErrorCode = (typeof MCBEWS_V1_ERROR_CODES)[number];
 
 export type BridgeErrorResponse = {
   ok: false;
@@ -41,6 +41,15 @@ export type CapabilityHandler = (
 
 export type ResponseSender = (requestId: string, jsonBody: string) => Promise<void>;
 
+export type ResponseSendOutcome =
+  | { requestId: string; ok: true; delivered: true }
+  | {
+      requestId: string;
+      ok: false;
+      delivered: false;
+      error: { code: "RESPONSE_SEND_FAILED"; message: string; errorType: string };
+    };
+
 type RouterEvent = Pick<ScriptEventCommandMessageAfterEvent, "id" | "message" | "sourceType">;
 
 type ParseResult =
@@ -56,6 +65,7 @@ let responseSender: ResponseSender | null = null;
 let bridgeActive = false;
 const preReadyQueue: RouterEvent[] = [];
 let processingTail: Promise<void> = Promise.resolve();
+let lastResponseSendOutcome: ResponseSendOutcome | null = null;
 
 export const MAX_PRE_READY_REQUESTS = 64;
 
@@ -75,7 +85,28 @@ function invalidRequest(requestId?: string): ParseResult {
 }
 
 function logUnexpectedRouterFailure(error: unknown): void {
-  console.error("[bridge] unexpected router failure", error instanceof Error ? error.message : String(error));
+  console.error("[bridge] unexpected router failure", error instanceof Error ? error.constructor.name : typeof error);
+}
+
+function recordResponseSendFailure(requestId: string, errorType = "send_failure"): ResponseSendOutcome {
+  const outcome: ResponseSendOutcome = {
+    requestId,
+    ok: false,
+    delivered: false,
+    error: {
+      code: "RESPONSE_SEND_FAILED",
+      message: "bridge response sender failed",
+      errorType,
+    },
+  };
+  lastResponseSendOutcome = outcome;
+  return outcome;
+}
+
+function recordResponseSent(requestId: string): ResponseSendOutcome {
+  const outcome: ResponseSendOutcome = { requestId, ok: true, delivered: true };
+  lastResponseSendOutcome = outcome;
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +114,7 @@ function logUnexpectedRouterFailure(error: unknown): void {
 // ---------------------------------------------------------------------------
 
 export function shouldHandleScriptEvent(messageId: string): boolean {
-  return messageId === BRIDGE_REQUEST_MESSAGE_ID;
+  return messageId === CAPABILITY_REQUEST_SCRIPT_EVENT_ID;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +171,11 @@ export function parseBridgeRequest(message: string): ParseResult {
 // ---------------------------------------------------------------------------
 
 function schedule(event: RouterEvent): void {
-  processingTail = processingTail.then(() => handleBridgeScriptEvent(event)).catch(logUnexpectedRouterFailure);
+  processingTail = processingTail
+    .then(async () => {
+      await handleBridgeScriptEvent(event);
+    })
+    .catch(logUnexpectedRouterFailure);
 }
 
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
@@ -157,8 +192,8 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
   // and only resolves a pending Python future if it matches.
   if (event.sourceType !== "Server") {
     console.warn(
-      `[bridge] accepting non-Server scriptevent: id=${event.id}, sourceType=${event.sourceType}, ` +
-        `messagePreview=${event.message.slice(0, 120)}`
+      `[bridge] accepting non-Server scriptevent: channel=capability, sourceType=${event.sourceType}, ` +
+        `bytes=${utf8ByteLength(event.message)}`
     );
   }
 
@@ -173,15 +208,15 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
       return;
     }
     console.warn(
-      `[bridge] queue pre-ready request (bridge not active yet): queueSize=${preReadyQueue.length + 1}, ` +
-        `sourceType=${event.sourceType}`
+      `[bridge] queue pre-ready request: channel=capability, queueSize=${preReadyQueue.length + 1}, ` +
+        `sourceType=${event.sourceType}, bytes=${utf8ByteLength(event.message)}`
     );
     preReadyQueue.push(snapshot);
     return;
   }
   console.log(
-    `[bridge] accept scriptevent: id=${event.id}, sourceType=${event.sourceType}, ` +
-      `messagePreview=${event.message.slice(0, 120)}`
+    `[bridge] accept scriptevent: channel=capability, sourceType=${event.sourceType}, ` +
+      `bytes=${utf8ByteLength(event.message)}`
   );
   schedule(snapshot);
 }
@@ -209,7 +244,7 @@ export function setCapabilityHandler(fn: CapabilityHandler): void {
 // handleBridgeScriptEvent
 // ---------------------------------------------------------------------------
 
-export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void> {
+export async function handleBridgeScriptEvent(event: RouterEvent): Promise<ResponseSendOutcome | null> {
   // Do not re-filter sourceType here — enqueueOrHandle already decided to accept.
   // A second Server-only gate would drop WS-originated Entity events after queueing.
 
@@ -218,13 +253,19 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void>
     if (parsed.requestId && responseSender) {
       try {
         await responseSender(parsed.requestId, JSON.stringify(parsed.response));
+        return recordResponseSent(parsed.requestId);
       } catch (error) {
         console.error(
-          `[bridge] response sender failed for requestId=${parsed.requestId}: ${(error as Error).constructor.name}`
+          `[bridge] response sender failed: channel=capability, requestId=${parsed.requestId}, ` +
+            `errorType=${error instanceof Error ? error.constructor.name : typeof error}`
+        );
+        return recordResponseSendFailure(
+          parsed.requestId,
+          error instanceof Error ? error.constructor.name : typeof error
         );
       }
     }
-    return;
+    return null;
   }
 
   const { request } = parsed;
@@ -267,19 +308,25 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<void>
     try {
       const body = JSON.stringify(resultPayload);
       console.log(
-        `[bridge] send response: requestId=${request.request_id}, capability=${request.capability}, ` +
-          `bytes=${body.length}, preview=${body.slice(0, 160)}`
+        `[bridge] send response: channel=capability, requestId=${request.request_id}, ` +
+          `bytes=${utf8ByteLength(body)}`
       );
       await responseSender(request.request_id, body);
-      console.log(`[bridge] response sent: requestId=${request.request_id}`);
+      console.log(`[bridge] response sent: channel=capability, requestId=${request.request_id}`);
+      return recordResponseSent(request.request_id);
     } catch (error) {
       console.error(
-        `[bridge] response sender failed for requestId=${request.request_id}: ` +
-          `${error instanceof Error ? error.message : String(error)}`
+        `[bridge] response sender failed: channel=capability, requestId=${request.request_id}, ` +
+          `errorType=${error instanceof Error ? error.constructor.name : typeof error}`
+      );
+      return recordResponseSendFailure(
+        request.request_id,
+        error instanceof Error ? error.constructor.name : typeof error
       );
     }
   } else {
-    console.warn(`[bridge] no responseSender for requestId=${request.request_id}, capability=${request.capability}`);
+    console.warn(`[bridge] no responseSender: channel=capability, requestId=${request.request_id}`);
+    return recordResponseSendFailure(request.request_id, "missing_response_sender");
   }
 }
 
@@ -310,6 +357,11 @@ export function _testingFlush(): Promise<void> {
 }
 
 /** @internal */
+export function _testingGetLastResponseSendOutcome(): ResponseSendOutcome | null {
+  return lastResponseSendOutcome;
+}
+
+/** @internal */
 export function _testingReset(): void {
   preReadyQueue.length = 0;
   responseSender = null;
@@ -317,4 +369,5 @@ export function _testingReset(): void {
   bridgeActive = false;
   isBridgeRouterRegistered = false;
   processingTail = Promise.resolve();
+  lastResponseSendOutcome = null;
 }

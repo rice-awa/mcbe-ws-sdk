@@ -5,7 +5,7 @@
 1. 安装 `mcbe-ws-sdk`
 2. 把基岩版 Minecraft 连到本机 Python 服务
 3. 用 `tellraw` 把玩家聊天回显进游戏
-4. 理解需要实现的两个接口：`ConnectionHook` 与 `ResponseSink`
+4. 理解需要实现的两个接口：`ConnectionHook` 与 `ResponseSink`；可选的 `AddonControlHook` 接收 typed session/approval DTO
 
 ---
 
@@ -47,7 +47,7 @@ pip install -e ".[dev,docs]"
 python -c "import mcbe_ws_sdk; print(mcbe_ws_sdk.__version__)"
 ```
 
-能打印版本号（例如 `0.1.0`）就说明安装成功。
+能打印版本号（例如 `0.2.0`）就说明安装成功。
 
 ---
 
@@ -234,7 +234,7 @@ python my_bot.py
 | `event.sender` | **玩家身份**。不要用 `state.player_name`（一条连接可多人） |
 
 !!! tip "优先继承 `NoOpHook`"
-    `ConnectionHook` 是协议接口；日常开发请继承 `NoOpHook`，只重写需要的方法，
+    `ConnectionHook` 是 typed 协议接口；日常开发请继承 `NoOpHook`，只重写需要的方法，
     不必六个钩子全写。
 
 ---
@@ -264,7 +264,8 @@ facade = McbeServerFacade(
 
 | 表面 | 作用 |
 |------|------|
-| `ConnectionHook` | 六个生命周期钩子（`on_connected`、`on_disconnected`、`on_player_message`、`on_ui_chat_reassembled`、`on_command_response`、`on_error`） |
+| `ConnectionHook` | 六个 typed 生命周期钩子（`on_connected`、`on_disconnected`、`on_player_message`、`on_ui_chat_reassembled(state, UiChatMessage)`、`on_command_response`、`on_error`） |
+| `AddonControlHook` | 可选的 typed `on_addon_control_message(state, ToolPlayerMessage)`，接收 session/approval 帧 |
 | `ResponseSink` | 将 `OutboundText` / `SystemNotification` 路由为 Minecraft 命令 |
 | `AddonBridgeService` | ScriptEvent 能力请求/响应（无全局单例） |
 | `CommandRegistry` | 前缀/别名命令解析（默认为空） |
@@ -334,7 +335,7 @@ npm run mcaddon
 
 **一条消息被拆成好几段？**
 
-- 正常现象。Bedrock 的 `commandLine` 实测安全上限约 **461 字节**，SDK 会自动分片并按间隔发送。
+- 正常现象。Bedrock 的 `commandLine` 实测默认安全预算约 **461 字节**（部署可以降低），SDK 会自动分片并按间隔发送。
 
 **可以同时给多名玩家用吗？**
 

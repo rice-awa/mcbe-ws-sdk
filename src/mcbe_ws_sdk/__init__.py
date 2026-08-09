@@ -24,6 +24,7 @@ from mcbe_ws_sdk.addon import (
     AddonBridgeSettings,
     AddonMessageResult,
     ConnectionAddonBridgeClient,
+    LegacyUiChatCallbackAdapter,
 )
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
@@ -40,12 +41,15 @@ from mcbe_ws_sdk.errors import (
 )
 from mcbe_ws_sdk.flow import FlowControlMiddleware, FlowControlSettings
 from mcbe_ws_sdk.gateway import (
+    AddonControlHook,
     ConnectionHook,
     ConnectionManager,
     ConnectionState,
     DefaultResponseSink,
     EventBus,
     GatewaySettings,
+    LegacyUiChatHook,
+    LegacyUiChatHookAdapter,
     McbeServerFacade,
     MessageSurfaceConfig,
     MinecraftProtocolHandler,
@@ -61,9 +65,45 @@ from mcbe_ws_sdk.gateway import (
     enqueue_response,
 )
 from mcbe_ws_sdk.logging import configure_logging
-from mcbe_ws_sdk.profiles import MCBEWS_V1, AddonBridgeProfile, McbewsV1Profile
-from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_text_response_commands
+from mcbe_ws_sdk.profiles import (
+    MCBEWS_V1,
+    AddonBridgeProfile,
+    McbewsV1Profile,
+    McbewsV1Protocol,
+)
+from mcbe_ws_sdk.profiles.mcbews_v1.classifier import (
+    ToolPlayerChannel,
+    ToolPlayerMessage,
+    classify_tool_player_message,
+    is_tool_player_channel_message,
+)
+from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
+    decode_approval_decision,
+    decode_session_request_chat,
+    decode_session_response_message,
+    decode_text_response_frame,
+    encode_approval_decision,
+    encode_session_request_chat,
+    encode_session_response_command,
+    encode_text_response_commands,
+)
 from mcbe_ws_sdk.profiles.mcbews_v1.delivery import McbewsV1Delivery
+from mcbe_ws_sdk.profiles.mcbews_v1.manifest import (
+    MCBEWS_V1_MANIFEST,
+    MCBEWS_V1_WIRE_VECTORS,
+    load_manifest,
+    load_wire_vectors,
+)
+from mcbe_ws_sdk.profiles.mcbews_v1.models import (
+    ApprovalDecision,
+    SessionError,
+    SessionRequest,
+    SessionResponse,
+    TextResponseChunk,
+    TextResponseMessage,
+    TokenUsage,
+    UiChatMessage,
+)
 from mcbe_ws_sdk.protocol import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -82,6 +122,8 @@ __all__ = (
     "AddonBridgeService",
     "AddonBridgeSettings",
     "AddonMessageResult",
+    "LegacyUiChatCallbackAdapter",
+    "AddonControlHook",
     "BridgeClosedError",
     "BridgeError",
     "BridgeLimitError",
@@ -105,11 +147,16 @@ __all__ = (
     "McbeWsSdkError",
     "McbewsV1Delivery",
     "McbewsV1Profile",
+    "McbewsV1Protocol",
+    "MCBEWS_V1_MANIFEST",
+    "MCBEWS_V1_WIRE_VECTORS",
     "MessageSurfaceConfig",
     "MinecraftCommandResponse",
     "MinecraftErrorFrame",
     "MinecraftProtocolHandler",
     "NoOpHook",
+    "LegacyUiChatHook",
+    "LegacyUiChatHookAdapter",
     "OutboundText",
     "PlayerMessageEvent",
     "ProtocolError",
@@ -118,9 +165,30 @@ __all__ = (
     "RouteEnvelope",
     "SubscriptionToken",
     "SystemNotification",
+    "ToolPlayerChannel",
+    "ToolPlayerMessage",
+    "ApprovalDecision",
+    "SessionError",
+    "SessionRequest",
+    "SessionResponse",
+    "TextResponseChunk",
+    "TextResponseMessage",
+    "TokenUsage",
+    "UiChatMessage",
     "WebsocketTransportConfig",
     "WsEventType",
+    "classify_tool_player_message",
     "configure_logging",
+    "decode_approval_decision",
+    "decode_session_request_chat",
+    "decode_session_response_message",
+    "decode_text_response_frame",
+    "encode_approval_decision",
     "encode_text_response_commands",
+    "encode_session_request_chat",
+    "encode_session_response_command",
     "enqueue_response",
+    "is_tool_player_channel_message",
+    "load_manifest",
+    "load_wire_vectors",
 )

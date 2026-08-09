@@ -1,9 +1,9 @@
 import {
-  BRIDGE_COMMAND_LINE_BYTE_BUDGET,
-  BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS,
-  BRIDGE_RESPONSE_PREFIX,
-  BRIDGE_UI_CHAT_PREFIX,
-} from "./constants";
+  COMMAND_LINE_BYTE_BUDGET,
+  CAPABILITY_RESPONSE_CHAT_PREFIX,
+  UI_CHAT_CHUNK_PREFIX,
+  UPSTREAM_MAX_CONTENT_CODE_POINTS,
+} from "./protocol";
 
 export function utf8ByteLength(value: string): number {
   let byteLength = 0;
@@ -28,20 +28,20 @@ export function formatChunk(prefix: string, id: string, index: number, total: nu
 }
 
 export function formatResponseChunk(requestId: string, index: number, total: number, content: string): string {
-  return formatChunk(BRIDGE_RESPONSE_PREFIX, requestId, index, total, content);
+  return formatChunk(CAPABILITY_RESPONSE_CHAT_PREFIX, requestId, index, total, content);
 }
 
 export function chunkBridgePayload(requestId: string, payload: string, options: ChunkOptions = {}): string[] {
-  return chunkPayload(BRIDGE_RESPONSE_PREFIX, requestId, payload, options);
+  return chunkPayload(CAPABILITY_RESPONSE_CHAT_PREFIX, requestId, payload, options);
 }
 
 export function chunkUiChatPayload(id: string, payload: string, options: ChunkOptions = {}): string[] {
-  return chunkPayload(BRIDGE_UI_CHAT_PREFIX, id, payload, options);
+  return chunkPayload(UI_CHAT_CHUNK_PREFIX, id, payload, options);
 }
 
 export function chunkPayload(prefix: string, id: string, payload: string, options: ChunkOptions = {}): string[] {
-  const budget = options.commandLineByteBudget ?? BRIDGE_COMMAND_LINE_BYTE_BUDGET;
-  const maxPoints = options.maxContentCodePoints ?? BRIDGE_MAX_CHUNK_CONTENT_CODE_POINTS;
+  const budget = options.commandLineByteBudget ?? COMMAND_LINE_BYTE_BUDGET;
+  const maxPoints = options.maxContentCodePoints ?? UPSTREAM_MAX_CONTENT_CODE_POINTS;
   const wrap = options.wrapCommandLine ?? ((chunk: string) => `tell @s ${chunk}`);
   const symbols = Array.from(payload);
 
@@ -66,11 +66,18 @@ export function chunkPayload(prefix: string, id: string, payload: string, option
   };
 
   let totalHint = 1;
-  while (true) {
+  for (let iteration = 0; iteration < 10; iteration += 1) {
     const parts = split(totalHint);
     if (parts.length === totalHint) {
-      return parts.map((content, index) => formatChunk(prefix, id, index + 1, parts.length, content));
+      const frames = parts.map((content, index) => formatChunk(prefix, id, index + 1, parts.length, content));
+      for (const frame of frames) {
+        if (utf8ByteLength(wrap(frame)) > budget) {
+          throw new Error("chunk framing leaves no room for one Unicode code point");
+        }
+      }
+      return frames;
     }
     totalHint = parts.length;
   }
+  throw new Error("chunk framing metadata failed to converge");
 }

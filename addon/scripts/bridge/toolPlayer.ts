@@ -1,8 +1,8 @@
 import { GameMode, world, system } from "@minecraft/server";
 import { spawnSimulatedPlayer } from "@minecraft/server-gametest";
 
-import { chunkBridgePayload } from "./chunking";
-import { BRIDGE_SENDER } from "./constants";
+import { chunkBridgePayload, utf8ByteLength } from "./chunking";
+import { TRUSTED_BRIDGE_PLAYER_NAME } from "./protocol";
 
 const DEBUG = true;
 
@@ -19,9 +19,9 @@ const TOOL_PLAYER_CHECK_INTERVAL_TICKS = 20 * 30;
 let isToolPlayerInitialized = false;
 
 export function ensureToolPlayer(): void {
-  log(`ensureToolPlayer: 检查模拟玩家 ${BRIDGE_SENDER} 是否存在...`);
+  log(`ensureToolPlayer: 检查模拟玩家 ${TRUSTED_BRIDGE_PLAYER_NAME} 是否存在...`);
 
-  const existing = world.getAllPlayers().find((player) => player.name === BRIDGE_SENDER);
+  const existing = world.getAllPlayers().find((player) => player.name === TRUSTED_BRIDGE_PLAYER_NAME);
 
   if (existing) {
     log("ensureToolPlayer: 模拟玩家已存在，跳过创建");
@@ -40,7 +40,7 @@ export function ensureToolPlayer(): void {
         dimension,
         ...TOOL_PLAYER_LOCATION,
       },
-      BRIDGE_SENDER,
+      TRUSTED_BRIDGE_PLAYER_NAME,
       GameMode.Creative
     );
     log(`ensureToolPlayer: 模拟玩家创建成功: ${player.name}`);
@@ -51,20 +51,26 @@ export function ensureToolPlayer(): void {
 }
 
 export async function sendBridgeResponseChunks(requestId: string, payload: string): Promise<void> {
-  const toolPlayer = world.getAllPlayers().find((player) => player.name === BRIDGE_SENDER);
+  const toolPlayer = world.getAllPlayers().find((player) => player.name === TRUSTED_BRIDGE_PLAYER_NAME);
 
   if (!toolPlayer) {
-    log(`sendBridgeResponseChunks: tool player missing for requestId=${requestId}`);
+    log(`sendBridgeResponseChunks: channel=capability, tool player missing for requestId=${requestId}`);
     throw new Error("Tool player is not available");
   }
 
   const chunks = chunkBridgePayload(requestId, payload);
-  log(`sendBridgeResponseChunks: requestId=${requestId}, chunks=${chunks.length}, payloadBytes=${payload.length}`);
+  log(
+    `sendBridgeResponseChunks: channel=capability, requestId=${requestId}, ` +
+      `chunks=${chunks.length}, payloadBytes=${utf8ByteLength(payload)}`
+  );
   for (const [index, chunk] of chunks.entries()) {
-    log(`sendBridgeResponseChunks: tell chunk ${index + 1}/${chunks.length} ` + `preview=${chunk.slice(0, 120)}`);
+    log(
+      `sendBridgeResponseChunks: channel=capability, requestId=${requestId}, ` +
+        `chunk=${index + 1}/${chunks.length}, bytes=${utf8ByteLength(chunk)}`
+    );
     await toolPlayer.runCommand(`tell @s ${chunk}`);
   }
-  log(`sendBridgeResponseChunks: done requestId=${requestId}`);
+  log(`sendBridgeResponseChunks: channel=capability, requestId=${requestId}, status=done`);
 }
 
 export function initializeToolPlayer(): void {

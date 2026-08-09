@@ -80,6 +80,8 @@ def test_addon_bridge_settings_reject_non_positive_limits(field: str, value: int
 def test_flow_control_rejects_invalid_budget_and_delay():
     with pytest.raises(ConfigurationError, match="flow.command_line_byte_budget"):
         FlowControlSettings(command_line_byte_budget=0)
+    with pytest.raises(ConfigurationError, match="flow.command_line_byte_budget"):
+        FlowControlSettings(command_line_byte_budget=462)
     with pytest.raises(ConfigurationError, match="flow.chunk_delays.tellraw"):
         FlowControlSettings(chunk_delays={"tellraw": -0.1})
 

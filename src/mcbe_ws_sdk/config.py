@@ -7,8 +7,12 @@ from numbers import Real
 from types import MappingProxyType
 
 from mcbe_ws_sdk.errors import ConfigurationError
-from mcbe_ws_sdk.profiles import AddonBridgeProfile
+from mcbe_ws_sdk.profiles.mcbews_v1.manifest import MCBEWS_V1_MANIFEST
 from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
+
+_DEFAULT_COMMAND_LINE_BYTE_BUDGET = int(
+    MCBEWS_V1_MANIFEST["limits"]["command_line_byte_budget"]
+)
 
 
 def _require_positive_int(value: object, field_name: str) -> None:
@@ -29,7 +33,7 @@ def _require_finite_real(value: object, field_name: str, *, allow_zero: bool = F
 
 @dataclass(frozen=True, slots=True)
 class FlowControlSettings:
-    command_line_byte_budget: int = 461
+    command_line_byte_budget: int = _DEFAULT_COMMAND_LINE_BYTE_BUDGET
     max_chunk_content_length: int = 400
     chunk_sentence_mode: bool = True
     chunk_delays: Mapping[str, float] = field(
@@ -44,6 +48,11 @@ class FlowControlSettings:
 
     def __post_init__(self) -> None:
         _require_positive_int(self.command_line_byte_budget, "flow.command_line_byte_budget")
+        if self.command_line_byte_budget > _DEFAULT_COMMAND_LINE_BYTE_BUDGET:
+            raise ConfigurationError(
+                "flow.command_line_byte_budget may only lower the MCBEWS/1 empirical ceiling "
+                f"({_DEFAULT_COMMAND_LINE_BYTE_BUDGET})"
+            )
         _require_positive_int(self.max_chunk_content_length, "flow.max_chunk_content_length")
         try:
             delays = dict(self.chunk_delays)
@@ -69,9 +78,14 @@ class AddonBridgeSettings:
     max_chunks_per_message: int = 64
     max_message_bytes: int = 262_144
     max_total_buffer_bytes: int = 1_048_576
-    profile: AddonBridgeProfile = field(default_factory=McbewsV1Profile)
+    # MCBEWS/1 is the only runtime profile.  The historical
+    # ``AddonBridgeProfile`` name is a deprecated type alias, not a replacement
+    # profile seam.
+    profile: McbewsV1Profile = field(default_factory=McbewsV1Profile)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.profile, McbewsV1Profile):
+            raise ConfigurationError("addon.profile must be a concrete McbewsV1Profile")
         for name in ("timeout_seconds", "buffer_ttl_seconds"):
             _require_finite_real(getattr(self, name), f"addon.{name}")
         for name in (

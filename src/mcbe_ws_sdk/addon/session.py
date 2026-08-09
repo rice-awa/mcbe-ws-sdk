@@ -135,7 +135,7 @@ class AddonBridgeSession:
         if len(parts) != 5:
             return None
         namespace, prefix, request_id, _, _ = parts
-        bridge_prefix = self._profile.bridge_response_prefix.split("|", 1)
+        bridge_prefix = self._profile.capability_response_chat_prefix.split("|", 1)
         if len(bridge_prefix) != 2:
             return None
         expected_namespace, expected_prefix = bridge_prefix

@@ -7,7 +7,12 @@ import asyncio
 import pytest
 
 from mcbe_ws_sdk.gateway.connection import ConnectionState
-from mcbe_ws_sdk.gateway.hook import ConnectionHook, NoOpHook
+from mcbe_ws_sdk.gateway.hook import (
+    ConnectionHook,
+    LegacyUiChatHookAdapter,
+    NoOpHook,
+)
+from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -37,7 +42,13 @@ async def test_noop_hook_defaults() -> None:
         await hook.on_player_message(state, PlayerMessageEvent(sender="Steve", message="hi"))
         is None
     )
-    assert await hook.on_ui_chat_reassembled(state, "Steve", "hello") is None
+    assert (
+        await hook.on_ui_chat_reassembled(
+            state,
+            UiChatMessage(msg_id="ui-1", player_name="Steve", message="hello"),
+        )
+        is None
+    )
     assert (
         await hook.on_command_response(
             state,
@@ -74,3 +85,25 @@ def test_custom_hook_via_implementation() -> None:
     assert isinstance(hook, ConnectionHook)
     asyncio.run(hook.on_connected(ConnectionState()))
     assert len(hook.connected) == 1
+
+
+def test_legacy_ui_hook_requires_explicit_adapter() -> None:
+    seen: list[tuple[str, str]] = []
+
+    class LegacyHook:
+        async def on_ui_chat_reassembled(
+            self,
+            state: ConnectionState,
+            player_name: str,
+            message: str,
+        ) -> None:
+            seen.append((player_name, message))
+
+    adapter = LegacyUiChatHookAdapter(LegacyHook())
+    asyncio.run(
+        adapter.invoke(
+            ConnectionState(),
+            UiChatMessage(msg_id="ui-1", player_name="Steve", message="hello"),
+        )
+    )
+    assert seen == [("Steve", "hello")]

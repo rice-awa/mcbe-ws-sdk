@@ -11,10 +11,10 @@ McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
 ├── MinecraftProtocolHandler  ← 解析 PlayerMessage、解析命令、渲染状态行
 │   └── CommandRegistry
 ├── EventBus              ← 按 WsEventType 分键的进程内 pub/sub
-├── ConnectionHook        ← 宿主实现的六个生命周期钩子
+├── ConnectionHook        ← 宿主实现的六个 typed 生命周期钩子
 ├── AddonBridgeService    ← ScriptEvent 桥 + 分片重组
 │   └── AddonBridgeSession
-├── FlowControlMiddleware ← 字节安全的 tellraw/scriptevent 分片（461 B 上限）
+├── FlowControlMiddleware ← 字节安全的 tellraw/scriptevent 分片（461 B 实测默认上限）
 └── McbeOutboundDelivery  ← 统一出站适配器
 ```
 
@@ -44,6 +44,11 @@ async def on_player_message(
 `parsed` 是 registry 的预解析匹配结果（若有）；**不是**"已消费"布尔返回值 ——
 宿主自行决定如何处理自由聊天与命令。
 
+typed UI 回调签名是 `on_ui_chat_reassembled(state, UiChatMessage)`，DTO 显式携带
+`cid`/`conversation_id`。认证后的 session/approval 帧通过可选的
+`AddonControlHook.on_addon_control_message` 回调交给宿主。旧三参数 UI 回调只能通过
+显式的 `LegacyUiChatHookAdapter` 接入。
+
 ## 每连接消息路由
 
 1. `McbeServerFacade._on_connection` 创建连接状态，启动 `_response_sender` 协程，
@@ -60,9 +65,10 @@ async def on_player_message(
    内联路由到 sink 的两个 `on_*` 方法（协议上不含 `dispatch`）。
 4. 宿主 sink 使用 `McbeOutboundDelivery` 把排队消息变成 MC WebSocket 负载。
 
-## 流控 — 461 B 硬上限
+## 流控 — 461 B 实测可配置上限
 
-`FlowControlMiddleware` 强制执行 MCBE `commandLine` 字节预算（461 字节，实测得出）：
+`FlowControlMiddleware` 强制执行配置的 MCBE `commandLine` 字节预算（默认 461 字节，
+实测得出；部署可以进一步降低）：
 
 - `chunk_tellraw()` / `chunk_scriptevent()` — 带字节安全保护的语义分句
 - `chunk_raw_command()` — 不做语义切分；超限抛出 `FrameTooLargeError`
@@ -70,9 +76,11 @@ async def on_player_message(
 
 ## 协议 profile
 
-协议 profile 位于 `profiles/`，定义互操作层的线格式常量。
-`McbewsV1Profile` 是唯一内置 profile（模块级单例 `MCBEWS_V1`）。线格式详见
-[协议](addon-bridge-protocol.md)。
+`McbewsV1Profile` 是唯一具体运行时 profile（模块级单例 `MCBEWS_V1`）。安装包内的
+`manifest.json`/`vectors.json` 是权威来源，并生成 reference Addon 的 `protocol.ts`
+和 Python fixture。wire ID、schema 轴及安全上限由 manifest 固定；只有降低实测 command
+预算和响应延迟属于运行配置。`AddonBridgeProfile` 只是 deprecated type alias，不是可替换
+运行时 seam。线格式详见[协议](addon-bridge-protocol.md)。
 
 ## Addon 桥运行要求
 

@@ -14,6 +14,8 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: ruff check --no-cache src tests examples
       - run: mypy --no-incremental src
+      - run: python tools/generate_protocol_assets.py --check
+      - run: python tools/check_protocol_names.py
   python:
     runs-on: ubuntu-latest
     strategy:
@@ -75,3 +77,61 @@ jobs:
       - run: python -c "import mcbe_ws_sdk; print(mcbe_ws_sdk.__version__)"
       - uses: actions/upload-artifact@v4
         with: {name: python-dist, path: dist/*, if-no-files-found: error}
+  contract:
+    needs: [dist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - uses: actions/download-artifact@v4
+        with: {name: python-dist, path: /tmp/mcbe-ws-sdk-dist}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install twine
+      - run: python -m pip install "$(find /tmp/mcbe-ws-sdk-dist -name '*.whl' -print -quit)"
+      - run: python -m twine check /tmp/mcbe-ws-sdk-dist/*
+      - run: python tools/check_dist.py /tmp/mcbe-ws-sdk-dist
+      - name: Probe the installed wheel outside the checkout
+        env:
+          PYTHONPATH: ""
+        run: |
+          mkdir -p /tmp/mcbe-ws-sdk-contract-cwd
+          cd /tmp/mcbe-ws-sdk-contract-cwd
+          python - <<'PY'
+          import json
+          import mcbe_ws_sdk
+          from mcbe_ws_sdk.config import FlowControlSettings
+          from mcbe_ws_sdk.flow import FlowControlMiddleware
+          from mcbe_ws_sdk.profiles.mcbews_v1 import (
+              MCBEWS_V1_MANIFEST,
+              MCBEWS_V1_WIRE_VECTORS,
+              decode_text_response_frame,
+              encode_session_request_chat,
+          )
+          from mcbe_ws_sdk.profiles.mcbews_v1.models import SessionRequest
+
+          assert mcbe_ws_sdk.__version__ == "0.2.0"
+          assert MCBEWS_V1_MANIFEST["protocol_line"] == "MCBEWS/1"
+          assert set(MCBEWS_V1_WIRE_VECTORS["behavior"]) == {"chunking", "text_response"}
+          request = SessionRequest(request_id="wheel-1", action="list", player_name="Steve")
+          assert '"request_id":"wheel-1"' in encode_session_request_chat(request)
+          flow = FlowControlMiddleware(FlowControlSettings(command_line_byte_budget=180))
+
+          def encode_frame(content: str, index: int, total: int) -> str:
+              return json.dumps(
+                  {"id": "wheel-1", "i": index, "n": total, "p": "Steve", "r": "assistant", "c": content},
+                  ensure_ascii=False,
+                  separators=(",", ":"),
+              )
+
+          frame_payload = flow.chunk_framed_scriptevent(
+              "你好 😀",
+              message_id="mcbews:text_resp",
+              encode_frame=encode_frame,
+              emit_empty=True,
+          )
+          command_line = json.loads(frame_payload[0])["body"]["commandLine"]
+          frame = json.loads(command_line.split(" ", 2)[2])
+          assert decode_text_response_frame(frame).content == "你好 😀"
+          print("clean wheel contract: ok")
+          PY

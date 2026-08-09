@@ -6,8 +6,9 @@
 
 面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
 
-本包拥有 WS 传输、数据包协议与字节安全的命令分片（461 字节硬上限）。宿主通过
-`ConnectionHook` 与 `ResponseSink` 注入行为，并由 `McbeServerFacade` 驱动整条链路。
+本包拥有 WS 传输、数据包协议与字节安全的命令分片（461 字节实测默认上限，部署可以
+进一步降低）。宿主通过 typed `ConnectionHook`、`ResponseSink` 以及可选的 typed
+session/approval 控制回调注入行为，并由 `McbeServerFacade` 驱动整条链路。
 
 SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属于宿主应用。
 

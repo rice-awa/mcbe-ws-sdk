@@ -10,6 +10,8 @@ import {
   type TextResponseChunk,
   type ResponseSyncLimits,
 } from "../scripts/bridge/responseSync";
+import { chunkPayload, utf8ByteLength } from "../scripts/bridge/chunking";
+import { MCBEWS_V1_WIRE_VECTORS } from "../scripts/bridge/protocol";
 import { TEXT_RESP_MESSAGE_ID } from "../scripts/bridge/constants";
 import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 
@@ -77,6 +79,46 @@ describe("parseTextResponseChunk", () => {
     const result = parseTextResponseChunk({ id: "x", i: 1, n: 3, p: "Player1", r: "assistant", c: "hello" });
     expect(result).toEqual({ id: "x", i: 1, n: 3, p: "Player1", r: "assistant", c: "hello" });
   });
+
+  it("accepts cid/title and completion-only usage", () => {
+    expect(
+      parseTextResponseChunk({
+        id: "x",
+        i: 1,
+        n: 2,
+        p: "Player1",
+        r: "assistant",
+        c: "hello",
+        cid: "chat-a",
+        t: "Chat",
+        u: { i: 1, o: 2 },
+      })
+    ).toBeNull();
+    expect(
+      parseTextResponseChunk({
+        id: "x",
+        i: 2,
+        n: 2,
+        p: "Player1",
+        r: "assistant",
+        c: "world",
+        cid: "chat-a",
+        t: "Chat",
+        u: { i: 1, o: 2 },
+      })
+    ).toEqual({
+      id: "x",
+      i: 2,
+      n: 2,
+      p: "Player1",
+      r: "assistant",
+      c: "world",
+      cid: "chat-a",
+      t: "Chat",
+      u: { i: 1, o: 2 },
+    });
+    expect(parseTextResponseChunk({ id: "x", i: 1, n: 1, p: "P", r: "unknown", c: "x" })).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -86,8 +128,8 @@ describe("parseTextResponseChunk", () => {
 describe("ResponseAssembler", () => {
   it("drops conflicting metadata for the same id", () => {
     const assembler = new ResponseAssembler(DEFAULT_RESPONSE_SYNC_LIMITS, () => 0);
-    expect(assembler.push({ id: "x", i: 1, n: 2, p: "A", r: "user", c: "a" })).toBeNull();
-    expect(assembler.push({ id: "x", i: 2, n: 2, p: "B", r: "user", c: "b" })).toBeNull();
+    expect(assembler.push({ id: "x", i: 1, n: 2, p: "A", r: "user", c: "a", t: "one" })).toBeNull();
+    expect(assembler.push({ id: "x", i: 2, n: 2, p: "A", r: "user", c: "b", t: "two" })).toBeNull();
     expect(assembler.bufferCount).toBe(0);
   });
 
@@ -128,8 +170,54 @@ describe("ResponseAssembler", () => {
     expect(assembler.push({ id: "x", i: 3, n: 3, p: "P", r: "user", c: "c" })).toBeNull();
     expect(assembler.push({ id: "x", i: 1, n: 3, p: "P", r: "user", c: "a" })).toBeNull();
     const result = assembler.push({ id: "x", i: 2, n: 3, p: "P", r: "user", c: "b" });
-    expect(result).toEqual({ playerName: "P", role: "user", text: "abc" });
+    expect(result).toEqual({
+      playerName: "P",
+      role: "user",
+      text: "abc",
+      responseId: "x",
+      conversationId: "default",
+    });
     expect(assembler.bufferCount).toBe(0);
+  });
+
+  it("isolates same response ids by player and conversation", () => {
+    const assembler = new ResponseAssembler();
+    expect(assembler.push({ id: "x", i: 1, n: 2, p: "A", r: "assistant", c: "a", cid: "one" })).toBeNull();
+    expect(assembler.push({ id: "x", i: 1, n: 2, p: "B", r: "assistant", c: "b", cid: "two" })).toBeNull();
+    expect(assembler.push({ id: "x", i: 2, n: 2, p: "A", r: "assistant", c: "A", cid: "one" })).toEqual({
+      playerName: "A",
+      role: "assistant",
+      text: "aA",
+      responseId: "x",
+      conversationId: "one",
+    });
+    expect(assembler.push({ id: "x", i: 2, n: 2, p: "B", r: "assistant", c: "B", cid: "two" })).toEqual({
+      playerName: "B",
+      role: "assistant",
+      text: "bB",
+      responseId: "x",
+      conversationId: "two",
+    });
+  });
+
+  it("isolates same response ids by player when cid is omitted", () => {
+    const assembler = new ResponseAssembler();
+    expect(assembler.push({ id: "same", i: 1, n: 2, p: "A", r: "assistant", c: "a" })).toBeNull();
+    expect(assembler.push({ id: "same", i: 1, n: 2, p: "B", r: "assistant", c: "b" })).toBeNull();
+    expect(assembler.push({ id: "same", i: 2, n: 2, p: "A", r: "assistant", c: "A" })).toEqual({
+      playerName: "A",
+      role: "assistant",
+      text: "aA",
+      responseId: "same",
+      conversationId: "default",
+    });
+    expect(assembler.push({ id: "same", i: 2, n: 2, p: "B", r: "assistant", c: "B" })).toEqual({
+      playerName: "B",
+      role: "assistant",
+      text: "bB",
+      responseId: "same",
+      conversationId: "default",
+    });
   });
 
   it("completes on last chunk even if earlier chunks were missing (gaps still return null)", () => {
@@ -141,6 +229,8 @@ describe("ResponseAssembler", () => {
       playerName: "P",
       role: "user",
       text: "abc",
+      responseId: "x",
+      conversationId: "default",
     });
   });
 
@@ -156,6 +246,45 @@ describe("ResponseAssembler", () => {
       playerName: "P",
       role: "user",
       text: "ab",
+      responseId: "x",
+      conversationId: "default",
+    });
+  });
+
+  it("accepts final-first identical duplicates including usage metadata", () => {
+    const assembler = new ResponseAssembler();
+    expect(
+      assembler.push({
+        id: "dup",
+        i: 3,
+        n: 3,
+        p: "P",
+        r: "assistant",
+        c: "done",
+        cid: "chat-a",
+        u: { i: 1, o: 2 },
+      })
+    ).toBeNull();
+    expect(assembler.push({ id: "dup", i: 1, n: 3, p: "P", r: "assistant", c: "answer ", cid: "chat-a" })).toBeNull();
+    expect(
+      assembler.push({
+        id: "dup",
+        i: 3,
+        n: 3,
+        p: "P",
+        r: "assistant",
+        c: "done",
+        cid: "chat-a",
+        u: { i: 1, o: 2 },
+      })
+    ).toBeNull();
+    expect(assembler.push({ id: "dup", i: 2, n: 3, p: "P", r: "assistant", c: "", cid: "chat-a" })).toEqual({
+      playerName: "P",
+      role: "assistant",
+      text: "answer done",
+      responseId: "dup",
+      conversationId: "chat-a",
+      usage: { i: 1, o: 2 },
     });
   });
 
@@ -198,6 +327,8 @@ describe("ResponseAssembler", () => {
       playerName: "B",
       role: "assistant",
       text: "xy",
+      responseId: "x",
+      conversationId: "default",
     });
   });
 
@@ -232,6 +363,17 @@ describe("ResponseAssembler", () => {
     // Chunk 3 would push byteLength to 13 > 10 — buffer deleted
     expect(assembler.push({ id: "x", i: 3, n: 3, p: "P", r: "user", c: "ccccc" })).toBeNull();
     expect(assembler.bufferCount).toBe(0);
+  });
+
+  it("enforces total buffered bytes and clears one player", () => {
+    const assembler = new ResponseAssembler({ ...DEFAULT_RESPONSE_SYNC_LIMITS, maxTotalBufferBytes: 3 }, () => 0);
+    assembler.push({ id: "a", i: 1, n: 2, p: "A", r: "user", c: "中", cid: "one" });
+    expect(assembler.bufferedBytes).toBe(3);
+    expect(assembler.push({ id: "b", i: 1, n: 2, p: "B", r: "user", c: "x", cid: "two" })).toBeNull();
+    expect(assembler.bufferCount).toBe(1);
+    assembler.clearForPlayer("A");
+    expect(assembler.bufferCount).toBe(0);
+    expect(assembler.bufferedBytes).toBe(0);
   });
 
   it("clear() empties all buffers", () => {
@@ -281,6 +423,49 @@ describe("ResponseAssembler", () => {
     const assembler = new ResponseAssembler();
     expect(assembler.push({ id: "x", i: 1, n: 1, p: "P", r: "", c: "a" })).toBeNull();
     expect(assembler.bufferCount).toBe(0);
+  });
+
+  it("consumes every canonical text behavior vector", () => {
+    for (const vector of MCBEWS_V1_WIRE_VECTORS.behavior.textResponse) {
+      const assembler = new ResponseAssembler();
+      let result = null;
+      for (const rawChunk of vector.chunks) {
+        result = assembler.push(rawChunk);
+      }
+      if ("expectedError" in vector) {
+        expect(result).toBeNull();
+        expect(assembler.bufferCount).toBe(0);
+      } else {
+        expect(result).toEqual(vector.expected);
+        expect(assembler.bufferCount).toBe(0);
+      }
+    }
+  });
+});
+
+describe("canonical chunking behavior vectors", () => {
+  it("keeps Unicode payloads and empty frames inside the complete wrapper budget", () => {
+    for (const vector of MCBEWS_V1_WIRE_VECTORS.behavior.chunking) {
+      const wrap = (frame: string) => `${vector.wrapperPrefix}${frame}`;
+      if (vector.name === "empty-wrapper-no-room") {
+        expect(() =>
+          chunkPayload(vector.prefix, vector.id, vector.payload, {
+            commandLineByteBudget: vector.budget,
+            maxContentCodePoints: vector.maxContentCodePoints,
+            wrapCommandLine: wrap,
+          })
+        ).toThrow("chunk framing leaves no room");
+        continue;
+      }
+      const frames = chunkPayload(vector.prefix, vector.id, vector.payload, {
+        commandLineByteBudget: vector.budget,
+        maxContentCodePoints: vector.maxContentCodePoints,
+        wrapCommandLine: wrap,
+      });
+      expect(frames.length).toBeGreaterThan(0);
+      expect(frames.map((frame) => frame.match(/\|(\d+)\/(\d+)\|([\s\S]*)$/)?.[3] ?? "").join("")).toBe(vector.payload);
+      expect(frames.every((frame) => utf8ByteLength(wrap(frame)) <= vector.budget)).toBe(true);
+    }
   });
 });
 

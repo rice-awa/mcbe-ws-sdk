@@ -66,7 +66,8 @@ Player opens a UI panel and types a message
   -> MCBEWS_BRIDGE simulated-player chat chunks (MCBEWS|UI_CHAT)
   -> WebSocket PlayerMessage
   -> Python reassembly
-  -> hook.on_ui_chat_reassembled / EventBus UI_CHAT_REASSEMBLED
+  -> typed hook.on_ui_chat_reassembled(state, UiChatMessage) /
+     EventBus UI_CHAT_REASSEMBLED (UiChatMessage.cid preserved)
 ```
 
 ### Channel C: Python → Addon text response (Text Response)
@@ -98,15 +99,38 @@ Notes:
 
 | Role | Profile field | Wire value |
 |---|---|---|
-| Bridge request messageId | `bridge_request_message_id` | `mcbews:bridge_req` |
-| Text response messageId | `response_message_id` | `mcbews:text_resp` |
-| Bridge response prefix | `bridge_response_prefix` | `MCBEWS\|BRIDGE` |
-| UI Chat prefix | `ui_chat_prefix` | `MCBEWS\|UI_CHAT` |
-| Simulated player | `bridge_sender` | `MCBEWS_BRIDGE` |
-| Request body version | `request_version` | `2` |
+| Bridge request messageId | `capability_request_script_event_id` | `mcbews:bridge_req` |
+| Text response messageId | `text_response_script_event_id` | `mcbews:text_resp` |
+| Bridge response prefix | `capability_response_chat_prefix` | `MCBEWS\|BRIDGE` |
+| UI Chat prefix | `ui_chat_chunk_prefix` | `MCBEWS\|UI_CHAT` |
+| Simulated player | `trusted_bridge_player_name` | `MCBEWS_BRIDGE` |
+| Session request prefix | `session_request_chat_prefix` | `MCBEWS\|SESSION` |
+| Session response messageId | `session_response_script_event_id` | `mcbews:session_resp` |
+| Capability request schema | `capability_request_schema_version` | `2` |
 
-Python and the Addon **must** stay bit-identical on this table. The repo
-enforces alignment and banned tokens via `tools/check_protocol_names.py`.
+Python and the Addon **must** stay bit-identical on this table. The canonical
+manifest and executable vectors are installed at
+`mcbe_ws_sdk.profiles.mcbews_v1/{manifest.json,vectors.json}`; the reference
+Addon projection is checked against those resources by
+`tools/check_protocol_names.py`. The old profile names remain read-only
+deprecated aliases for one migration cycle and are not independent settings.
+
+### Version axes and bounds
+
+MCBEWS/1 names each compatibility axis independently:
+
+| Axis | Value | Meaning |
+|---|---:|---|
+| `capability_request_schema_version` | 2 | capability request JSON shape |
+| `session_schema_version` | 1 | typed session request/response shape |
+| `text_response_framing_version` | 1 | `id/i/n/p/r/c` text framing |
+| `ddui_persistence_version` | 2 | Addon UI persistence format |
+
+The empirical full `commandLine` budget is 461 UTF-8 bytes by default; this is a
+configurable safety ceiling that deployments may lower. Upstream chat
+chunks default to 256 Unicode code points; text response assembly is bounded
+to 64 buffers, 128 chunks per response, 65,536 bytes per response, and
+262,144 total buffered bytes with a 30-second TTL.
 
 ## Request format (Python → Addon)
 
@@ -167,7 +191,7 @@ Addon-side error codes (inside the response JSON):
 - Single chunk: `MCBEWS|UI_CHAT|<msg_id>|<index>/<total>|<content>`
 - `<index>` starts at 1
 - `<content>` is a slice of a JSON string whose full shape is
-  `{"player": "<player name>", "message": "<chat text>"}`
+  `{"player": "<player name>", "message": "<chat text>", "cid": "<conversation>"}`
 - Also sent by the simulated player `MCBEWS_BRIDGE`; implementations usually
   wrap with self-only tell so real player chat is not spammed
 
@@ -197,6 +221,9 @@ MCBEWS|UI_CHAT|ui-1744876800000-1|2/2|sage":"hello world"}
 | `p` | Target player name |
 | `r` | Role (e.g. `assistant`) |
 | `c` | Text content slice |
+| `cid` | Conversation id; repeated on every frame when present |
+| `t` | Optional response title; repeated on every frame when present |
+| `u` | `{ "i": input, "o": output }` token usage, **completion frame only** |
 
 Example:
 
@@ -205,8 +232,44 @@ scriptevent mcbews:text_resp {"id":"resp-1","i":1,"n":2,"p":"Steve","r":"assista
 scriptevent mcbews:text_resp {"id":"resp-1","i":2,"n":2,"p":"Steve","r":"assistant","c":"world"}
 ```
 
-The Addon caches chunks by `id`, reassembles after `1..n` arrive, and hands the
-full text to the presentation layer.
+The Addon keys every stream by player + normalized conversation bucket + response id
+(pre-CID frames use the compatibility bucket `default`), caches
+chunks by that key, validates metadata/duplicates/limits, reassembles after
+`1..n` arrive, and hands a typed complete message to the presentation layer.
+Unknown roles are rejected before UI/history handling. `role` may be
+`user`, `assistant`, or `approval`.
+
+## Session and approval control channels
+
+Trusted ToolPlayer chat is authenticated by the fixed sender
+`MCBEWS_BRIDGE`; the sender is transport identity only and is never used as
+the business player. Reserved channels are consumed by the SDK even when the
+sender is wrong, so forged session/approval/UI frames cannot fall through to
+ordinary host chat.
+
+Session requests use one atomic chat message:
+
+```text
+MCBEWS|SESSION|{"v":1,"request_id":"sess-1","action":"list","player_name":"Steve","cid":"chat-a"}
+```
+
+`action` is validated against the typed session operation set and
+action-specific `cid`/`sid` requirements. Responses use one atomic
+`scriptevent mcbews:session_resp <json>` command with the same
+`request_id`/`action`. A result that cannot fit the configured (default
+461-byte) budget is replaced
+by a parseable correlated error with code `SESSION_RESPONSE_TOO_LARGE`; the
+SDK never emits a fragment of session JSON.
+
+Approval decisions use typed JSON and include the business owner:
+
+```text
+MCBEWS|TOOL_APPROVE|{"v":1,"approval_id":"ap-1","player_name":"Steve","cid":"chat-a"}
+```
+
+The id-only allow/deny form remains a deprecated compatibility input; a Host
+must resolve it against exactly one unexpired pending record on the same
+connection. Claims for another player or conversation fail closed.
 
 ## Capability list (current baseline)
 
@@ -293,7 +356,7 @@ silent.
   or custom network path, so chat length and chunk order matter.
 - Python only intercepts bridge chunks on WebSocket `PlayerMessage` events, so
   the chat subscription path must be healthy.
-- Empirically safe MCBE `commandLine` byte budget is **461**; both directions
+- Empirically safe MCBE `commandLine` byte budget is **461** by default; both directions
   must validate real UTF-8 bytes.
   - Upstream (Addon → Python, chat-wrapped) default content code-point cap: 256
   - Downstream (Python → Addon, scriptevent/text) default controlled by
@@ -335,6 +398,9 @@ silent.
 - `registerBridgeRouter` — subscribe to `scriptEventReceive` and dispatch
   capability handlers
 - `responseSync` — subscribe to `mcbews:text_resp` and reassemble text frames
+- `protocol.ts` — generated manifest/version/limit/error/vector projection
+- `ResponseAssembler` — bounded UTF-8-aware text reassembly keyed by player,
+  conversation, and response
 
 ## Relation to the legacy protocol (mcbeai)
 

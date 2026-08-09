@@ -63,7 +63,8 @@ Python host
   -> MCBEWS_BRIDGE 模拟玩家聊天分片 (MCBEWS|UI_CHAT)
   -> WebSocket PlayerMessage
   -> Python 分片重组
-  -> hook.on_ui_chat_reassembled / EventBus UI_CHAT_REASSEMBLED
+  -> typed hook.on_ui_chat_reassembled(state, UiChatMessage) /
+     EventBus UI_CHAT_REASSEMBLED（保留 UiChatMessage.cid）
 ```
 
 ### 通道 C：Python -> Addon 文本响应下行（Text Response）
@@ -89,14 +90,35 @@ Python host
 
 | 角色 | Profile 字段 | Wire 值 |
 |---|---|---|
-| Bridge 请求 messageId | `bridge_request_message_id` | `mcbews:bridge_req` |
-| 文本响应 messageId | `response_message_id` | `mcbews:text_resp` |
-| Bridge 响应前缀 | `bridge_response_prefix` | `MCBEWS\|BRIDGE` |
-| UI Chat 前缀 | `ui_chat_prefix` | `MCBEWS\|UI_CHAT` |
-| 模拟玩家 | `bridge_sender` | `MCBEWS_BRIDGE` |
-| 请求体版本 | `request_version` | `2` |
+| Bridge 请求 messageId | `capability_request_script_event_id` | `mcbews:bridge_req` |
+| 文本响应 messageId | `text_response_script_event_id` | `mcbews:text_resp` |
+| Bridge 响应前缀 | `capability_response_chat_prefix` | `MCBEWS\|BRIDGE` |
+| UI Chat 前缀 | `ui_chat_chunk_prefix` | `MCBEWS\|UI_CHAT` |
+| 模拟玩家 | `trusted_bridge_player_name` | `MCBEWS_BRIDGE` |
+| Session 请求前缀 | `session_request_chat_prefix` | `MCBEWS\|SESSION` |
+| Session 响应 messageId | `session_response_script_event_id` | `mcbews:session_resp` |
+| Capability request schema | `capability_request_schema_version` | `2` |
 
-Python 与 Addon 必须保持上表完全一致。仓库通过 `tools/check_protocol_names.py` 做对齐与禁用 token 扫描。
+Python 与 Addon 必须保持上表完全一致。权威 manifest 与 executable vectors
+安装在 `mcbe_ws_sdk.profiles.mcbews_v1/{manifest.json,vectors.json}`，仓库通过
+`tools/check_protocol_names.py` 校验 reference Addon 投影。旧 Profile 名称仅保留
+一个迁移周期的只读 deprecated alias，不是独立配置。
+
+### 四个版本轴与边界
+
+MCBEWS/1 分开命名每个兼容轴：
+
+| 轴 | 值 | 含义 |
+|---|---:|---|
+| `capability_request_schema_version` | 2 | capability request JSON 结构 |
+| `session_schema_version` | 1 | typed session request/response 结构 |
+| `text_response_framing_version` | 1 | `id/i/n/p/r/c` 文本分帧 |
+| `ddui_persistence_version` | 2 | Addon UI 持久化格式 |
+
+实测完整 `commandLine` 安全预算默认为 461 个 UTF-8 字节；这是可配置的安全上限，部署
+可以进一步降低。上行聊天分片默认最多
+256 个 Unicode code point；文本响应重组最多 64 个 buffer、每响应 128 片、
+65,536 字节、总缓存 262,144 字节，TTL 为 30 秒。
 
 ## 请求格式（Python -> Addon）
 
@@ -156,7 +178,7 @@ Addon 侧错误码（响应 JSON 内）：
 - 前缀：`MCBEWS|UI_CHAT`
 - 单片格式：`MCBEWS|UI_CHAT|<msg_id>|<index>/<total>|<content>`
 - `<index>` 从 1 开始
-- `<content>` 是 JSON 字符串的片段，完整 JSON 结构为 `{"player": "<玩家名>", "message": "<聊天内容>"}`
+- `<content>` 是 JSON 字符串的片段，完整 JSON 结构为 `{"player": "<玩家名>", "message": "<聊天内容>", "cid": "<conversation>"}`
 - 分片同样由模拟玩家 `MCBEWS_BRIDGE` 发送；实现上通常使用仅自己可见的 tell 包装，避免真实玩家聊天刷屏
 
 示例（单分片）：
@@ -185,6 +207,9 @@ MCBEWS|UI_CHAT|ui-1744876800000-1|2/2|sage":"你好世界"}
 | `p` | 目标玩家名 |
 | `r` | 角色（如 `assistant`） |
 | `c` | 文本内容片段 |
+| `cid` | 对话 ID；存在时每帧重复 |
+| `t` | 可选响应标题；存在时每帧重复 |
+| `u` | `{ "i": 输入, "o": 输出 }` token 用量，**只允许完成帧** |
 
 示例：
 
@@ -193,7 +218,36 @@ scriptevent mcbews:text_resp {"id":"resp-1","i":1,"n":2,"p":"Steve","r":"assista
 scriptevent mcbews:text_resp {"id":"resp-1","i":2,"n":2,"p":"Steve","r":"assistant","c":"世界"}
 ```
 
-Addon 按 `id` 缓存分片，收齐 `1..n` 后重组为完整文本并回调展示层。
+Addon 按玩家 + 归一化对话 bucket + response id 为所有流建立 key；缺少 CID 的
+旧帧使用兼容 bucket `default`，再校验 metadata、重复片段与
+缓存边界，收齐 `1..n` 后重组 typed 完整消息并回调展示层。未知 role 在进入
+UI/history 前拒绝；允许 `user`、`assistant`、`approval`。
+
+## Session 与 approval 控制通道
+
+可信 ToolPlayer 聊天入口统一校验固定 sender `MCBEWS_BRIDGE`；sender 只表示传输
+身份，绝不作为业务玩家。即便 sender 错误，SDK 也会消费保留前缀，伪造的
+session/approval/UI 帧不会落入普通宿主聊天。
+
+Session 请求使用单条原子聊天消息：
+
+```text
+MCBEWS|SESSION|{"v":1,"request_id":"sess-1","action":"list","player_name":"Steve","cid":"chat-a"}
+```
+
+`action` 及其 `cid`/`sid` 参数由 typed schema 校验。响应使用单条原子
+`scriptevent mcbews:session_resp <json>`，并保持 `request_id`/`action` 关联。
+结果超出配置的（默认 461 字节）预算时，替换为仍可解析的关联错误
+`SESSION_RESPONSE_TOO_LARGE`；SDK 不会发送 session JSON 碎片。
+
+Approval decision 使用携带业务 owner 的 typed JSON：
+
+```text
+MCBEWS|TOOL_APPROVE|{"v":1,"approval_id":"ap-1","player_name":"Steve","cid":"chat-a"}
+```
+
+仅 id 的 allow/deny 形式仍作为 deprecated 兼容输入；宿主必须在同一连接内通过
+唯一且未过期的 pending record 反查。跨玩家或跨对话 claim 必须 fail closed。
 
 ## 能力清单（当前基线）
 
@@ -259,7 +313,7 @@ Python codec 在以下情况抛出错误（`ValueError`，消息语义如下）�
 - 脚本侧可通过 `ScriptEventCommandMessageAfterEvent` 读取 `id` 与 `message`，因此保留显式命名空间路由 `mcbews:bridge_req` / `mcbews:text_resp`。
 - 当前 Addon -> Python 回传依赖聊天通道，而不是独立二进制或自定义网络通道，因此需要考虑聊天消息长度与分片顺序问题。
 - Python 侧只会在 WebSocket `PlayerMessage` 事件中拦截桥接分片，所以聊天事件订阅链路必须正常。
-- MCBE `commandLine` 实测安全字节上限为 **461**；上下行分片都必须做真实 UTF-8 字节校验。
+- MCBE `commandLine` 实测默认安全预算为 **461**；上下行分片都必须做真实 UTF-8 字节校验，部署可以降低该预算。
   - 上行（Addon -> Python，聊天包装）默认单分片内容 code-point 上限：256
   - 下行（Python -> Addon，scriptevent/文本）默认由 `FlowControlSettings.max_chunk_content_length` 控制（默认 400）
 - 文本响应流控 delay kind 为 `text_resp`（旧 delay kind 已废弃，见文末迁移表）。
@@ -293,6 +347,8 @@ Python codec 在以下情况抛出错误（`ValueError`，消息语义如下）�
 - UI Chat 发送路径：驱动 `MCBEWS_BRIDGE` 发送 UI Chat 消息
 - `registerBridgeRouter`：订阅 `scriptEventReceive` 并分派 capability handler
 - `responseSync`：订阅 `mcbews:text_resp` 并重组文本响应帧
+- `protocol.ts`：manifest/version/limit/error/vector 的生成投影
+- `ResponseAssembler`：按玩家、对话、response key 建立有界 UTF-8 文本重组
 
 ## 与旧协议（mcbeai）的关系
 

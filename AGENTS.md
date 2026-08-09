@@ -4,7 +4,7 @@ This file provides guidance to Coding Agent when working with code in this repos
 
 ## Project Overview
 
-`mcbe-ws-sdk` is a **generic, independently publishable** WebSocket gateway SDK for Minecraft Bedrock Edition. It was extracted from the parent MCBE-AI-Agent monorepo and deliberately owns **only** the WS transport, packet protocol, byte-safe command chunking, and addon bridge — no message broker, no LLM worker, no provider selection. The parent host application injects behaviour through two protocols: `ConnectionHook` and `ResponseSink`.
+`mcbe-ws-sdk` is a **generic, independently publishable** WebSocket gateway SDK for Minecraft Bedrock Edition. It was extracted from the parent MCBE-AI-Agent monorepo and deliberately owns **only** the WS transport, packet protocol, byte-safe command chunking, and addon bridge — no message broker, no LLM worker, no provider selection. The parent host application injects behaviour through `ConnectionHook` and `ResponseSink`; authenticated session/approval DTOs use the optional `AddonControlHook` callback.
 
 - **Python**: 3.11+ (tested 3.11–3.14)
 - **Build**: hatchling (wheel + sdist)
@@ -64,10 +64,10 @@ McbeServerFacade          ← host entry point; owns the full WS lifetime
 ├── MinecraftProtocolHandler  ← parse PlayerMessage, resolve typed commands, render status lines
 │   └── CommandRegistry   ← prefix/alias → type matcher (host configures)
 ├── EventBus              ← typed in-process pub/sub keyed by WsEventType
-├── ConnectionHook        ← protocol with 6 lifecycle hooks (host implements)
+├── ConnectionHook        ← six typed lifecycle hooks (host implements)
 ├── AddonBridgeService    ← ScriptEvent bridge: capability request/response with chunk reassembly
 │   └── AddonBridgeSession ← per-connection pending futures + chunk buffers
-├── FlowControlMiddleware  ← byte-safe tellraw/scriptevent chunking (461 B MCBE hard limit)
+├── FlowControlMiddleware  ← byte-safe tellraw/scriptevent chunking (461 B empirical default ceiling)
 └── McbeOutboundDelivery   ← unified outbound adapter (tellraw, scriptevent, raw, legacy v1)
 ```
 
@@ -85,7 +85,7 @@ facade = McbeServerFacade(
 )
 ```
 
-The host implements `ConnectionHook` (6 side-effecting hooks, all `-> None`: `on_connected`, `on_disconnected`, `on_player_message(state, event, parsed=None)`, `on_ui_chat_reassembled`, `on_command_response`, `on_error`) and a `ResponseSink` (routes `OutboundText` / `SystemNotification` → MC commands via `McbeOutboundDelivery`). `parsed` is an optional pre-parsed `ParsedCommand` from the registry, not a consumed-bool return. `NoOpHook` and `DefaultResponseSink` define the complete contract; a host subclasses only what it needs.
+The host implements `ConnectionHook` (6 side-effecting typed hooks, all `-> None`: `on_connected`, `on_disconnected`, `on_player_message(state, event, parsed=None)`, `on_ui_chat_reassembled(state, UiChatMessage)`, `on_command_response`, `on_error`) and a `ResponseSink` (routes `OutboundText` / `SystemNotification` → MC commands via `McbeOutboundDelivery`). Authenticated session/approval input uses the optional `AddonControlHook.on_addon_control_message(state, ToolPlayerMessage)` callback. The old three-argument UI callback is available only through the explicit `LegacyUiChatHookAdapter`; it is not part of the typed hook. `parsed` is an optional pre-parsed `ParsedCommand` from the registry, not a consumed-bool return. `NoOpHook` and `DefaultResponseSink` define the complete contract; a host subclasses only what it needs.
 
 There is **no** SDK-owned `PlayerSession`. Multiplayer isolation is a **host** concern: bucket history / locks / context by `(connection_id, sender)` using `PlayerMessageEvent.sender`. `ConnectionState.player_name` is a deprecated convenience pointer only.
 
@@ -102,11 +102,11 @@ There is **no** SDK-owned `PlayerSession`. Multiplayer isolation is a **host** c
 
 ### Protocol profiles
 
-Protocol profiles live under `profiles/` and define wire-format constants for different addon interop layers. `McbewsV1Profile` is the sole built-in profile (module-level singleton `MCBEWS_V1`). The profile controls bridge message IDs, chat prefixes, simulated player name, chunk delays, and the text-response frame format (`mcbews:text_resp`). `AddonBridgeSettings` carries the profile reference so the addon service stays parameterised.
+`McbewsV1Profile` is the sole concrete runtime profile (module-level singleton `MCBEWS_V1`). Installed `manifest.json`/`vectors.json` are authoritative; `protocol.ts` and the test fixture are deterministic generated projections. Wire identifiers, schema axes and safety bounds cannot be overridden. The empirical command budget is 461 by default and may only be lowered per deployment; response delays remain operational settings. `AddonBridgeProfile` is a deprecated type alias, not a runtime profile seam.
 
-### Flow control — 461 B hard limit
+### Flow control — 461 B empirical ceiling
 
-`FlowControlMiddleware` enforces the MCBE `commandLine` byte budget (461 bytes, empirically determined). Methods:
+`FlowControlMiddleware` enforces the configured MCBE `commandLine` byte budget (default 461 bytes, empirically determined; deployments may lower it). Methods:
 - `chunk_tellraw()` / `chunk_scriptevent()` — semantically-aware sentence splitting with byte-safety guard
 - `chunk_raw_command()` — no semantic splitting; raises `FrameTooLargeError` on overflow
 - `chunk_framed_scriptevent()` — two-pass: split then re-encode with `i/n` index metadata
@@ -114,7 +114,7 @@ Protocol profiles live under `profiles/` and define wire-format constants for di
 
 ### Addon bridge protocol
 
-The bridge carries structured capability requests/responses over `scriptevent` via a simulated bridge player (`MCBEWS_BRIDGE`). Messages are piped through chat with a `namespace|prefix|request_id|index/total|content` format (`MCBEWS|BRIDGE`, `MCBEWS|UI_CHAT`). `AddonBridgeSession` handles chunk reassembly with TTL-based buffer expiry, byte limits, and per-connection future management. There is no global singleton — `AddonBridgeService` instances are constructed with explicit `AddonBridgeSettings`.
+The bridge carries structured capability requests/responses over `scriptevent` via a simulated bridge player (`MCBEWS_BRIDGE`). Messages are piped through chat with a `namespace|prefix|request_id|index/total|content` format (`MCBEWS|BRIDGE`, `MCBEWS|UI_CHAT`). `AddonBridgeSession` handles chunk reassembly with TTL-based buffer expiry, byte limits, and per-connection future management. UI Chat callbacks receive typed `UiChatMessage` including `cid`; text-response usage appears only on the final frame; v1 session responses are atomic and return correlated `SESSION_RESPONSE_TOO_LARGE` errors. There is no global singleton — `AddonBridgeService` instances are constructed with explicit `AddonBridgeSettings`.
 
 **World requirement:** the companion Script addon only loads when the Bedrock world has **Experiments → Beta APIs** enabled. Without it, scripts never load and capability requests time out. Document this whenever writing enable/import steps for the addon. See `addon/README.md` (Enable in a world).
 
@@ -133,7 +133,7 @@ The SDK never imports from its parent repo. `ConnectionState.send_payload` is an
 | `src/mcbe_ws_sdk/gateway/connection.py` | `ConnectionManager` + `ConnectionState` — per-connection queues and sender coroutines |
 | `src/mcbe_ws_sdk/gateway/handler.py` | `MinecraftProtocolHandler` — packet parsing, command resolution, status rendering |
 | `src/mcbe_ws_sdk/gateway/events.py` | `EventBus` + `WsEventType` — typed in-process pub/sub |
-| `src/mcbe_ws_sdk/gateway/hook.py` | `ConnectionHook` protocol + `NoOpHook` default (6 lifecycle hooks) |
+| `src/mcbe_ws_sdk/gateway/hook.py` | typed `ConnectionHook`, optional `AddonControlHook`, explicit legacy UI adapter + `NoOpHook` |
 | `src/mcbe_ws_sdk/gateway/sink.py` | `ResponseSink` protocol + `DefaultResponseSink` + `RouteEnvelope` |
 | `src/mcbe_ws_sdk/gateway/messages.py` | `OutboundText` / `SystemNotification` value objects |
 | `src/mcbe_ws_sdk/delivery/outbound.py` | `McbeOutboundDelivery` — unified tellraw/scriptevent/raw send adapter |
@@ -157,4 +157,5 @@ The SDK never imports from its parent repo. `ConnectionState.send_payload` is an
 - **docs** — `mkdocs build --strict` (Material + mkdocstrings + static-i18n, EN/中文); uploads `docs-site` artifact
 - **docs-pages** — on `main` (docs/src/mkdocs paths) or `workflow_dispatch`: build + deploy to GitHub Pages (`https://rice-awa.github.io/mcbe-ws-sdk/`)
 - **dist** — build sdist+wheel, twine check, check_dist, verify import (gated on all prior jobs)
+- **contract** — install the built wheel in an isolated venv outside the checkout and run manifest/vector public/codec probes
 - **release** — tag-triggered; verifies release tag matches package version

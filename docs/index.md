@@ -3,7 +3,8 @@
 Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
 
 It owns the **WS transport**, **packet protocol**, and **byte-safe command
-chunking** (461-byte hard limit). Your host injects behaviour through two
+chunking** (461-byte empirically measured default ceiling; deployments may lower
+it). Your host injects behaviour through two
 protocols — `ConnectionHook` and `ResponseSink` — and drives the stack with
 `McbeServerFacade`.
 
@@ -32,6 +33,10 @@ receives responses. There is **no inbound capability-registry dispatch** — the
 addon side owns all capability handling.
 
 The sole built-in protocol profile is `McbewsV1Profile` (`MCBEWS_V1`).
+
+`ConnectionHook` exposes six typed lifecycle hooks; UI chat uses
+`on_ui_chat_reassembled(state, UiChatMessage)`. Authenticated session/approval
+frames use the optional `AddonControlHook` callback.
 
 ## Dual interface
 

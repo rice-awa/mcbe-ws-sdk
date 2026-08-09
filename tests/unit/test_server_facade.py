@@ -119,10 +119,9 @@ class RecordingHook(NoOpHook):
     async def on_ui_chat_reassembled(
         self,
         state: ConnectionState,
-        player_name: str,
-        message: str,
+        message: UiChatMessage,
     ) -> None:
-        self.ui_chat_reassembled.append((player_name, message))
+        self.ui_chat_reassembled.append((message.player_name, message.message))
 
     async def on_command_response(
         self,
@@ -477,8 +476,7 @@ class FailingUiHook(RecordingHook):
     async def on_ui_chat_reassembled(
         self,
         state: ConnectionState,
-        player_name: str,
-        message: str,
+        message: UiChatMessage,
     ) -> None:
         raise LookupError("callback failed")
 
