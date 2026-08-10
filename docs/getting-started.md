@@ -48,7 +48,7 @@ Verify:
 python -c "import mcbe_ws_sdk; print(mcbe_ws_sdk.__version__)"
 ```
 
-A version string (e.g. `0.2.0`) means install succeeded.
+A version string (e.g. `0.2.1`) means install succeeded.
 
 ---
 

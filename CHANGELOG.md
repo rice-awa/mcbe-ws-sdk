@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Accept an explicitly supplied `cid="default"` for session `switch` requests while
+  continuing to reject omitted or blank targets.
+- Add the `session-switch-default` MCBEWS/1 conformance vector and regenerate the
+  reference Addon projection and Python fixture.
+
 ## 0.2.0
 
 - Make MCBEWS/1 manifest, semantic version axes, stable error codes and wire

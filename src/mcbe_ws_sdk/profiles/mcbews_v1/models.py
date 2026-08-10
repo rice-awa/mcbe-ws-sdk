@@ -114,7 +114,7 @@ class SessionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_action_parameters(self) -> SessionRequest:
-        if self.action == "switch" and self.conversation_id == "default":
+        if self.action == "switch" and "conversation_id" not in self.model_fields_set:
             raise ValueError("switch requires cid")
         if self.action in {"restore", "delete"} and not self.saved_session_id:
             raise ValueError(f"{self.action} requires sid")
