@@ -2,7 +2,7 @@
 
 # MCBE WS Bridge Addon
 
-This reference Addon is released with `mcbe-ws-sdk` `0.2.0`. Its
+This reference Addon is released with `mcbe-ws-sdk` `0.2.1`. Its
 `scripts/bridge/protocol.ts` projection is checked against the installed
 Python manifest and wire vectors; update both sides through the SDK contract.
 

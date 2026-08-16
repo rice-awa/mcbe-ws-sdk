@@ -2,7 +2,7 @@
 
 # MCBE WS Bridge Addon
 
-此 reference Addon 与 `mcbe-ws-sdk` `0.2.0` 一起发布。`scripts/bridge/protocol.ts`
+此 reference Addon 与 `mcbe-ws-sdk` `0.2.1` 一起发布。`scripts/bridge/protocol.ts`
 是 Python manifest 与 wire vectors 的校验投影；协议变更必须通过 SDK 契约同步两端。
 
 极简的 Minecraft Bedrock WebSocket 桥接 addon —— `mcbe-ws-sdk` Python 包的 TypeScript 对等实现。本 addon 负责协议层：

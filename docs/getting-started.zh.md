@@ -47,7 +47,7 @@ pip install -e ".[dev,docs]"
 python -c "import mcbe_ws_sdk; print(mcbe_ws_sdk.__version__)"
 ```
 
-能打印版本号（例如 `0.2.0`）就说明安装成功。
+能打印版本号（例如 `0.2.1`）就说明安装成功。
 
 ---
 

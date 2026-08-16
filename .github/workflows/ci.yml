@@ -110,7 +110,7 @@ jobs:
           )
           from mcbe_ws_sdk.profiles.mcbews_v1.models import SessionRequest
 
-          assert mcbe_ws_sdk.__version__ == "0.2.0"
+          assert mcbe_ws_sdk.__version__ == "0.2.1"
           assert MCBEWS_V1_MANIFEST["protocol_line"] == "MCBEWS/1"
           assert set(MCBEWS_V1_WIRE_VECTORS["behavior"]) == {"chunking", "text_response"}
           request = SessionRequest(request_id="wheel-1", action="list", player_name="Steve")

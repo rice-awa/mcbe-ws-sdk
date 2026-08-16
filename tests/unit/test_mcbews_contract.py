@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import warnings
+from uuid import UUID
 
 import pytest
 
-from mcbe_ws_sdk.config import FlowControlSettings
+from mcbe_ws_sdk.addon.service import AddonBridgeService
+from mcbe_ws_sdk.config import AddonBridgeSettings, FlowControlSettings
 from mcbe_ws_sdk.errors import FrameTooLargeError, ProtocolError
 from mcbe_ws_sdk.flow import FlowControlMiddleware
 from mcbe_ws_sdk.profiles.mcbews_v1 import (
@@ -152,6 +154,68 @@ def test_session_response_oversize_is_one_correlated_error() -> None:
 def test_session_request_typed_validation_rejects_missing_action_data() -> None:
     with pytest.raises(ValueError, match="switch requires cid"):
         SessionRequest(request_id="s1", action="switch", player_name="Steve")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"cid": "default"},
+        {"conversation_id": "default"},
+    ],
+)
+def test_session_switch_explicit_default_is_valid_for_both_field_names(
+    payload: dict[str, str],
+) -> None:
+    request = SessionRequest(
+        request_id="s-default",
+        action="switch",
+        player_name="Steve",
+        **payload,
+    )
+
+    assert request.conversation_id == "default"
+    assert "conversation_id" in request.model_fields_set
+
+
+def test_session_switch_requires_explicit_non_blank_cid() -> None:
+    with pytest.raises(ValueError, match="switch requires cid"):
+        SessionRequest(request_id="s-missing", action="switch", player_name="Steve")
+    with pytest.raises(ValueError, match="value must not be empty"):
+        SessionRequest(request_id="s-blank", action="switch", player_name="Steve", cid=" \t")
+
+
+@pytest.mark.asyncio
+async def test_user_session_switch_default_frame_is_typed_control_message() -> None:
+    service = AddonBridgeService(AddonBridgeSettings())
+    message = (
+        'MCBEWS|SESSION|{"request_id":"sess-1786357953879-1881","v":1,'
+        '"action":"switch","player_name":"fantong7038","cid":"default"}'
+    )
+
+    result = await service.handle_player_message(
+        UUID(int=99),
+        "MCBEWS_BRIDGE",
+        message,
+    )
+
+    assert result.handled is True
+    assert result.control_message is not None
+    assert result.control_message.channel == "session"
+    assert result.control_message.session_request is not None
+    assert result.control_message.session_request.player_name == "fantong7038"
+    assert result.control_message.session_request.conversation_id == "default"
+
+
+def test_session_vectors_include_explicit_default_switch() -> None:
+    vector = next(
+        item
+        for item in MCBEWS_V1_WIRE_VECTORS["session"]
+        if item["name"] == "session-switch-default"
+    )
+    assert vector["request"] == (
+        '{"request_id":"sess-default","v":1,"action":"switch",'
+        '"player_name":"Steve","cid":"default"}'
+    )
 
 
 def test_complete_behavior_vectors_cover_bounds_duplicates_and_empty_wrappers() -> None:
