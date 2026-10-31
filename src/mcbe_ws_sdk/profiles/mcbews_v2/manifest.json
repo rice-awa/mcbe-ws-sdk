@@ -1,0 +1,131 @@
+{
+  "protocol": "MCBEWS/2",
+  "fields": {
+    "common": {
+      "required": [
+        "v",
+        "kind"
+      ],
+      "optional": [
+        "meta"
+      ],
+      "unknown": "reject"
+    },
+    "request": {
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "forbidden": [
+        "result",
+        "error"
+      ]
+    },
+    "response": {
+      "required": [
+        "id"
+      ],
+      "exclusive": [
+        "result",
+        "error"
+      ],
+      "forbidden": [
+        "method",
+        "params"
+      ]
+    },
+    "notification": {
+      "required": [
+        "method",
+        "params"
+      ],
+      "forbidden": [
+        "id",
+        "result",
+        "error"
+      ]
+    }
+  },
+  "id_pattern": "[pa].[A-Za-z0-9_-]{1,24}.[1-9][0-9]{0,9}",
+  "method_pattern": "[A-Za-z][A-Za-z0-9_.:-]{0,63}",
+  "token_pattern": "[A-Za-z0-9_/-]{1,64}",
+  "metadata": {
+    "reserved": [
+      "sdk.trace_id",
+      "sdk.identity",
+      "sdk.capabilities"
+    ],
+    "unknown": "preserve recursively",
+    "identity": "untrusted; never authorizes",
+    "capabilities": "unique <=16 tokens; stream/1 reserved, not implemented"
+  },
+  "errors": [
+    "MALFORMED_JSON",
+    "UNSUPPORTED_VERSION",
+    "INVALID_MESSAGE",
+    "LIMIT_EXCEEDED",
+    "INVALID_FRAGMENT",
+    "FRAGMENT_CONFLICT",
+    "UNSUPPORTED_METHOD",
+    "INVALID_PARAMS",
+    "HANDLER_FAILED",
+    "CANCELLED",
+    "TIMEOUT"
+  ],
+  "carrier": {
+    "event": "mcbews:packet_v2",
+    "prefix": "MCBEWS2",
+    "frame": "MCBEWS2|sender.session.sequence|index/total|content"
+  },
+  "limits": {
+    "command_bytes": 461,
+    "upstream_code_points": 256,
+    "upstream_bytes": 1024,
+    "chunks": 1024,
+    "message_bytes": 65536,
+    "metadata_bytes": 4096,
+    "depth": 16,
+    "source_bytes": 131072,
+    "source_buffers": 16,
+    "connection_bytes": 262144,
+    "connection_buffers": 64,
+    "global_bytes": 1048576,
+    "global_buffers": 256,
+    "ttl_ms": 30000,
+    "tombstones": 2048
+  },
+  "types": {
+    "v": "literal MCBEWS/2",
+    "kind": "request | response | notification",
+    "id": "ASCII id_pattern string",
+    "method": "ASCII method_pattern string",
+    "params": "JSON value",
+    "result": "JSON value",
+    "meta": "JSON object",
+    "error": {
+      "required": {
+        "code": "errors enum string",
+        "message": "scalar string <=256 UTF-8 bytes"
+      },
+      "optional": {
+        "data": "JSON value"
+      },
+      "unknown": "reject"
+    }
+  },
+  "json": {
+    "numbers": "finite safe integers only, abs <=9007199254740991",
+    "strings": "Unicode scalar values",
+    "duplicate_keys": "last value",
+    "depth": "root depth 0, maximum 16"
+  },
+  "state": {
+    "request": "request -> one response; response echoes initiator id",
+    "notification": "no logical id or response",
+    "transport": "fresh sender-owned id; all indexes then decode; duplicate identical ignored, conflict drops",
+    "reconnect": "fresh epoch, no replay",
+    "cleanup": "30000ms idle expiry; completion/conflict/overflow/cancel/expiry tombstone for 30000ms; disconnect clears connection",
+    "tombstone_capacity": "active IDs + tombstones <=2048; reject new IDs when full"
+  }
+}
