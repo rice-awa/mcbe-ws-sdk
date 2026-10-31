@@ -10,6 +10,9 @@ import type {
   RegisterCapabilityOptions,
 } from "./capabilityRegistry";
 import { utf8ByteLength } from "./chunking";
+import { MANIFEST as V2_MANIFEST } from "./v2/assets";
+import { V2Endpoint } from "./v2/runtime";
+import { ReassemblyPool } from "./v2/transport";
 
 export type {
   CapabilityContext,
@@ -72,6 +75,9 @@ let processingTail: Promise<void> = Promise.resolve();
 let lastResponseSendOutcome: ResponseSendOutcome | null = null;
 let activePending = 0;
 let droppedActiveRequests = 0;
+const v2Pool = new ReassemblyPool();
+let v2Endpoint: V2Endpoint | null = null;
+let v2Pruner: number | null = null;
 
 export const MAX_PRE_READY_REQUESTS = 64;
 export const MAX_ACTIVE_REQUESTS = 64;
@@ -205,6 +211,12 @@ function schedule(event: RouterEvent): void {
 }
 
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
+  if (event.id === V2_MANIFEST.carrier.event) {
+    if (bridgeActive && v2Endpoint) {
+      void v2Endpoint.receive(event.message, event.sourceType).catch(logUnexpectedRouterFailure);
+    }
+    return;
+  }
   if (!shouldHandleScriptEvent(event.id)) return;
 
   // IMPORTANT: /wsserver commandRequest-scriptevent does NOT always arrive as
@@ -256,6 +268,31 @@ export async function activateBridge(sender: ResponseSender): Promise<void> {
     if (event) schedule(event);
   }
   await processingTail;
+}
+
+/** Activate an explicitly agreed v2 epoch without changing the legacy router. */
+export function activateV2Bridge(epoch: string, send: (frame: string) => Promise<void>): V2Endpoint {
+  if (v2Endpoint) throw new Error("v2 bridge already active");
+  v2Endpoint = new V2Endpoint({
+    epoch,
+    registry: capabilityRegistry,
+    pool: v2Pool,
+    send,
+    timeout: (callback) => {
+      const handle = system.runTimeout(callback, 100);
+      return () => system.clearRun(handle);
+    },
+    dispatch: async (method, payload, context) => {
+      if (!capabilityHandler) return capabilityRegistry.dispatch(method, payload, context);
+      try {
+        return await capabilityHandler(method, payload, context);
+      } catch {
+        return { ok: false, error: { code: "CAPABILITY_FAILED", message: "capability handler failed" } };
+      }
+    },
+  });
+  if (v2Pruner === null) v2Pruner = system.runInterval(() => v2Pool.prune(), 100);
+  return v2Endpoint;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +441,10 @@ export function _testingGetLastResponseSendOutcome(): ResponseSendOutcome | null
 
 /** @internal */
 export function _testingReset(): void {
+  v2Endpoint?.close();
+  v2Endpoint = null;
+  if (v2Pruner !== null) system.clearRun(v2Pruner);
+  v2Pruner = null;
   preReadyQueue.length = 0;
   responseSender = null;
   capabilityHandler = null;

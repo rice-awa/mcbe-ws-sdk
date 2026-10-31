@@ -3,7 +3,7 @@
 Installed profiles/mcbews_v2/manifest.json and vectors.json are authoritative.
 A separate interaction protocol inspired by JSON-RPC, this is not JSON-RPC compatible.
 MCBEWS/1 assets, identifiers, imports, constructors and default routing stay unchanged.
-Facade routing and negotiation await R12/R13; continuous streams await R14.
+The v2 runtime is opt-in; negotiation and continuous streams are separate stages.
 
 ## Logical messages
 
@@ -80,9 +80,8 @@ arrays save no commands here, require a presence mask to distinguish absent fiel
 null, and complicate validation/extensions. These are deterministic byte costs, not
 latency or game measurements. Actual planners may use shorter headers.
 
-Existing caller/facade remains v1. Explicit standalone v2 modules support codec/carrier
-building blocks on both ends. V2 to v1 is unsupported with no automatic metadata loss.
-Routing, negotiation and streaming remain future tasks.
+Existing caller/facade defaults remain v1. The explicit v2 bridge requires reliable
+dispatch and an agreed epoch. It never silently drops metadata into a v1 request.
 
 ## Standalone integration points
 
@@ -91,6 +90,15 @@ downstream_payloads, send_downstream(existing_scheduler, ...), ReassemblyPool.
 TypeScript: bridge/v2/codec and bridge/v2/transport export the matching codec,
 fragment, sendUpstream and ReassemblyPool. Send loops await one scheduled frame at a
 time, preserve ordering and stop on failure/cancellation; no unbounded task chain.
-R12 must pass trusted attribution, share the pool, tick prune, cancel transfers and
-close on disconnect; R13 must enforce fresh negotiated epochs and reject old frames.
-The pool itself performs no negotiation, application dispatch or identity verification.
+Create `V2Bridge`, pass it as `v2` to a reliable `McbeServerFacade`, and explicitly
+activate an agreed epoch with `bridge.activate(state, epoch=...)`. Register Python
+handlers on `bridge.registry`; use the returned endpoint's `request` and `notify`.
+The addon router exposes `activateV2Bridge` and the existing capability registry.
+The endpoint rejects a new call while its method's ordering group is active, or when
+business capacity is exhausted. This allows reverse calls to other groups without
+waiting on a group already held by an ancestor. Notifications receive no error reply.
+
+Handlers receive transport attribution separately from metadata. Metadata identity
+is untrusted; callers cannot set reserved `sdk.*` keys and may supply a trace ID
+through the dedicated argument. Responses retain metadata. Disconnect fails waiters
+and releases the connection's fragments; idle partial messages expire by TTL.

@@ -51,7 +51,7 @@ FRAME=MCBEWS2|发送方.session.sequence|index/total|content。只在Unicode标�
 通知238/217，错误217/213，最长编号250/231，4096字节meta 5189/5168（均12命令）；
 其余均1命令。选择对象JSON：数组未减少命令数，还需存在位掩码区分缺失/null，验证扩展更复杂。
 这是确定性字节实验，不是时延或实机结论；真实分片器可用更短头部。
-旧入口继续v1；双端显式v2模块可编解码重组；对旧端明确不支持，不静默丢元数据降级。
+旧入口默认继续使用v1；显式v2桥需要可靠分发与双方约定的epoch，不静默丢弃元数据降级。
 
 ## 独立接入点
 
@@ -59,5 +59,13 @@ Python：profiles.mcbews_v2.codec 的 encode/decode；transport 的 fragment、
 downstream_payloads、send_downstream（使用现有连接scheduler）和ReassemblyPool。
 TS：bridge/v2/codec、transport 的对应函数、sendUpstream与ReassemblyPool。
 发送循环每次等待一片、失败/取消停止余片，不建立无界任务链。
-R12负责可信归属、共享pool、tick prune、取消/断连清理；R13负责新epoch协商和旧帧拒绝。
-pool本身不协商、不分发业务、不验证身份。
+创建 `V2Bridge` 并作为 `v2` 传给可靠模式的 `McbeServerFacade`，再用
+`bridge.activate(state, epoch=...)` 显式启用约定的 epoch。Python 处理器注册到
+`bridge.registry`，通过返回的 endpoint 调用 `request` 和 `notify`。附加包路由提供
+`activateV2Bridge` 和现有能力注册表。
+
+同一方法的顺序组正在处理时，新调用会被拒绝；业务容量耗尽时也会拒绝。不同组允许
+反向调用，不等待祖先已占用的组。通知不产生错误回复。处理器收到独立的传输归属与
+元数据；元数据身份不可信。调用方不能设置保留的 `sdk.*` 键，可通过专用参数传入
+trace ID。回复保留元数据。断连会失败所有等待请求并释放该连接的分片；空闲未完成
+消息按 TTL 过期。

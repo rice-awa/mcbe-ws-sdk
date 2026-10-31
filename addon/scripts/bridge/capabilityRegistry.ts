@@ -1,8 +1,16 @@
 /** Name-based capability registry shared by the router and hosts. */
 
 export type CapabilityContext = {
-  caller: { kind: "server" };
+  caller: { kind: "server"; source?: string };
   requestVersion: 1 | 2;
+  metadata?: Record<string, unknown>;
+  client?: V2CapabilityClient;
+};
+
+export type V2CallOptions = { metadata?: Record<string, unknown>; traceId?: string };
+export type V2CapabilityClient = {
+  request(method: string, params: unknown, options?: V2CallOptions): Promise<Record<string, unknown>>;
+  notify(method: string, params: unknown, options?: V2CallOptions): Promise<void>;
 };
 
 export type CapabilityHandler = (

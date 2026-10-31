@@ -73,6 +73,13 @@ export async function sendBridgeResponseChunks(requestId: string, payload: strin
   log(`sendBridgeResponseChunks: channel=capability, requestId=${requestId}, status=done`);
 }
 
+/** Send one already bounded v2 carrier frame through the bridge player. */
+export async function sendV2Frame(frame: string): Promise<void> {
+  const player = world.getAllPlayers().find((entry) => entry.name === TRUSTED_BRIDGE_PLAYER_NAME);
+  if (!player) throw new Error("Tool player is not available");
+  await player.runCommand(`tell @s ${frame}`);
+}
+
 export function initializeToolPlayer(): void {
   log("initializeToolPlayer: 开始初始化...");
 

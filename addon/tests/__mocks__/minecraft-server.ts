@@ -115,6 +115,8 @@ export const system = {
     scheduledRuns.push(callback);
   }),
   runInterval: vi.fn(),
+  runTimeout: vi.fn().mockReturnValue(1),
+  clearRun: vi.fn(),
 };
 
 // ---------------------------------------------------------------------------
@@ -129,4 +131,6 @@ export function resetMinecraftMocks(): void {
   world.getPlayers.mockReset().mockReturnValue([]);
   world.getDimension.mockReset();
   system.runInterval.mockReset();
+  system.runTimeout.mockReset().mockReturnValue(1);
+  system.clearRun.mockReset();
 }

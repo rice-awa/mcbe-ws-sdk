@@ -4,17 +4,19 @@ Maps a capability name to one validator and one handler. Dispatch captures the
 current entry, runs the validator before the handler, and returns structured
 errors for unknown names, invalid input, and handler failures.
 
-Inbound addon capability frames are not routed here yet; that wire path is R12.
 """
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from typing import Any, TypeAlias
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from mcbe_ws_sdk.errors import CapabilityAlreadyRegisteredError
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.profiles.mcbews_v2.runtime import V2Endpoint
 
 UNSUPPORTED_CAPABILITY = "UNSUPPORTED_CAPABILITY"
 INVALID_REQUEST = "INVALID_REQUEST"
@@ -27,6 +29,9 @@ class CapabilityContext:
 
     caller: str = "internal"
     request_version: int = 1
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    connection_id: str | None = None
+    client: V2Endpoint | None = None
 
 
 CapabilityPayload: TypeAlias = Mapping[str, Any]

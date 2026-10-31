@@ -53,6 +53,7 @@ class ConnectionRuntime:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.connection_id = connection_id
+        self.command_line_byte_budget = flow.command_line_byte_budget
         self.diagnostics = diagnostics
         self.business = BusinessDispatcher(
             connection_id=connection_id,

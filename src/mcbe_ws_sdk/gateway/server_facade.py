@@ -76,6 +76,8 @@ from mcbe_ws_sdk.tracing import TraceContext, current_trace, observe, trace_scop
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
+    from mcbe_ws_sdk.profiles.mcbews_v2.runtime import V2Bridge
+
 logger = structlog.get_logger(__name__)
 
 
@@ -99,9 +101,11 @@ class McbeServerFacade:
         surface: MessageSurfaceConfig | None = None,
         diagnostics: DiagnosticSettings | None = None,
         diagnostic_observers: tuple[DiagnosticObserver, ...] = (),
+        v2: V2Bridge | None = None,
     ) -> None:
         self._diagnostic_settings = diagnostics
         self._diagnostic_observers = diagnostic_observers
+        self._v2 = v2
         self._settings = settings if settings is not None else GatewaySettings()
         self._hook = hook if hook is not None else NoOpHook()
         self._legacy_ui_chat_hook = (
@@ -266,6 +270,8 @@ class McbeServerFacade:
         except Exception:
             logger.exception("connection_error", connection_id=str(state.id))
         finally:
+            if self._v2 is not None:
+                self._v2.close(state.id)
             if self._addon is not None:
                 try:
                     self._addon.close_connection(state.id)
@@ -525,6 +531,13 @@ class McbeServerFacade:
             await self._dispatch_native_event(state, data)
             return
 
+        if self._v2 is not None and event.message.startswith("MCBEWS2|"):
+            try:
+                await self._v2.receive(state, event.sender, event.message)
+            except ValueError:
+                logger.warning("invalid_v2_frame", connection_id=str(state.id))
+            return
+
         # Branch A — addon bridge response / UI chat (both arrive from the
         # simulated addon bridge tool player, not a real player command).
         # Every reserved control prefix is consumed by the SDK.  This is
@@ -641,7 +654,9 @@ class McbeServerFacade:
                 if message is None:
                     return
                 # Transforms cannot manufacture reserved bridge/control input.
-                if self._addon.is_tool_player_channel_message(message.message):
+                if self._addon.is_tool_player_channel_message(message.message) or (
+                    self._v2 is not None and message.message.startswith("MCBEWS2|")
+                ):
                     logger.warning("native_transform_reserved_channel", connection_id=str(state.id))
                     return
                 await self._emit_event(state, WsEventType.PLAYER_MESSAGE, state, message)

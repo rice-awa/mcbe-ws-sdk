@@ -15,7 +15,7 @@ from mcbe_ws_sdk.reassembly import ReassemblyCore
 from .codec import LIMITS, MANIFEST, decode, dumps, encode, fail
 
 if TYPE_CHECKING:
-    from mcbe_ws_sdk.gateway.sender import OutboundScheduler
+    from mcbe_ws_sdk.gateway.sender import OutboundScheduler, SendPriority
 
 PREFIX = MANIFEST["carrier"]["prefix"]
 COMMAND_PREFIX = f"scriptevent {MANIFEST['carrier']['event']} "
@@ -261,6 +261,7 @@ async def send_downstream(
     transport_id: str,
     *,
     overrides: dict[str, int] | None = None,
+    priority: SendPriority | None = None,
 ) -> None:
     """Send one frame at a time through the existing fair connection scheduler.
 
@@ -270,4 +271,8 @@ async def send_downstream(
     from mcbe_ws_sdk.gateway.sender import SendPriority
 
     for payload in downstream_payloads(message, transport_id, overrides=overrides):
-        await scheduler.send(payload, source=transport_id, priority=SendPriority.BULK)
+        await scheduler.send(
+            payload,
+            source=transport_id,
+            priority=priority if priority is not None else SendPriority.BULK,
+        )
