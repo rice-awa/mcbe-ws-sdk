@@ -320,8 +320,13 @@ class OutboundScheduler:
                 if frame.future.cancelled():
                     continue
                 await self._apply_rate_limit()
+                # Cancellation can arrive while a selected frame is rate limited.
+                if frame.future.cancelled():
+                    continue
                 # The sender worker may predate this operation.
-                await asyncio.create_task(self._transmit(frame.payload), context=frame.context)
+                sent = await asyncio.create_task(self._transmit(frame), context=frame.context)
+                if not sent:
+                    continue
             except asyncio.CancelledError:
                 self._fail_frame(frame, self._closed_error or SendClosedError())
                 raise
@@ -337,8 +342,13 @@ class OutboundScheduler:
             finally:
                 await self._release(frame)
 
-    async def _transmit(self, payload: str) -> None:
-        await self._transport(payload)
+    async def _transmit(self, frame: _Frame) -> bool:
+        # The task may start after its original sender has been cancelled.
+        if frame.future.cancelled():
+            return False
+        self._last_sent = self._clock()
+        await self._transport(frame.payload)
+        return True
 
     async def _next_frame(self) -> _Frame | None:
         async with self._capacity:
@@ -378,7 +388,6 @@ class OutboundScheduler:
 
     async def _apply_rate_limit(self) -> None:
         if self._min_interval <= 0:
-            self._last_sent = self._clock()
             return
         now = self._clock()
         if self._last_sent is not None:
@@ -390,7 +399,6 @@ class OutboundScheduler:
                     delay_seconds=delay,
                 )
                 await self._sleep(delay)
-        self._last_sent = self._clock()
 
     async def _release(self, frame: _Frame) -> None:
         async with self._capacity:

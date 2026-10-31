@@ -69,6 +69,9 @@ TS：bridge/v2/codec、transport 的对应函数、sendUpstream与ReassemblyPool
 元数据；元数据身份不可信。调用方不能设置保留的 `sdk.*` 键，可通过专用参数传入
 trace ID。回复保留元数据。断连会失败所有等待请求并释放该连接的分片；空闲未完成
 消息按 TTL 过期。
+Python v2 请求的 `V2Bridge(timeout_seconds=...)` 为调度器准入、分片发送和等待回复
+设置一个总期限；探测使用单独期限。超时、关闭和取消会停止未发送的分片；已经交给
+传输层的帧仍可能完成，无法撤回。
 
 ## 探测与回退
 

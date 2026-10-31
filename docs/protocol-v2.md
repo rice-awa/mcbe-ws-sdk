@@ -98,6 +98,10 @@ router exposes `getV2Endpoint()` and its existing capability registry.
 The endpoint rejects a new call while its method's ordering group is active, or when
 business capacity is exhausted. This allows reverse calls to other groups without
 waiting on a group already held by an ancestor. Notifications receive no error reply.
+For Python v2 requests, `V2Bridge(timeout_seconds=...)` sets one deadline for scheduler
+admission, fragment sending and the reply wait; discovery has a separate timeout.
+Timeout, close and cancellation stop unsent fragments. A frame already handed to the
+transport may still complete and cannot be retracted.
 
 Handlers receive transport attribution separately from metadata. Metadata identity
 is untrusted; callers cannot set reserved `sdk.*` keys and may supply a trace ID

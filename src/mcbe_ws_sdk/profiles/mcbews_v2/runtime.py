@@ -253,6 +253,7 @@ class V2Endpoint:
         self._sequence = 0
         self._active_methods: set[str] = set()
         self._control_tasks: set[asyncio.Task[None]] = set()
+        self._send_tasks: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
     def _next_id(self) -> str:
@@ -283,6 +284,13 @@ class V2Endpoint:
             ),
         )
 
+    async def _send_request(self, message: dict[str, Any], request_id: str) -> None:
+        try:
+            await self._send(message)
+        except Exception as exc:
+            # A response or close may already have settled the same request.
+            self._requests.fail(_CATEGORY, request_id, exc)
+
     async def request(
         self,
         method: str,
@@ -291,9 +299,11 @@ class V2Endpoint:
         metadata: dict[str, Any] | None = None,
         trace_id: str | None = None,
     ) -> dict[str, Any]:
-        """Issue a request and return its result and preserved response metadata."""
+        """Issue a request with one deadline for sending and the remote response."""
         request_id = self._next_id()
         pending = self._requests.reserve(_CATEGORY, request_id=request_id)
+        deadline = asyncio.get_running_loop().time() + self._owner.timeout_seconds
+        send_task: asyncio.Task[None] | None = None
         try:
             message = {
                 "v": _VERSION,
@@ -303,19 +313,30 @@ class V2Endpoint:
                 "params": params,
                 "meta": self._metadata(metadata, trace_id),
             }
-            await self._send(message)
-            try:
-                response: dict[str, Any] = await asyncio.wait_for(
-                    pending.future, self._owner.timeout_seconds
-                )
-            except TimeoutError as exc:
-                raise RequestTimeoutError(request_id, self._owner.timeout_seconds) from exc
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise RequestTimeoutError(request_id, self._owner.timeout_seconds)
+            send_task = asyncio.create_task(
+                self._send_request(message, request_id), name=f"v2-send:{request_id}"
+            )
+            self._send_tasks[request_id] = send_task
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            done, _ = await asyncio.wait({pending.future}, timeout=remaining)
+            if not done:
+                raise RequestTimeoutError(request_id, self._owner.timeout_seconds)
+            response: dict[str, Any] = pending.future.result()
             if "error" in response:
                 error = response["error"]
                 raise RemoteCallError(request_id, code=error["code"], message=error["message"])
             return response
         finally:
             self._requests.cancel(pending)
+            if send_task is not None:
+                send_task.cancel()
+                try:
+                    await asyncio.gather(send_task, return_exceptions=True)
+                finally:
+                    self._send_tasks.pop(request_id, None)
 
     async def notify(
         self,
@@ -345,8 +366,12 @@ class V2Endpoint:
             return
         kind = message["kind"]
         if kind == "response":
-            if message["id"].startswith(f"p.{self.epoch}."):
-                self._requests.resolve(_CATEGORY, message["id"], message)
+            if message["id"].startswith(f"p.{self.epoch}.") and self._requests.resolve(
+                _CATEGORY, message["id"], message
+            ):
+                send_task = self._send_tasks.get(message["id"])
+                if send_task is not None:
+                    send_task.cancel()
             return
         if kind == "request" and not message["id"].startswith(f"a.{self.epoch}."):
             return
@@ -413,7 +438,9 @@ class V2Endpoint:
                 "CAPABILITY_FAILED": "HANDLER_FAILED",
             }.get(error.get("code"))
             if code is not None:
-                await self._reply_error(message, code, str(error.get("message", "failure"))[:128])
+                detail = str(error.get("message", "failure"))
+                detail = detail.encode("utf-8")[:256].decode("utf-8", errors="ignore")
+                await self._reply_error(message, code, detail)
                 return
         try:
             await self._send(
@@ -440,7 +467,7 @@ class V2Endpoint:
         )
 
     def close(self) -> None:
-        """Fail this endpoint's waiters without closing unrelated request categories."""
+        """Fail this endpoint's waiters and stop its unsent request fragments."""
         if self._closed:
             return
         self._closed = True
@@ -448,6 +475,8 @@ class V2Endpoint:
             task.cancel()
         for request_id in list(self._requests.entries(_CATEGORY)):
             self._requests.fail(_CATEGORY, request_id, RequestClosedError(request_id))
+        for task in self._send_tasks.values():
+            task.cancel()
 
 
 __all__ = ["NegotiatedConnection", "NegotiationError", "V2Bridge", "V2Endpoint", "V2ProtocolError"]
