@@ -91,7 +91,7 @@ class ConnectionState:
     # single argument as ``send_payload``; hosts that build
     # ``McbeOutboundDelivery`` can pass it as ``send_bulk`` to keep long text off
     # the request queue. The legacy path leaves it ``None``.
-    send_bulk: SendPayload | None = None
+    send_bulk: SendPayload | None = field(default=None, kw_only=True)
     response_queue: asyncio.Queue[object] | None = None
     # The reliable path attaches an SDK-owned runtime. The legacy path leaves
     # ``runtime`` as ``None``; ``requests`` / ``command_client`` are still
