@@ -19,7 +19,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 import structlog
@@ -27,22 +27,17 @@ import structlog
 from mcbe_ws_sdk.addon.session import AddonBridgeSession
 from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import BridgeTimeoutError
-from mcbe_ws_sdk.profiles.mcbews_v1.classifier import (
-    ToolPlayerMessage,
-    classify_tool_player_message,
-    is_tool_player_channel_message,
-)
-from mcbe_ws_sdk.profiles.mcbews_v1.codec import encode_bridge_request
-from mcbe_ws_sdk.profiles.mcbews_v1.models import (
-    AddonBridgeChunk,
-    UiChatChunk,
-    UiChatMessage,
-)
+from mcbe_ws_sdk.profiles.mcbews_v1.bridge_codec import encode_bridge_request
+from mcbe_ws_sdk.profiles.mcbews_v1.bridge_models import AddonBridgeChunk
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.extensions.mcbews_v1.classifier import ToolPlayerMessage
+    from mcbe_ws_sdk.extensions.mcbews_v1.models import UiChatChunk, UiChatMessage
 
 logger = structlog.get_logger(__name__)
 
 CommandSender = Callable[[str], Awaitable[None]]
-UiChatCallback = Callable[[UUID, UiChatMessage], Awaitable[None]]
+UiChatCallback = Callable[[UUID, "UiChatMessage"], Awaitable[None]]
 LegacyUiChatCallback = Callable[[UUID, str, str], Awaitable[None]]
 
 
@@ -73,10 +68,15 @@ class AddonBridgeClient(Protocol):
 
 
 class AddonBridgeService:
-    """Manage the request/response lifecycle between Python and the addon."""
+    """Manage capability requests and optional business handlers.
 
-    def __init__(self, settings: AddonBridgeSettings) -> None:
+    Set ``extensions=False`` to consume reserved business frames without loading
+    UI, session or approval decoders. Defaults preserve existing behavior.
+    """
+
+    def __init__(self, settings: AddonBridgeSettings, *, extensions: bool = True) -> None:
         self._settings = settings
+        self._extensions = extensions
         self._sessions: dict[UUID, AddonBridgeSession] = {}
         self._timeout_seconds = settings.timeout_seconds
         self._profile = settings.profile
@@ -199,17 +199,32 @@ class AddonBridgeService:
 
     def is_ui_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is a UI chat fragment."""
-        return sender == self._profile.trusted_bridge_player_name and message.startswith(
-            f"{self._profile.ui_chat_chunk_prefix}|"
+        return (
+            self._extensions
+            and sender == self._profile.trusted_bridge_player_name
+            and message.startswith(f"{self._profile.ui_chat_chunk_prefix}|")
         )
 
     def is_tool_player_channel_message(self, message: str) -> bool:
         """Return whether *message* is reserved for a ToolPlayer channel."""
 
-        return is_tool_player_channel_message(message, profile=self._profile)
+        return any(
+            message.startswith(f"{prefix}|")
+            for prefix in (
+                self._profile.capability_response_chat_prefix,
+                self._profile.ui_chat_chunk_prefix,
+                self._profile.session_request_chat_prefix,
+                self._profile.approval_allow_chat_prefix,
+                self._profile.approval_deny_chat_prefix,
+            )
+        )
 
     def classify_tool_player_message(self, sender: str, message: str) -> ToolPlayerMessage | None:
         """Authenticate and classify a reserved ToolPlayer message."""
+
+        if not self._extensions:
+            return None
+        from mcbe_ws_sdk.extensions.mcbews_v1.classifier import classify_tool_player_message
 
         return classify_tool_player_message(sender, message, profile=self._profile)
 
@@ -300,7 +315,7 @@ class AddonBridgeService:
     def _session_for(self, connection_id: UUID) -> AddonBridgeSession:
         session = self._sessions.get(connection_id)
         if session is None:
-            session = AddonBridgeSession(self._settings)
+            session = AddonBridgeSession(self._settings, extensions=self._extensions)
             self._sessions[connection_id] = session
         return session
 

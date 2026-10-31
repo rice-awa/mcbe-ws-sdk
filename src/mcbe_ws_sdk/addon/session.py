@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
 
 from mcbe_ws_sdk.config import AddonBridgeSettings
@@ -16,25 +15,21 @@ from mcbe_ws_sdk.errors import (
     ProtocolError,
     RequestLimitError,
 )
-from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
+from mcbe_ws_sdk.profiles.mcbews_v1.bridge_codec import (
     decode_bridge_chat_chunk,
-    decode_ui_chat_chunk,
     reassemble_bridge_chunks,
-    reassemble_ui_chat_chunks,
 )
-from mcbe_ws_sdk.profiles.mcbews_v1.models import (
-    AddonBridgeChunk,
-    UiChatChunk,
-    UiChatMessage,
-)
+from mcbe_ws_sdk.profiles.mcbews_v1.bridge_models import AddonBridgeChunk
+from mcbe_ws_sdk.reassembly import ChunkBuffer, ReassemblyCore
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.extensions.mcbews_v1.models import UiChatChunk, UiChatMessage
+
 from mcbe_ws_sdk.requests import CATEGORY_ADDON, PendingRequest, RequestTable
 
 
 class _ChunkWithContent(Protocol):
     content: str
-
-
-T = TypeVar("T", bound=_ChunkWithContent)
 
 
 class PendingAddonRequest:
@@ -88,14 +83,6 @@ class PendingAddonRequest:
         self.future = future
 
 
-@dataclass
-class ChunkBuffer(Generic[T]):
-    total_chunks: int
-    chunks: dict[int, T]
-    byte_size: int
-    updated_at: float
-
-
 class AddonBridgeSession:
     """Maintain bridge requests and fragment buffers for one connection."""
 
@@ -104,17 +91,22 @@ class AddonBridgeSession:
         settings: AddonBridgeSettings,
         *,
         clock: Callable[[], float] = time.monotonic,
+        extensions: bool = True,
     ) -> None:
         self._settings = settings
         self._profile = settings.profile
         self._clock = clock
+        self._extensions = extensions
         self._requests = RequestTable(
             max_pending=settings.max_pending_requests,
             clock=clock,
             name=f"addon:{id(self):x}",
         )
-        self._chunk_buffers: dict[str, ChunkBuffer[AddonBridgeChunk]] = {}
-        self._ui_chat_chunk_buffers: dict[str, ChunkBuffer[UiChatChunk]] = {}
+        self._reassembly = ReassemblyCore[_ChunkWithContent](
+            settings, content_of=lambda chunk: chunk.content, clock=clock
+        )
+        self._chunk_buffers = self._reassembly.channel("bridge")
+        self._ui_chat_chunk_buffers = self._reassembly.channel("ui_chat")
 
     @property
     def _pending_requests(self) -> dict[str, PendingRequest]:
@@ -145,9 +137,7 @@ class AddonBridgeSession:
             protocol_error = ProtocolError(str(exc))
             request_id = self._pending_bridge_request_id(chunk_message)
             pending = (
-                self._requests.get(CATEGORY_ADDON, request_id)
-                if request_id is not None
-                else None
+                self._requests.get(CATEGORY_ADDON, request_id) if request_id is not None else None
             )
             if request_id is not None and pending is not None:
                 self._fail_bridge_request(request_id, protocol_error)
@@ -157,7 +147,7 @@ class AddonBridgeSession:
 
         try:
             buffer = self._accept_chunk(
-                self._chunk_buffers,
+                "bridge",
                 buffer_id=chunk.request_id,
                 index=chunk.chunk_index,
                 total=chunk.total_chunks,
@@ -172,7 +162,9 @@ class AddonBridgeSession:
 
         complete = self._chunk_buffers.pop(chunk.request_id)
         try:
-            response = reassemble_bridge_chunks(list(complete.chunks.values()))
+            response = reassemble_bridge_chunks(
+                cast(list[AddonBridgeChunk], list(complete.chunks.values()))
+            )
         except ValueError as exc:
             protocol_error = ProtocolError(str(exc))
             self._fail_bridge_request(chunk.request_id, protocol_error)
@@ -214,13 +206,20 @@ class AddonBridgeSession:
 
     def handle_ui_chat_chunk(self, chunk_message: str) -> tuple[UiChatChunk, UiChatMessage | None]:
         """Consume a UI chat fragment; return the chunk and a completed message if available."""
+        if not self._extensions:
+            raise ProtocolError("UI chat extension is disabled")
+        from mcbe_ws_sdk.extensions.mcbews_v1.codec import (
+            decode_ui_chat_chunk,
+            reassemble_ui_chat_chunks,
+        )
+
         try:
             chunk = decode_ui_chat_chunk(chunk_message, profile=self._profile)
         except ValueError as exc:
             raise ProtocolError(str(exc)) from exc
 
         buffer = self._accept_chunk(
-            self._ui_chat_chunk_buffers,
+            "ui_chat",
             buffer_id=chunk.msg_id,
             index=chunk.chunk_index,
             total=chunk.total_chunks,
@@ -232,78 +231,35 @@ class AddonBridgeSession:
 
         complete = self._ui_chat_chunk_buffers.pop(chunk.msg_id)
         try:
-            ui_message = reassemble_ui_chat_chunks(list(complete.chunks.values()))
+            ui_message = reassemble_ui_chat_chunks(
+                cast("list[UiChatChunk]", list(complete.chunks.values()))
+            )
         except ValueError as exc:
             raise ProtocolError(str(exc)) from exc
         return chunk, ui_message
 
     def _accept_chunk(
         self,
-        buffers: dict[str, ChunkBuffer[T]],
+        channel: str,
         *,
         buffer_id: str,
         index: int,
         total: int,
         content: str,
-        item: T,
-    ) -> ChunkBuffer[T]:
+        item: _ChunkWithContent,
+    ) -> ChunkBuffer[_ChunkWithContent]:
         self._prune_expired()
-        if not 1 <= index <= total <= self._settings.max_chunks_per_message:
-            raise BridgeLimitError("invalid chunk index or total")
-        encoded_size = len(content.encode("utf-8"))
-        current = buffers.get(buffer_id)
-        if current is None:
-            if self._buffer_count() >= self._settings.max_buffer_ids:
-                raise BridgeLimitError("maximum buffer ids exceeded")
-            current = ChunkBuffer(total, {}, 0, self._clock())
-            buffers[buffer_id] = current
-        elif current.total_chunks != total:
-            self._drop_buffer(buffers, buffer_id)
-            raise ProtocolError("chunk total changed")
-        existing = current.chunks.get(index)
-        if existing is not None:
-            if self._chunk_content(existing) != content:
-                self._drop_buffer(buffers, buffer_id)
-                raise ProtocolError("duplicate chunk content changed")
-            return current
-        if current.byte_size + encoded_size > self._settings.max_message_bytes:
-            self._drop_buffer(buffers, buffer_id)
-            raise BridgeLimitError("message byte limit exceeded")
-        if self._total_buffer_bytes() + encoded_size > self._settings.max_total_buffer_bytes:
-            self._drop_buffer(buffers, buffer_id)
-            raise BridgeLimitError("total buffer byte limit exceeded")
-        current.chunks[index] = item
-        current.byte_size += encoded_size
-        current.updated_at = self._clock()
-        return current
-
-    def _prune_expired(self) -> None:
-        """Drop every chunk buffer whose TTL has elapsed."""
-        now = self._clock()
-        ttl = self._settings.buffer_ttl_seconds
-        for buffer_id, bridge_buffer in list(self._chunk_buffers.items()):
-            if now - bridge_buffer.updated_at >= ttl:
-                self._drop_buffer(self._chunk_buffers, buffer_id)
-                self._fail_bridge_request(buffer_id, BridgeLimitError("chunk buffer expired"))
-        for buffer_id, ui_buffer in list(self._ui_chat_chunk_buffers.items()):
-            if now - ui_buffer.updated_at >= ttl:
-                self._drop_buffer(self._ui_chat_chunk_buffers, buffer_id)
-
-    @staticmethod
-    def _drop_buffer(
-        buffers: dict[str, ChunkBuffer[T]],
-        buffer_id: str,
-    ) -> None:
-        buffers.pop(buffer_id, None)
-
-    def _buffer_count(self) -> int:
-        return len(self._chunk_buffers) + len(self._ui_chat_chunk_buffers)
-
-    def _total_buffer_bytes(self) -> int:
-        return sum(buffer.byte_size for buffer in self._chunk_buffers.values()) + sum(
-            buffer.byte_size for buffer in self._ui_chat_chunk_buffers.values()
+        return self._reassembly.accept(
+            channel, buffer_id=buffer_id, index=index, total=total, content=content, item=item
         )
 
-    @staticmethod
-    def _chunk_content(chunk: _ChunkWithContent) -> str:
-        return chunk.content
+    def _prune_expired(self) -> None:
+        for channel, buffer_id in self._reassembly.prune_expired():
+            if channel == "bridge":
+                self._fail_bridge_request(buffer_id, BridgeLimitError("chunk buffer expired"))
+
+    def _buffer_count(self) -> int:
+        return self._reassembly._buffer_count()
+
+    def _total_buffer_bytes(self) -> int:
+        return self._reassembly._total_buffer_bytes()
