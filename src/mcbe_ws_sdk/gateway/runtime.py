@@ -87,6 +87,7 @@ class ConnectionRuntime:
         self._lanes: dict[str, asyncio.Lock] = {}
         self._closed = False
         self._close_guard = asyncio.Lock()
+        self._close_task: asyncio.Task[None] | None = None
         self._close_reason = "connection closed"
 
     # -- state --------------------------------------------------------------
@@ -132,12 +133,27 @@ class ConnectionRuntime:
     # -- shutdown -----------------------------------------------------------
 
     async def close(self, *, reason: str = "connection closed") -> None:
-        """Release every waiter and task exactly once."""
+        """Release every waiter and task exactly once.
+
+        The first call starts the cleanup task; every later call awaits that
+        same task, so a second ``close()`` can never return while the first is
+        still reaping tasks or closing the scheduler. The cleanup is shielded
+        from waiter cancellation: cancelling one caller does not stop it
+        halfway, and a later call still observes the completed state.
+        """
         async with self._close_guard:
-            if self._closed:
-                return
-            self._closed = True
-            self._close_reason = reason
+            task = self._close_task
+            if task is None:
+                self._closed = True
+                self._close_reason = reason
+                task = asyncio.create_task(
+                    self._close_impl(reason),
+                    name=f"runtime-close:{self.connection_id}",
+                )
+                self._close_task = task
+        await asyncio.shield(task)
+
+    async def _close_impl(self, reason: str) -> None:
         failed = self.requests.close(lambda request_id: RequestClosedError(request_id, reason))
         await self.business.close()
         await self.events.close()
