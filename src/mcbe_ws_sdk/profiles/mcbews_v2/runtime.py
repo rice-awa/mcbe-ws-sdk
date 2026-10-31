@@ -19,6 +19,7 @@ from mcbe_ws_sdk.tracing import current_trace, trace_scope
 
 if TYPE_CHECKING:
     from mcbe_ws_sdk.gateway.connection import ConnectionState
+    from mcbe_ws_sdk.requests import PendingRequest, RequestTable
 
 _CATEGORY = "addon.v2"
 _NEGOTIATION_CATEGORY = "addon.v2.negotiation"
@@ -43,6 +44,8 @@ class NegotiatedConnection:
 class _Discovery:
     attempt: str
     challenge: asyncio.Future[tuple[str, frozenset[str]]]
+    requests: RequestTable
+    pending: PendingRequest
     epoch: str | None = None
     features: frozenset[str] = frozenset()
     confirming: bool = False
@@ -97,7 +100,9 @@ class V2Bridge:
             raise ValueError("negotiation already started")
         attempt = uuid4().hex[:24]
         pending = state.requests.reserve(_NEGOTIATION_CATEGORY, request_id=attempt)
-        discovery = _Discovery(attempt, asyncio.get_running_loop().create_future())
+        discovery = _Discovery(
+            attempt, asyncio.get_running_loop().create_future(), state.requests, pending
+        )
         self._discoveries[state.id] = discovery
         self._controls[state.id] = send_hello
         self._legacy[state.id] = legacy_request
@@ -122,7 +127,8 @@ class V2Bridge:
             except asyncio.CancelledError as exc:
                 raise RequestClosedError(attempt) from exc
             finally:
-                self._discoveries.pop(state.id, None)
+                if self._discoveries.get(state.id) is discovery:
+                    self._discoveries.pop(state.id, None)
                 state.requests.cancel(pending)
                 if not discovery.challenge.done():
                     discovery.challenge.cancel()
@@ -343,6 +349,14 @@ class V2Bridge:
             task.add_done_callback(
                 lambda completed: completed.exception() if not completed.cancelled() else None
             )
+        # A task cancelled before its first step never enters discover's finally.
+        discovery = self._discoveries.pop(connection_id, None)
+        if discovery is not None:
+            discovery.requests.cancel(discovery.pending)
+            if not discovery.challenge.done():
+                discovery.challenge.cancel()
+            elif not discovery.challenge.cancelled():
+                discovery.challenge.exception()
         if endpoint is not None:
             endpoint.close()
         self.pool.close(str(connection_id))
