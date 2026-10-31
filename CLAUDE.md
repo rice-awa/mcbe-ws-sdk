@@ -52,9 +52,15 @@ mkdocs build --strict
 
 ## Development standards
 
-- Keep documentation, docstrings, comments, and other descriptions concise, clear, and easy to maintain.
-- Explain intent, constraints, and non-obvious decisions; avoid restating code or adding unnecessary background, caveats, or examples.
-- Update or remove outdated descriptions when behavior changes; link to existing documentation instead of duplicating it.
+Write for the next reader. Every description should be short, accurate, and easy to maintain.
+
+- **Scope** — docstrings, comments, documentation, and any other human-facing description.
+- **Explain the why** — state intent, constraints, and non-obvious decisions; don't restate the code.
+- **Cut filler** — no background, hedging, or examples that add no information.
+- **One idea at a time** — one point per sentence, one topic per paragraph.
+- **Keep Markdown structure** — use headings, lists, tables, and blank lines; never dense blocks of prose.
+- **Stay current** — update or remove stale text when behaviour changes.
+- **Link, don't copy** — point to existing documentation instead of duplicating it.
 
 ## Documentation language
 
