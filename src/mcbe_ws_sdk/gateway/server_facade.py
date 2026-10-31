@@ -277,6 +277,7 @@ class McbeServerFacade:
             state.requests = runtime.requests
             state.command_client = runtime.commands
             state.send_payload = runtime.send_from_host
+            state.send_bulk = runtime.send_bulk_from_host
             return
         state.requests = RequestTable(
             max_pending=self._settings.dispatch.max_pending_requests,

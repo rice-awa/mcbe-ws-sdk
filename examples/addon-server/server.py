@@ -1,8 +1,9 @@
 """Runnable MCBE WebSocket server that exercises built-in addon capabilities.
 
 This example builds on ``examples/basic-server`` and adds chat commands that
-call the TypeScript bridge addon through :class:`AddonBridgeService`, plus a
-host-owned WebSocket ``commandRequest`` / ``commandResponse`` runner:
+call the TypeScript bridge addon through :class:`AddonBridgeService`, plus the
+SDK-owned awaitable ``commandRequest`` / ``commandResponse`` client
+(:attr:`ConnectionState.command_client`):
 
 * ``!player [target]`` → ``get_player_snapshot``
 * ``!inv [target]`` → ``get_inventory_snapshot``
@@ -33,6 +34,7 @@ from mcbe_ws_sdk import (
     BridgeError,
     BridgeTimeoutError,
     DefaultResponseSink,
+    DispatchSettings,
     FlowControlSettings,
     GatewaySettings,
     McbeOutboundDelivery,
@@ -81,6 +83,7 @@ class MinecraftSink(DefaultResponseSink):
         return McbeOutboundDelivery(
             connection_id=state.id,
             send_payload=state.send_payload,
+            send_bulk=state.send_bulk,
             settings=self._flow,
             log_raw_payloads=self._log_raw_payloads,
         )
@@ -135,6 +138,7 @@ class AddonDemoHook(NoOpHook):
         delivery = McbeOutboundDelivery(
             connection_id=state.id,
             send_payload=state.send_payload,
+            send_bulk=state.send_bulk,
             settings=self._flow,
             log_raw_payloads=self._log_raw_payloads,
         )
@@ -586,8 +590,13 @@ async def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     configure_logging(args.log_level)
 
+    # The reliable path is explicit. It keeps the reader free while a handler
+    # awaits a capability reply, gives each player its own FIFO lane, and routes
+    # long text through the scheduler's bulk category. ``DispatchSettings()``
+    # alone still selects the legacy serial path.
     settings = GatewaySettings(
         websocket=WebsocketTransportConfig(host=args.host, port=args.port),
+        dispatch=DispatchSettings(mode="reliable"),
     )
     # Share one AddonBridgeService between the hook (outbound requests) and the
     # facade (inbound response reassembly). Passing the same instance keeps the

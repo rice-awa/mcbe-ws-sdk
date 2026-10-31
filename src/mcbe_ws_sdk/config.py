@@ -162,14 +162,29 @@ class DispatchSettings:
         )
 
 
+def _require_non_negative_int(value: object, field_name: str) -> None:
+    if type(value) is not int or value < 0:
+        raise ConfigurationError(f"{field_name} must be a non-negative integer")
+
+
 @dataclass(frozen=True, slots=True)
 class SendSchedulerSettings:
-    """Per-connection outbound scheduler capacity and rate limit."""
+    """Per-connection outbound scheduler capacity and rate limit.
+
+    ``control_reserve_slots`` / ``control_reserve_bytes`` keep part of the
+    queue available for control frames while bulk content is in flight; they
+    are automatically clamped so at least one non-control frame still fits.
+    ``fairness_quota`` bounds how many consecutive higher-priority frames may be
+    sent while a lower priority waits.
+    """
 
     queue_maxsize: int = 256
     queue_max_bytes: int = 4 * 1024 * 1024
     min_interval_seconds: float = 0.0
     capacity_timeout_seconds: float = 5.0
+    control_reserve_slots: int = 1
+    control_reserve_bytes: int = 4096
+    fairness_quota: int = 8
 
     def __post_init__(self) -> None:
         _require_positive_int(self.queue_maxsize, "gateway.send.queue_maxsize")
@@ -183,6 +198,15 @@ class SendSchedulerSettings:
             self.capacity_timeout_seconds,
             "gateway.send.capacity_timeout_seconds",
         )
+        _require_non_negative_int(
+            self.control_reserve_slots,
+            "gateway.send.control_reserve_slots",
+        )
+        _require_non_negative_int(
+            self.control_reserve_bytes,
+            "gateway.send.control_reserve_bytes",
+        )
+        _require_positive_int(self.fairness_quota, "gateway.send.fairness_quota")
 
 
 @dataclass(frozen=True, slots=True)

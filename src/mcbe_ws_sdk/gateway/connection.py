@@ -87,6 +87,11 @@ class ConnectionState:
     id: UUID = field(default_factory=uuid4)
     _player_name: str | None = field(default=None, repr=False)
     send_payload: SendPayload | None = None
+    # Optional bulk adapter installed by the reliable runtime. It takes the same
+    # single argument as ``send_payload``; hosts that build
+    # ``McbeOutboundDelivery`` can pass it as ``send_bulk`` to keep long text off
+    # the request queue. The legacy path leaves it ``None``.
+    send_bulk: SendPayload | None = None
     response_queue: asyncio.Queue[object] | None = None
     # The reliable path attaches an SDK-owned runtime. The legacy path leaves
     # ``runtime`` as ``None``; ``requests`` / ``command_client`` are still

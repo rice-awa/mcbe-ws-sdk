@@ -74,6 +74,9 @@ class ConnectionRuntime:
             max_bytes=send.queue_max_bytes,
             min_interval=send.min_interval_seconds,
             capacity_timeout=send.capacity_timeout_seconds,
+            control_reserve_slots=send.control_reserve_slots,
+            control_reserve_bytes=send.control_reserve_bytes,
+            fairness_quota=send.fairness_quota,
             clock=clock,
             sleep=sleep,
         )
@@ -111,9 +114,26 @@ class ConnectionRuntime:
     # -- sending ------------------------------------------------------------
 
     async def send_from_host(self, payload: str) -> None:
-        """``ConnectionState.send_payload`` adapter used by host/delivery code."""
+        """``ConnectionState.send_payload`` adapter used by host/delivery code.
+
+        Keeps the legacy single-argument callable contract; host frames that do
+        not declare a category are treated as requests.
+        """
         self._raise_if_closed()
         await self.scheduler.send_from_host(payload)
+
+    async def send_bulk_from_host(self, payload: str) -> None:
+        """``ConnectionState.send_bulk`` adapter for long tellraw/scriptevent text.
+
+        The signature is identical to :meth:`send_from_host` so delivery code can
+        accept either callable without knowing about the scheduler.
+        """
+        self._raise_if_closed()
+        await self.scheduler.send(
+            payload,
+            priority=SendPriority.BULK,
+            source="host.bulk",
+        )
 
     async def send_raw(
         self,

@@ -21,7 +21,15 @@ PayloadSender = Callable[[str], Awaitable[None]]
 
 
 class McbeOutboundDelivery:
-    """Chunk, throttle, send, and optionally log MCBE ``commandRequest`` payloads."""
+    """Chunk, throttle, send, and optionally log MCBE ``commandRequest`` payloads.
+
+    ``send_payload`` keeps the historical single-argument contract and carries
+    request-class frames (raw commands, session responses, generic payloads).
+    ``send_bulk`` is an optional callable with the *same* signature used for
+    long tellraw/scriptevent chunks; the reliable runtime installs it on
+    :attr:`ConnectionState.send_bulk`. When it is omitted, bulk content falls
+    back to ``send_payload``, so legacy hosts keep working unchanged.
+    """
 
     def __init__(
         self,
@@ -30,9 +38,11 @@ class McbeOutboundDelivery:
         send_payload: PayloadSender,
         settings: FlowControlSettings,
         log_raw_payloads: bool = False,
+        send_bulk: PayloadSender | None = None,
     ) -> None:
         self.connection_id = connection_id
         self._send_payload = send_payload
+        self._send_bulk = send_bulk
         self._flow = FlowControlMiddleware(settings)
         self._log_raw_payloads = log_raw_payloads
 
@@ -111,24 +121,28 @@ class McbeOutboundDelivery:
         source: str,
         *,
         delay: float | None = None,
+        bulk: bool = True,
     ) -> None:
         """Send ``payloads`` with inter-chunk delays.
 
         When ``delay`` is provided it overrides ``flow.chunk_delay_for(delay_kind)``
         so protocol profiles can inject their own cadence (e.g.
-        ``profile.response_chunk_delay``).
+        ``profile.response_chunk_delay``). ``bulk`` selects the optional bulk
+        send adapter; long text is bulk by default.
         """
         chunk_delay = self.flow.chunk_delay_for(delay_kind) if delay is None else delay
         for idx, payload in enumerate(payloads):
             await self._send_one(
                 payload,
                 source=f"{source}_chunked" if len(payloads) > 1 else source,
+                bulk=bulk,
             )
             if len(payloads) > 1 and idx < len(payloads) - 1:
                 await asyncio.sleep(chunk_delay)
 
-    async def _send_one(self, payload: str, source: str) -> None:
-        await self._send_payload(payload)
+    async def _send_one(self, payload: str, source: str, *, bulk: bool = False) -> None:
+        sender = self._send_bulk if bulk and self._send_bulk is not None else self._send_payload
+        await sender(payload)
         self._log_ws_send(payload, source)
 
     def _log_ws_send(self, payload: str, source: str) -> None:

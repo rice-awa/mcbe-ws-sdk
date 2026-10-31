@@ -155,6 +155,203 @@ async def test_r03_3_close_releases_capacity_waiter() -> None:
 
 
 @pytest.mark.asyncio
+async def test_control_reservation_keeps_queue_room_for_control_frames() -> None:
+    """R03: bulk traffic cannot consume the bounded control reservation.
+
+    ``max_queue=2`` with one reserved slot means at most one non-control frame
+    is admitted. While it is in flight, another bulk/request frame is rejected;
+    a CONTROL frame is still admitted and is sent immediately after the
+    in-flight frame, never behind a queued bulk frame.
+    """
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    calls: list[str] = []
+
+    async def transport(payload: str) -> None:
+        calls.append(payload)
+        if payload == "bulk-a":
+            started.set()
+            await gate.wait()
+
+    scheduler = OutboundScheduler(
+        connection_id=UUID(int=8),
+        transport=transport,
+        max_queue=2,
+        control_reserve_slots=1,
+        capacity_timeout=0.01,
+    )
+    first = asyncio.create_task(scheduler.send("bulk-a", priority=SendPriority.BULK))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        with pytest.raises(SendQueueFullError):
+            await scheduler.send("bulk-b", priority=SendPriority.BULK)
+        with pytest.raises(SendQueueFullError):
+            await scheduler.send("request-b", priority=SendPriority.REQUEST)
+        assert scheduler.pending_by_priority[SendPriority.BULK] == 0
+
+        control = asyncio.create_task(
+            scheduler.send("control", priority=SendPriority.CONTROL)
+        )
+        await _wait_until(lambda: scheduler.pending_by_priority[SendPriority.CONTROL] == 1)
+
+        gate.set()
+        results = await _drain(first, control)
+    finally:
+        await scheduler.close()
+
+    assert results == [None, None]
+    assert calls == ["bulk-a", "control"]
+    assert scheduler.sent_by_priority[SendPriority.CONTROL] == 1
+    assert scheduler.sent_by_priority[SendPriority.BULK] == 1
+
+
+@pytest.mark.asyncio
+async def test_control_reservation_covers_bytes_as_well_as_frame_count() -> None:
+    """A large in-flight bulk payload leaves the reserved bytes free."""
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    calls: list[str] = []
+
+    async def transport(payload: str) -> None:
+        calls.append(payload)
+        if payload == "b" * 50:
+            started.set()
+            await gate.wait()
+
+    scheduler = OutboundScheduler(
+        connection_id=UUID(int=81),
+        transport=transport,
+        max_bytes=100,
+        control_reserve_bytes=40,
+        capacity_timeout=0.01,
+    )
+    first = asyncio.create_task(scheduler.send("b" * 50, priority=SendPriority.BULK))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        # 50 in flight + 50 more would consume the whole byte budget.
+        with pytest.raises(SendQueueFullError):
+            await scheduler.send("b" * 50, priority=SendPriority.BULK)
+
+        control = asyncio.create_task(
+            scheduler.send("c" * 50, priority=SendPriority.CONTROL)
+        )
+        await _wait_until(lambda: scheduler.pending_by_priority[SendPriority.CONTROL] == 1)
+
+        gate.set()
+        results = await _drain(first, control)
+    finally:
+        await scheduler.close()
+
+    assert results == [None, None]
+    assert scheduler.pending_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_sustained_control_traffic_does_not_starve_bulk() -> None:
+    """Bulk is guaranteed one turn after ``fairness_quota`` higher-priority sends."""
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    calls: list[str] = []
+
+    async def transport(payload: str) -> None:
+        calls.append(payload)
+        if payload == "bulk-a":
+            started.set()
+            await gate.wait()
+
+    scheduler = OutboundScheduler(
+        connection_id=UUID(int=82),
+        transport=transport,
+        fairness_quota=3,
+    )
+    first = asyncio.create_task(scheduler.send("bulk-a", priority=SendPriority.BULK))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        bulk_b = asyncio.create_task(
+            scheduler.send("bulk-b", priority=SendPriority.BULK)
+        )
+        controls = [
+            asyncio.create_task(
+                scheduler.send(f"control-{index}", priority=SendPriority.CONTROL)
+            )
+            for index in range(5)
+        ]
+        await _wait_until(
+            lambda: scheduler.pending_by_priority[SendPriority.CONTROL] == 5
+            and scheduler.pending_by_priority[SendPriority.BULK] == 1
+        )
+
+        gate.set()
+        results = await _drain(first, bulk_b, *controls)
+    finally:
+        await scheduler.close()
+
+    assert all(result is None for result in results)
+    # Three control turns, then the waiting bulk frame, then the rest.
+    assert calls == [
+        "bulk-a",
+        "control-0",
+        "control-1",
+        "control-2",
+        "bulk-b",
+        "control-3",
+        "control-4",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admission_deadline_is_not_reset_by_notifications() -> None:
+    """Capacity wait uses one total deadline instead of restarting on notify."""
+    started = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def transport(payload: str) -> None:
+        started.set()
+        await gate.wait()
+
+    scheduler = OutboundScheduler(
+        connection_id=UUID(int=83),
+        transport=transport,
+        max_queue=1,
+        capacity_timeout=0.05,
+    )
+    first = asyncio.create_task(scheduler.send("in-flight", priority=SendPriority.BULK))
+    stop = asyncio.Event()
+
+    async def churn_notifications() -> None:
+        while not stop.is_set():
+            async with scheduler._capacity:
+                scheduler._capacity.notify_all()
+            await asyncio.sleep(0.002)
+
+    churn = asyncio.create_task(churn_notifications())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        elapsed_start = time.monotonic()
+        with pytest.raises(SendQueueFullError):
+            await asyncio.wait_for(
+                scheduler.send("request", priority=SendPriority.REQUEST),
+                timeout=1.0,
+            )
+        elapsed = time.monotonic() - elapsed_start
+    finally:
+        stop.set()
+        await asyncio.gather(churn, return_exceptions=True)
+        gate.set()
+        await _drain(first)
+        await scheduler.close()
+
+    # The waiter must time out on its own total deadline rather than waiting
+    # forever because each notification restarted a fresh timeout.
+    assert elapsed >= 0.04
+    assert elapsed < 1.0
+    assert scheduler.rejected_count == 1
+
+
+@pytest.mark.asyncio
 async def test_r03_4_control_overtakes_queued_bulk_frames() -> None:
     """A CONTROL frame admitted after BULK frames is transmitted first."""
     gate = asyncio.Event()
