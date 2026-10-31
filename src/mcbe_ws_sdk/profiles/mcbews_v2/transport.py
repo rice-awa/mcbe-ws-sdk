@@ -188,11 +188,15 @@ class ReassemblyPool:
         if direction not in ("up", "down") or not isinstance(frame, str):
             fail("INVALID_FRAGMENT")
         pieces = frame.split("|", 3)
-        if len(pieces) != 4 or pieces[0] != PREFIX:
+        if len(pieces) < 3 or pieces[0] != PREFIX:
             fail("INVALID_FRAGMENT")
-        _, tid, indexes, content = pieces
+        tid = pieces[1]
         _transport_id(tid, direction)
         key = dumps([connection, source, tid])
+        if len(pieces) != 4:
+            self._drop(key, now)
+            fail("INVALID_FRAGMENT")
+        _, _, indexes, content = pieces
         try:
             valid_frame = _fits(frame, direction, self.cfg)
         except UnicodeError:

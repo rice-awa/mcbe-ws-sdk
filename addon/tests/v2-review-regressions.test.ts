@@ -1,8 +1,57 @@
 import { expect, it } from "vitest";
 import { decode } from "../scripts/bridge/v2/codec";
-import { fragment, Limits, ReassemblyPool } from "../scripts/bridge/v2/transport";
+import { Direction, fragment, Limits, ReassemblyPool } from "../scripts/bridge/v2/transport";
 
 const message = { v: "MCBEWS/2", kind: "notification", method: "echo", params: "x".repeat(500) };
+
+for (const [direction, tid, other] of [
+  ["up", "a.e.1", "p.e.1"],
+  ["down", "p.e.1", "a.e.1"],
+] as [Direction, string, string][]) {
+  it.each(["2/3" + "x".repeat(500), "2/" + String.fromCharCode(0xd800), "bad-index"])(
+    `releases ${direction} continuation without content separator %j`,
+    (tail) => {
+      const pool = new ReassemblyPool();
+      const frames = fragment(message, tid, direction);
+      expect(pool.receive("c", "s", frames[0], direction)).toBeNull();
+      expect(pool.stats.bytes).toBeGreaterThan(0);
+      expect(() => pool.receive("c", "s", `MCBEWS2|${tid}|${tail}`, direction)).toThrow("INVALID_FRAGMENT");
+      expect(pool.stats).toEqual({ buffers: 0, bytes: 0, tombstones: 1 });
+      for (const f of frames.slice(1)) expect(pool.receive("c", "s", f, direction)).toBeNull();
+    }
+  );
+
+  it(`does not allocate for unattributable or unknown invalid ${direction} frames`, () => {
+    const pool = new ReassemblyPool({ tombstones: 1 });
+    const invalid = [
+      `wrong|${tid}|bad-index`,
+      `MCBEWS2|${tid}`,
+      `MCBEWS2|${other}|bad-index`,
+      `MCBEWS2|${tid}!|bad-index`,
+      `MCBEWS2|${tid.slice(0, -1)}2|bad-index`,
+      `MCBEWS2|${tid.slice(0, -1)}2|2/3` + "x".repeat(500),
+      `MCBEWS2|${tid.slice(0, -1)}2|2/` + String.fromCharCode(0xd800),
+    ];
+    for (const frame of invalid) {
+      expect(() => pool.receive("c", "s", frame, direction)).toThrow("INVALID_FRAGMENT");
+      expect(pool.stats).toEqual({ buffers: 0, bytes: 0, tombstones: 0 });
+    }
+    const frames = fragment(message, tid, direction);
+    expect(pool.receive("c", "s", frames[0], direction)).toBeNull();
+    const active = pool.stats;
+    for (const frame of invalid) {
+      expect(() => pool.receive("c", "s", frame, direction)).toThrow("INVALID_FRAGMENT");
+      expect(pool.stats).toEqual(active);
+    }
+    expect(
+      frames
+        .slice(1)
+        .map((f) => pool.receive("c", "s", f, direction))
+        .filter(Boolean)
+    ).toEqual([message]);
+    expect(pool.stats).toEqual({ buffers: 0, bytes: 0, tombstones: 1 });
+  });
+}
 
 it("samples once across prune/push and suppresses expiry without ghost owners", () => {
   let now = 0;

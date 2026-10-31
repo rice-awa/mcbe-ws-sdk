@@ -126,15 +126,18 @@ export class ReassemblyPool {
     identity(source);
     if (!["up", "down"].includes(direction) || typeof frame !== "string") fail("INVALID_FRAGMENT");
     const first = frame.indexOf("|"),
-      second = frame.indexOf("|", first + 1),
-      third = frame.indexOf("|", second + 1);
-    if (first < 0 || second < 0 || third < 0 || frame.slice(0, first) !== MANIFEST.carrier.prefix)
-      fail("INVALID_FRAGMENT");
-    const tid = frame.slice(first + 1, second),
-      indexes = frame.slice(second + 1, third),
-      content = frame.slice(third + 1);
+      second = frame.indexOf("|", first + 1);
+    if (first < 0 || second < 0 || frame.slice(0, first) !== MANIFEST.carrier.prefix) fail("INVALID_FRAGMENT");
+    const tid = frame.slice(first + 1, second);
     transportId(tid, direction);
     const key = JSON.stringify([connection, source, tid]);
+    const third = frame.indexOf("|", second + 1);
+    if (third < 0) {
+      this.drop(key, now);
+      fail("INVALID_FRAGMENT");
+    }
+    const indexes = frame.slice(second + 1, third),
+      content = frame.slice(third + 1);
     if (!scalar(frame) || !fits(frame, direction, this.cfg)) {
       this.drop(key, now);
       fail("INVALID_FRAGMENT");

@@ -63,6 +63,74 @@ def recv(frame: str) -> dict:
     return {"op": "receive", "frame": frame, "direction": "up"}
 
 
+@pytest.mark.parametrize("direction,tid", [("up", "a.e.1"), ("down", "p.e.1")])
+@pytest.mark.parametrize("tail", ["2/3" + "x" * 500, "2/\ud800", "bad-index"])
+def test_missing_content_separator_releases_and_suppresses(
+    direction: str, tid: str, tail: str
+) -> None:
+    frames = fragment(MESSAGE, tid, direction)
+    pool = ReassemblyPool()
+    assert pool.receive("c", "s", frames[0], direction) is None
+    assert pool.stats["bytes"] > 0
+    invalid = f"MCBEWS2|{tid}|{tail}"
+    with pytest.raises(V2ProtocolError, match="INVALID_FRAGMENT"):
+        pool.receive("c", "s", invalid, direction)
+    assert pool.stats == {"buffers": 0, "bytes": 0, "tombstones": 1}
+    assert all(pool.receive("c", "s", f, direction) is None for f in frames[1:])
+    results = typescript(
+        [{"op": "init"}]
+        + [dict(recv(f), direction=direction) for f in [frames[0], invalid, *frames[1:]]]
+    )
+    assert results[2] == {"code": "INVALID_FRAGMENT", "stats": pool.stats}
+    assert all(r["message"] is None for r in results[3:])
+
+
+@pytest.mark.parametrize(
+    "direction,tid,other", [("up", "a.e.1", "p.e.1"), ("down", "p.e.1", "a.e.1")]
+)
+def test_unattributable_or_unknown_invalid_frames_do_not_allocate(
+    direction: str, tid: str, other: str
+) -> None:
+    invalid = [
+        f"wrong|{tid}|bad-index",
+        f"MCBEWS2|{tid}",
+        f"MCBEWS2|{other}|bad-index",
+        f"MCBEWS2|{tid}!|bad-index",
+        f"MCBEWS2|{tid[:-1]}2|bad-index",
+        f"MCBEWS2|{tid[:-1]}2|2/3" + "x" * 500,
+        f"MCBEWS2|{tid[:-1]}2|2/\ud800",
+    ]
+    pool = ReassemblyPool(overrides={"tombstones": 1})
+    operations = [{"op": "init", "overrides": {"tombstones": 1}}]
+    for frame in invalid:
+        with pytest.raises(V2ProtocolError, match="INVALID_FRAGMENT"):
+            pool.receive("c", "s", frame, direction)
+        assert pool.stats == {"buffers": 0, "bytes": 0, "tombstones": 0}
+        operations.append(dict(recv(frame), direction=direction))
+    frames = fragment(MESSAGE, tid, direction)
+    assert pool.receive("c", "s", frames[0], direction) is None
+    active = dict(pool.stats)
+    operations.append(dict(recv(frames[0]), direction=direction))
+    for frame in invalid:
+        with pytest.raises(V2ProtocolError, match="INVALID_FRAGMENT"):
+            pool.receive("c", "s", frame, direction)
+        assert pool.stats == active
+        operations.append(dict(recv(frame), direction=direction))
+    assert [v for f in frames[1:] if (v := pool.receive("c", "s", f, direction))] == [MESSAGE]
+    operations.extend(dict(recv(f), direction=direction) for f in frames[1:])
+    results = typescript(operations)
+    assert all(
+        r == {"code": "INVALID_FRAGMENT", "stats": {"buffers": 0, "bytes": 0, "tombstones": 0}}
+        for r in results[1 : 1 + len(invalid)]
+    )
+    assert all(
+        r == {"code": "INVALID_FRAGMENT", "stats": active}
+        for r in results[2 + len(invalid) : 2 + 2 * len(invalid)]
+    )
+    assert results[-1]["message"] == MESSAGE
+    assert results[-1]["stats"] == pool.stats
+
+
 @pytest.mark.parametrize(
     "overrides,extra",
     [({"metadata_bytes": 1}, {"meta": {"x": "y"}}), ({"depth": 1}, {"params": {"nested": [0]}})],
