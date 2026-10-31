@@ -15,17 +15,27 @@
 - `toolPlayer.ts` — 为每次响应投递（tellraw）标记一个"塔式传输"玩家
 - `bootstrap.ts` — 安全的初始化生命周期（早期初始化 → 世界加载完成后）
 
-Addon 完全拥有能力处理生命周期。能力通过 `capabilities/index.ts` 中的内置
-能力注册表进行分发。Python SDK 不包含入站能力注册表 —— 它发送请求
-并接收响应。
+Addon 完全拥有能力处理生命周期。能力通过 `capabilities/index.ts` 中的注册表
+按名称分发。Python SDK 提供规则相同的内部 `CapabilityRegistry`，但尚未
+路由附加包 → Python 的入站能力帧。
 
 ## 用法
 
 从 Python 宿主出发，`AddonBridgeService` + `AddonBridgeClient` 发送能力请求；
 addon 接收并在游戏内投递。
 
-从 addon 侧出发，通过在 `capabilities/index.ts` 的能力注册表中
-追加条目来注册能力。路由器会自动分发。
+从 addon 侧出发，按能力名注册处理器。自定义能力与内置能力共存，
+路由器自动分发：
+
+```ts
+import { registerCapability } from "./bridge/router";
+
+const handle = registerCapability("echo", (_name, payload) => ({ ok: true, payload }));
+// unregisterCapability(handle)
+```
+
+重名默认抛错，传入 `replace: true` 才覆盖。可选 `validate(payload)` 在处理器之前
+运行，返回消息即拒绝输入。调用进行中注销不影响当前调用；之后的调用不再看到该名称。
 
 ### TypeScript 宿主（覆盖模式）
 
@@ -91,8 +101,9 @@ Addon 内置一套开箱即用的能力注册表（`scripts/bridge/capabilities/
 | `get_inventory_snapshot` | `getInventorySnapshot.ts` | 获取玩家背包快照（槽位、物品 ID、数量、自定义名称）          |
 | `run_world_command`      | `runWorldCommand.ts`      | 在世界上执行一条 MC 命令（受 `commandSafety.ts` 黑名单保护） |
 
-开发者通过在 `capabilities/index.ts` 的能力注册表中追加新条目来
-添加自定义能力，与内置能力共存，仍由 `router.ts` 按能力名查找调用。
+开发者通过 `registerCapability(name, handler)` 添加自定义能力，
+与内置能力共存，仍由 `router.ts` 按能力名查找调用。
+源码中的 `capabilities/index.ts` 表仍可用于编译期追加。
 
 > 注意：`find_entities` 暂未内置。当前协议中的 `scriptevent` 并不携带发起玩家的
 > 来源上下文（source-player），而实体查询需要该上下文来限定范围；一旦协议支持

@@ -237,7 +237,7 @@ def _send_noop(payload: str) -> Any:  # pragma: no cover - transport stub
     return f
 
 
-def test_facade_has_no_inbound_capability_registry() -> None:
+def test_facade_does_not_route_inbound_capability_frames() -> None:
     params = inspect.signature(McbeServerFacade.__init__).parameters
     inbound_param = "capabil" + "ities"
     bridge_hook_name = "on_bridge" + "_message"
@@ -247,7 +247,9 @@ def test_facade_has_no_inbound_capability_registry() -> None:
     assert inbound_param not in params
     assert not hasattr(McbeServerFacade(), "_capabilities")
     assert not hasattr(NoOpHook, bridge_hook_name)
-    assert not hasattr(mcbe_ws_sdk, registry_export)
+    # R05 exports an internal registry; the facade still does not dispatch
+    # inbound addon capability frames (that wire path is R12).
+    assert hasattr(mcbe_ws_sdk, registry_export)
     assert deleted_package_export not in mcbe_ws_sdk.__all__
 
 

@@ -18,19 +18,30 @@ Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart 
 - `toolPlayer.ts` — marks a player as a towered transport per response delivery (tellraw)
 - `bootstrap.ts` — safe init lifecycle (early init → after-world-load)
 
-The addon owns the full capability-handling lifecycle. Capabilities are dispatched
-through the built-in default capability registry in `capabilities/index.ts`.
-The Python SDK has no inbound capability registry — it sends requests and receives
-responses.
+The addon owns the full capability-handling lifecycle. Capabilities dispatch by
+name through the registry in `capabilities/index.ts`. The Python SDK ships an
+internal `CapabilityRegistry` with the same registration rules, but it does not
+route inbound addon → Python capability frames yet.
 
 ## Usage
 
 From a Python host, `AddonBridgeService` + `AddonBridgeClient` sends capability
 requests; the addon picks them up and delivers them in-game.
 
-From the addon side, capabilities are registered by appending entries to
-the default registry in `capabilities/index.ts`. The router dispatches
-automatically.
+From the addon side, register a handler by capability name. Custom entries
+coexist with the built-ins; the router dispatches automatically:
+
+```ts
+import { registerCapability } from "./bridge/router";
+
+const handle = registerCapability("echo", (_name, payload) => ({ ok: true, payload }));
+// unregisterCapability(handle)
+```
+
+Registering a duplicate name throws unless `replace: true` is passed. An
+optional `validate(payload)` runs before the handler and returns a message to
+reject the input. Unregistering during an in-flight call does not change that
+call; later calls no longer see the name.
 
 ### TypeScript host (override mode)
 
@@ -97,9 +108,10 @@ The addon ships a ready-to-use capability registry
 | `get_inventory_snapshot` | `getInventorySnapshot.ts` | Get a player inventory snapshot (slots, item ID, count, custom name)          |
 | `run_world_command`      | `runWorldCommand.ts`      | Run an MC command in the world (guarded by the `commandSafety.ts` blacklist)  |
 
-Developers add custom capabilities by appending entries to
-the default registry in `capabilities/index.ts`, coexisting with the
-built-in capabilities and still looked up by `router.ts` by capability name.
+Developers add custom capabilities with `registerCapability(name, handler)`.
+They coexist with the built-ins and are looked up by name by `router.ts`.
+Editing the source table in `capabilities/index.ts` remains available for
+compile-time additions.
 
 > Note: `find_entities` is not yet bundled. The current protocol's `scriptevent` does not carry the source-player context, while an entity query needs that context to scope the search; once the protocol supports player-sourced scriptevents, this capability will be added.
 

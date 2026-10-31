@@ -26,6 +26,13 @@ from mcbe_ws_sdk.addon import (
     ConnectionAddonBridgeClient,
     LegacyUiChatCallbackAdapter,
 )
+from mcbe_ws_sdk.capability import (
+    CapabilityContext,
+    CapabilityHandler,
+    CapabilityRegistration,
+    CapabilityRegistry,
+    CapabilityValidator,
+)
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.config import DispatchSettings, SendSchedulerSettings
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
@@ -34,6 +41,8 @@ from mcbe_ws_sdk.errors import (
     BridgeError,
     BridgeLimitError,
     BridgeTimeoutError,
+    CapabilityAlreadyRegisteredError,
+    CapabilityError,
     ConfigurationError,
     FacadeLifecycleError,
     FrameTooLargeError,
@@ -150,6 +159,13 @@ __all__ = (
     "BridgeLimitError",
     "BridgeTimeoutError",
     "BusinessDispatcher",
+    "CapabilityAlreadyRegisteredError",
+    "CapabilityContext",
+    "CapabilityError",
+    "CapabilityHandler",
+    "CapabilityRegistration",
+    "CapabilityRegistry",
+    "CapabilityValidator",
     "CATEGORY_ADDON",
     "CATEGORY_COMMAND",
     "CommandRegistry",

@@ -17,6 +17,20 @@ class FrameTooLargeError(ProtocolError):
     """Raised when a frame cannot fit within its configured byte budget."""
 
 
+class CapabilityError(McbeWsSdkError):
+    """Base class for capability registry errors."""
+
+
+class CapabilityAlreadyRegisteredError(CapabilityError, ValueError):
+    """Raised when a capability name is registered twice without replacement."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"capability already registered: {name!r} (pass replace=True to override)"
+        )
+        self.name = name
+
+
 class BridgeError(McbeWsSdkError):
     """Base class for add-on bridge errors."""
 

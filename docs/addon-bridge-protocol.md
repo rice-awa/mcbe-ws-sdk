@@ -283,9 +283,30 @@ Optional registerable module:
 - `run_world_command` — controlled world command execution with a result
   (must be explicitly attached to the registry by host/Addon)
 
-The capability set is owned by the Addon; the Python SDK does **not** ship an
-inbound capability dispatcher. Unregistered capabilities return
-`UNSUPPORTED_CAPABILITY`.
+Custom capabilities are registered by name without editing the router:
+
+```ts
+import { registerCapability } from "./bridge/router";
+import { handleGetPlayerSnapshot } from "./bridge/capabilities";
+
+const handle = registerCapability("echo", (_name, payload) => ({ ok: true, payload }));
+// unregisterCapability(handle) removes only this exact registration.
+```
+
+- Registrations coexist with the built-in defaults and dispatch by name.
+- A duplicate name throws unless `replace: true` is passed; a stale handle
+  cannot remove its replacement.
+- An optional `validate` callback runs before the handler and returns a
+  message to reject the payload (`INVALID_REQUEST`).
+- `setCapabilityHandler` remains the legacy aggregate entry: while set, it
+  receives every capability and the built-in registry is not consulted.
+- Unregistering during an in-flight call does not change that call; later
+  calls no longer see the name.
+
+The capability set on the wire is owned by the Addon. The Python SDK ships an
+internal `CapabilityRegistry` with the same registration/dispatch rules, but it
+does **not** route inbound addon capability frames yet (see R12). Unregistered
+capabilities return `UNSUPPORTED_CAPABILITY`.
 
 ## Request correlation and lifecycle
 

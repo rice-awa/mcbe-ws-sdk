@@ -1,18 +1,37 @@
-import type { CapabilityHandler } from "../router";
+import type { CapabilityHandler, CapabilityValidator } from "../capabilityRegistry";
+import { CapabilityRegistry } from "../capabilityRegistry";
 
 import { handleGetPlayerSnapshot } from "./getPlayerSnapshot";
 import { handleGetInventorySnapshot } from "./getInventorySnapshot";
 import { handleRunWorldCommand } from "./runWorldCommand";
 
-// 默认能力注册表。router.ts 在宿主未通过 setCapabilityHandler 注入处理器时，
-// 回退到本表提供开箱即用的基础能力；宿主注册处理器后会完全覆盖默认表。
-//
-// 内置 handler 只接受 payload，而 CapabilityHandler 签名为 (capability, payload, context)，
-// 故在此用适配器抹平第一个 capability 参数和第三个 context 参数。
+/** Reject a non-string `target` before the handler touches world state. */
+const validateTarget: CapabilityValidator = (payload) =>
+  payload.target === undefined || typeof payload.target === "string" ? null : "payload.target must be a string";
+
+// 默认能力表（旧入口，形状与语义保持不变）。新的运行时注册请使用
+// `registerCapability`；该对象保留给按源码追加条目的旧用法与兼容检查。
 export const defaultCapabilityRegistry: Record<string, CapabilityHandler> = {
   get_player_snapshot: (_capability, payload, _context) => handleGetPlayerSnapshot(payload),
   get_inventory_snapshot: (_capability, payload, _context) => handleGetInventorySnapshot(payload),
 };
+
+/** Add the built-in capabilities to *registry* (used for creation and test reset). */
+export function registerDefaultCapabilities(registry: CapabilityRegistry): void {
+  registry.register("get_player_snapshot", defaultCapabilityRegistry.get_player_snapshot, {
+    validate: validateTarget,
+  });
+  registry.register("get_inventory_snapshot", defaultCapabilityRegistry.get_inventory_snapshot, {
+    validate: validateTarget,
+  });
+}
+
+/** Build a registry containing only the built-in capabilities. */
+export function createDefaultCapabilityRegistry(): CapabilityRegistry {
+  const registry = new CapabilityRegistry();
+  registerDefaultCapabilities(registry);
+  return registry;
+}
 
 export { handleGetPlayerSnapshot } from "./getPlayerSnapshot";
 export { handleGetInventorySnapshot } from "./getInventorySnapshot";

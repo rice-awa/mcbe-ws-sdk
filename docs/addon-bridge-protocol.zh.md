@@ -260,7 +260,25 @@ Addon 默认能力注册表当前包含：
 
 - `run_world_command`：受控执行世界命令并返回结果（需宿主/Addon 显式挂到注册表）
 
-能力集合由 Addon 拥有；Python SDK **不**内置入站能力分发器。未注册 capability 时，Addon 返回 `UNSUPPORTED_CAPABILITY`。
+自定义能力按名称注册，无需修改路由器：
+
+```ts
+import { registerCapability } from "./bridge/router";
+import { handleGetPlayerSnapshot } from "./bridge/capabilities";
+
+const handle = registerCapability("echo", (_name, payload) => ({ ok: true, payload }));
+// unregisterCapability(handle) 只移除这一项精确注册。
+```
+
+- 注册项与内置默认能力共存，按名称分发。
+- 重名默认抛错；传入 `replace: true` 才覆盖。旧句柄不能移除替换后的条目。
+- 可选的 `validate` 在处理器之前运行；返回消息即拒绝输入（`INVALID_REQUEST`）。
+- `setCapabilityHandler` 仍是旧的总处理器入口：设置后它接收所有能力，内置注册表不参与分发。
+- 调用进行中注销不影响当前调用；之后的调用不再看到该名称。
+
+线上能力集合仍由 Addon 拥有。Python SDK 提供内部 `CapabilityRegistry`，注册/分发规则相同，
+但**尚未**路由附加包反向能力帧（见 R12）。未注册 capability 时，Addon 返回
+`UNSUPPORTED_CAPABILITY`。
 
 ## 请求关联与生命周期
 

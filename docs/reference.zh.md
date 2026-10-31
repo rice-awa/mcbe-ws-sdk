@@ -10,5 +10,5 @@ API 签名与 docstring 以源码为准（**公开 API 文档字符串为英文*
 完整参考覆盖：
 
 - 公共包 `mcbe_ws_sdk` 再导出
-- `gateway` / `addon` / `flow` / `protocol` / `profiles` / `delivery` / `command`
+- `gateway` / `addon` / `capability` / `flow` / `protocol` / `profiles` / `delivery` / `command`
 - `config` / `logging` / `errors`

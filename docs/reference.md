@@ -52,6 +52,12 @@ Private names (`_*`) are filtered out. Prefer the public re-exports on
     options:
       show_submodules: true
 
+## Capability registry
+
+::: mcbe_ws_sdk.capability
+    options:
+      show_submodules: true
+
 ## Config & logging
 
 ::: mcbe_ws_sdk.config

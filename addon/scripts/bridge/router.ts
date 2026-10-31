@@ -2,8 +2,22 @@ import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import { system } from "@minecraft/server";
 
 import { CAPABILITY_REQUEST_SCRIPT_EVENT_ID, MCBEWS_V1_ERROR_CODES } from "./protocol";
-import { defaultCapabilityRegistry } from "./capabilities";
+import { createDefaultCapabilityRegistry, registerDefaultCapabilities } from "./capabilities";
+import type {
+  CapabilityContext,
+  CapabilityHandler,
+  CapabilityRegistration,
+  RegisterCapabilityOptions,
+} from "./capabilityRegistry";
 import { utf8ByteLength } from "./chunking";
+
+export type {
+  CapabilityContext,
+  CapabilityHandler,
+  CapabilityRegistration,
+  CapabilityValidator,
+  RegisterCapabilityOptions,
+} from "./capabilityRegistry";
 
 // ---------------------------------------------------------------------------
 // Structured types
@@ -28,17 +42,6 @@ export type BridgeRequest = {
   payload: Record<string, unknown>;
 };
 
-export type CapabilityContext = {
-  caller: { kind: "server" };
-  requestVersion: 1 | 2;
-};
-
-export type CapabilityHandler = (
-  capability: string,
-  payload: Record<string, unknown>,
-  context: CapabilityContext
-) => Record<string, unknown> | Promise<Record<string, unknown>>;
-
 export type ResponseSender = (requestId: string, jsonBody: string) => Promise<void>;
 
 export type ResponseSendOutcome =
@@ -61,6 +64,7 @@ type ParseResult =
 
 let isBridgeRouterRegistered = false;
 let capabilityHandler: CapabilityHandler | null = null;
+const capabilityRegistry = createDefaultCapabilityRegistry();
 let responseSender: ResponseSender | null = null;
 let bridgeActive = false;
 const preReadyQueue: RouterEvent[] = [];
@@ -258,8 +262,28 @@ export async function activateBridge(sender: ResponseSender): Promise<void> {
 // setCapabilityHandler
 // ---------------------------------------------------------------------------
 
+/**
+ * Replace the built-in registry with one aggregate handler (legacy entry).
+ *
+ * While set, every capability goes to this handler and the built-in defaults
+ * are not consulted. Call with a fresh reset to return to the registry path.
+ */
 export function setCapabilityHandler(fn: CapabilityHandler): void {
   capabilityHandler = fn;
+}
+
+/** Register a capability alongside the built-ins without editing the router. */
+export function registerCapability(
+  name: string,
+  handler: CapabilityHandler,
+  options?: RegisterCapabilityOptions
+): CapabilityRegistration {
+  return capabilityRegistry.register(name, handler, options);
+}
+
+/** Remove a registration if it is still the current entry for its name. */
+export function unregisterCapability(registration: CapabilityRegistration): boolean {
+  return capabilityRegistry.unregister(registration);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,22 +332,7 @@ export async function handleBridgeScriptEvent(event: RouterEvent): Promise<Respo
       };
     }
   } else {
-    const defaultHandler = defaultCapabilityRegistry[request.capability];
-    if (defaultHandler) {
-      try {
-        resultPayload = await defaultHandler(request.capability, request.payload, context);
-      } catch {
-        resultPayload = {
-          ok: false,
-          error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
-        };
-      }
-    } else {
-      resultPayload = {
-        ok: false,
-        error: { code: "UNSUPPORTED_CAPABILITY", message: `unsupported capability: ${request.capability}` },
-      };
-    }
+    resultPayload = await capabilityRegistry.dispatch(request.capability, request.payload, context);
   }
 
   if (responseSender) {
@@ -398,6 +407,8 @@ export function _testingReset(): void {
   preReadyQueue.length = 0;
   responseSender = null;
   capabilityHandler = null;
+  capabilityRegistry.clear();
+  registerDefaultCapabilities(capabilityRegistry);
   bridgeActive = false;
   isBridgeRouterRegistered = false;
   processingTail = Promise.resolve();
