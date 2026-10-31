@@ -50,6 +50,12 @@ mkdocs serve
 mkdocs build --strict
 ```
 
+## Development standards
+
+- Keep documentation, docstrings, comments, and other descriptions concise, clear, and easy to maintain.
+- Explain intent, constraints, and non-obvious decisions; avoid restating code or adding unnecessary background, caveats, or examples.
+- Update or remove outdated descriptions when behavior changes; link to existing documentation instead of duplicating it.
+
 ## Documentation language
 
 - **Public source docstrings** (modules, classes, public methods) are **English**. Prefer Google-style sections (`Args` / `Returns` / `Raises`) when structured detail is needed. Do not put dual-language EN+ZH blocks in source docstrings.
