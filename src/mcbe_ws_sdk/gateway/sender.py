@@ -29,6 +29,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from enum import IntEnum
 from uuid import UUID
@@ -36,6 +37,7 @@ from uuid import UUID
 import structlog
 
 from mcbe_ws_sdk.errors import SendClosedError, SendQueueFullError
+from mcbe_ws_sdk.tracing import observe
 
 logger = structlog.get_logger(__name__)
 
@@ -57,6 +59,7 @@ class _Frame:
     priority: SendPriority
     byte_size: int
     future: asyncio.Future[None]
+    context: Context
 
 
 class OutboundScheduler:
@@ -221,8 +224,10 @@ class OutboundScheduler:
             priority=priority,
             byte_size=len(payload.encode("utf-8")),
             future=asyncio.get_running_loop().create_future(),
+            context=copy_context(),
         )
         await self._admit(frame)
+        observe("enqueued", source=source, byte_size=frame.byte_size)
         try:
             await frame.future
         except asyncio.CancelledError:
@@ -315,7 +320,8 @@ class OutboundScheduler:
                 if frame.future.cancelled():
                     continue
                 await self._apply_rate_limit()
-                await self._transport(frame.payload)
+                # The sender worker may predate this operation.
+                await asyncio.create_task(self._transmit(frame.payload), context=frame.context)
             except asyncio.CancelledError:
                 self._fail_frame(frame, self._closed_error or SendClosedError())
                 raise
@@ -330,6 +336,9 @@ class OutboundScheduler:
                     frame.future.set_result(None)
             finally:
                 await self._release(frame)
+
+    async def _transmit(self, payload: str) -> None:
+        await self._transport(payload)
 
     async def _next_frame(self) -> _Frame | None:
         async with self._capacity:

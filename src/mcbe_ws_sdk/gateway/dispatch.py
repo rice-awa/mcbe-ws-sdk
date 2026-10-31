@@ -24,10 +24,13 @@ import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from uuid import UUID
 
 import structlog
+
+from mcbe_ws_sdk.tracing import observe
 
 logger = structlog.get_logger(__name__)
 
@@ -39,6 +42,7 @@ class _BusinessItem:
     lane: str
     label: str
     call: BusinessCallable
+    context: Context
 
 
 class BusinessDispatcher:
@@ -60,6 +64,7 @@ class BusinessDispatcher:
         max_queue: int = 256,
         max_concurrent: int = 64,
         name: str = "business",
+        log_rejections: bool = True,
     ) -> None:
         if type(max_queue) is not int or max_queue <= 0:
             raise ValueError("max_queue must be a positive integer")
@@ -67,6 +72,7 @@ class BusinessDispatcher:
             raise ValueError("max_concurrent must be a positive integer")
         self._connection_id = connection_id
         self._name = name
+        self._log_rejections = log_rejections
         self._max_queue = max_queue
         self._max_concurrent = max_concurrent
 
@@ -156,7 +162,7 @@ class BusinessDispatcher:
         """
         if self._closed:
             self._rejected += 1
-            logger.warning(
+            self._warn_rejection(
                 "business_submit_after_close",
                 connection_id=str(self._connection_id),
                 dispatcher=self._name,
@@ -166,7 +172,7 @@ class BusinessDispatcher:
             return False
         if self._pending_count >= self._max_queue:
             self._rejected += 1
-            logger.warning(
+            self._warn_rejection(
                 "business_queue_overflow",
                 connection_id=str(self._connection_id),
                 dispatcher=self._name,
@@ -177,7 +183,7 @@ class BusinessDispatcher:
             return False
         self.start()
         self._pending.setdefault(lane, deque()).append(
-            _BusinessItem(lane=lane, label=label, call=call)
+            _BusinessItem(lane=lane, label=label, call=call, context=copy_context())
         )
         self._pending_count += 1
         # A lane that is already running (or already queued) is scheduled when
@@ -187,6 +193,10 @@ class BusinessDispatcher:
             self._ready_set.add(lane)
         self._wakeup.set()
         return True
+
+    def _warn_rejection(self, event: str, **fields: object) -> None:
+        if self._log_rejections:
+            logger.warning(event, **fields)
 
     # -- supervisor ---------------------------------------------------------
 
@@ -219,6 +229,7 @@ class BusinessDispatcher:
                 self._active += 1
                 task = asyncio.create_task(
                     self._run(item),
+                    context=item.context,
                     name=f"{self._name}:{item.label or item.lane}:{self._connection_id}",
                 )
                 self._tasks.add(task)
@@ -234,6 +245,7 @@ class BusinessDispatcher:
             raise
         except Exception:
             self._failed += 1
+            observe("processing_failed", dispatcher=self._name, label=item.label)
             logger.exception(
                 "business_task_failed",
                 connection_id=str(self._connection_id),
@@ -288,6 +300,7 @@ class BusinessDispatcher:
         self._ready_set.clear()
         if drained:
             self._rejected += drained
+        if drained and self._log_rejections:
             logger.info(
                 "business_queue_discarded",
                 connection_id=str(self._connection_id),

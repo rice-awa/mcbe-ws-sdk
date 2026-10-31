@@ -26,6 +26,7 @@ from mcbe_ws_sdk.errors import (
     RequestDuplicateError,
     RequestLimitError,
 )
+from mcbe_ws_sdk.tracing import TraceContext, current_trace
 
 logger = structlog.get_logger(__name__)
 
@@ -59,6 +60,7 @@ class PendingRequest:
     future: asyncio.Future[Any]
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = 0.0
+    trace: TraceContext = field(default_factory=current_trace)
 
     def __post_init__(self) -> None:
         self.future.add_done_callback(_consume_future_exception)

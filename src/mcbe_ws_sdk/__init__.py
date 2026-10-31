@@ -36,6 +36,7 @@ from mcbe_ws_sdk.capability import (
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.config import DispatchSettings, SendSchedulerSettings
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
+from mcbe_ws_sdk.diagnostics import DiagnosticObserver, DiagnosticSettings, is_external_echo
 from mcbe_ws_sdk.errors import (
     BridgeClosedError,
     BridgeError,
@@ -69,12 +70,19 @@ from mcbe_ws_sdk.gateway import (
     DefaultResponseSink,
     EventBus,
     GatewaySettings,
+    InterceptResult,
     LegacyUiChatHook,
     LegacyUiChatHookAdapter,
     McbeServerFacade,
     MessageSurfaceConfig,
     MinecraftProtocolHandler,
     NativeCommandClient,
+    NativeEvent,
+    NativeEventHook,
+    NativeEventSubscriptions,
+    NativeInterceptor,
+    NativeObserver,
+    NativeSubscriptionToken,
     NoOpHook,
     OutboundScheduler,
     OutboundText,
@@ -131,6 +139,7 @@ from mcbe_ws_sdk.profiles.mcbews_v1.models import (
 from mcbe_ws_sdk.protocol import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
+    MinecraftUnsubscribe,
     PlayerMessageEvent,
 )
 from mcbe_ws_sdk.requests import (
@@ -139,6 +148,7 @@ from mcbe_ws_sdk.requests import (
     PendingRequest,
     RequestTable,
 )
+from mcbe_ws_sdk.tracing import TraceContext, current_trace, trace_scope
 
 try:
     __version__ = importlib.metadata.version("mcbe-ws-sdk")
@@ -197,6 +207,14 @@ __all__ = (
     "MinecraftErrorFrame",
     "MinecraftProtocolHandler",
     "NativeCommandClient",
+    "NativeEvent",
+    "NativeEventSubscriptions",
+    "NativeSubscriptionToken",
+    "InterceptResult",
+    "NativeObserver",
+    "NativeInterceptor",
+    "NativeEventHook",
+    "MinecraftUnsubscribe",
     "NoOpHook",
     "LegacyUiChatHook",
     "LegacyUiChatHookAdapter",
@@ -236,6 +254,12 @@ __all__ = (
     "WsEventType",
     "classify_tool_player_message",
     "configure_logging",
+    "DiagnosticSettings",
+    "DiagnosticObserver",
+    "TraceContext",
+    "current_trace",
+    "trace_scope",
+    "is_external_echo",
     "decode_approval_decision",
     "decode_session_request_chat",
     "decode_session_response_message",

@@ -46,16 +46,13 @@ from mcbe_ws_sdk import (
     configure_logging,
 )
 from mcbe_ws_sdk.command.registry import ParsedCommand
+from mcbe_ws_sdk.diagnostics import is_external_echo
 from mcbe_ws_sdk.gateway.connection import ConnectionState, enqueue_response
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
     PlayerMessageEvent,
 )
-
-# Bedrock echoes successful tellraw/say output back as PlayerMessage events
-# with sender "外部". Treat those as transport noise, not real player chat.
-_EXTERNAL_ECHO_SENDERS = frozenset({"外部", "External"})
 
 _HELP_TEXT = (
     "Addon 示例命令：\n"
@@ -171,7 +168,7 @@ class AddonDemoHook(NoOpHook):
         player_event: PlayerMessageEvent,
         parsed: ParsedCommand | None = None,
     ) -> None:
-        if player_event.sender in _EXTERNAL_ECHO_SENDERS:
+        if is_external_echo(player_event.sender, player_event.type):
             logger.debug(
                 "external_echo_ignored",
                 connection_id=str(state.id),

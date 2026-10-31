@@ -29,8 +29,10 @@ from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import BridgeTimeoutError
 from mcbe_ws_sdk.profiles.mcbews_v1.bridge_codec import encode_bridge_request
 from mcbe_ws_sdk.profiles.mcbews_v1.bridge_models import AddonBridgeChunk
+from mcbe_ws_sdk.tracing import TraceContext, observe, trace_scope
 
 if TYPE_CHECKING:
+    from mcbe_ws_sdk.diagnostics import Diagnostics
     from mcbe_ws_sdk.extensions.mcbews_v1.classifier import ToolPlayerMessage
     from mcbe_ws_sdk.extensions.mcbews_v1.models import UiChatChunk, UiChatMessage
 
@@ -78,9 +80,14 @@ class AddonBridgeService:
         self._settings = settings
         self._extensions = extensions
         self._sessions: dict[UUID, AddonBridgeSession] = {}
+        self._diagnostics: dict[UUID, Diagnostics] = {}
         self._timeout_seconds = settings.timeout_seconds
         self._profile = settings.profile
         self._ui_chat_callback: UiChatCallback | None = None
+
+    def set_diagnostics(self, connection_id: UUID, diagnostics: Diagnostics) -> None:
+        """Bind connection-owned diagnostics without transferring lifecycle ownership."""
+        self._diagnostics[connection_id] = diagnostics
 
     def create_client(
         self,
@@ -90,7 +97,28 @@ class AddonBridgeService:
         """Build a client bound to one connection."""
         return ConnectionAddonBridgeClient(self, connection_id, send_command)
 
+    def request_trace(self, connection_id: UUID, request_id: str) -> TraceContext | None:
+        """Return the original context of a pending logical bridge request."""
+        session = self._sessions.get(connection_id)
+        if session is None:
+            return None
+        entry = session._pending_requests.get(request_id)
+        return entry.trace if entry is not None else None
+
     async def request_capability(
+        self,
+        connection_id: UUID,
+        capability: str,
+        payload: dict[str, Any],
+        send_command: CommandSender,
+    ) -> dict[str, Any]:
+        """Send one capability request in the current operation trace."""
+        with trace_scope(
+            connection_id=str(connection_id), diagnostics=self._diagnostics.get(connection_id)
+        ):
+            return await self._request_capability(connection_id, capability, payload, send_command)
+
+    async def _request_capability(
         self,
         connection_id: UUID,
         capability: str,
@@ -108,88 +136,97 @@ class AddonBridgeService:
         session = self._session_for(connection_id)
         request = session.create_request(capability=capability, payload=payload)
         request_id = request.request_id
-        # Every failure after registration - including encoding and logging
-        # preparation before the transport call - must release the pending
-        # entry. Repeated failures therefore never exhaust the pending quota,
-        # and the original exception is propagated unchanged.
-        try:
-            command = encode_bridge_request(
-                request_id=request_id,
-                capability=capability,
-                payload=payload,
-                profile=self._profile,
-            )
-            payload_bytes = len(
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            )
-            # INFO stays free of payload/command content (may contain player data).
-            logger.info(
-                "bridge_request_outbound",
-                request_id=request_id,
-                channel="capability",
-                payload_bytes=payload_bytes,
-            )
-            logger.debug(
-                "bridge_request_outbound",
-                connection_id=str(connection_id),
-                request_id=request_id,
-                capability=capability,
-                command_bytes=len(command.encode("utf-8")),
-                timeout_seconds=self._timeout_seconds,
-            )
+        with trace_scope(request_id=request_id):
+            observe("request_registered", category="addon.bridge")
+            # Every failure after registration - including encoding and logging
+            # preparation before the transport call - must release the pending
+            # entry. Repeated failures therefore never exhaust the pending quota,
+            # and the original exception is propagated unchanged.
             try:
-                await send_command(command)
-            except Exception as exc:
-                # Fail-fast before waiting: host rejected the outbound frame
-                # (e.g. FrameTooLarge) or the connection is gone. Waiting for a
-                # RESP that can never arrive only produces a misleading timeout.
-                logger.warning(
-                    "bridge_request_send_failed",
+                command = encode_bridge_request(
+                    request_id=request_id,
+                    capability=capability,
+                    payload=payload,
+                    profile=self._profile,
+                )
+                payload_bytes = len(
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                )
+                # INFO stays free of payload/command content (may contain player data).
+                logger.info(
+                    "bridge_request_outbound",
+                    request_id=request_id,
+                    channel="capability",
+                    payload_bytes=payload_bytes,
+                )
+                logger.debug(
+                    "bridge_request_outbound",
+                    connection_id=str(connection_id),
+                    request_id=request_id,
+                    capability=capability,
+                    command_bytes=len(command.encode("utf-8")),
+                    timeout_seconds=self._timeout_seconds,
+                )
+                try:
+                    await send_command(command)
+                except Exception as exc:
+                    # Fail-fast before waiting: host rejected the outbound frame
+                    # (e.g. FrameTooLarge) or the connection is gone. Waiting for a
+                    # RESP that can never arrive only produces a misleading timeout.
+                    logger.warning(
+                        "bridge_request_send_failed",
+                        connection_id=str(connection_id),
+                        request_id=request_id,
+                        channel="capability",
+                        payload_bytes=payload_bytes,
+                        error_type=type(exc).__name__,
+                    )
+                    raise
+                logger.info(
+                    "bridge_request_sent",
                     connection_id=str(connection_id),
                     request_id=request_id,
                     channel="capability",
                     payload_bytes=payload_bytes,
-                    error_type=type(exc).__name__,
                 )
+                try:
+                    result: dict[str, Any] = await asyncio.wait_for(
+                        request.future,
+                        self._timeout_seconds,
+                    )
+                except TimeoutError as exc:
+                    logger.warning(
+                        "bridge_request_timeout",
+                        connection_id=str(connection_id),
+                        request_id=request_id,
+                        channel="capability",
+                        payload_bytes=payload_bytes,
+                    )
+                    raise BridgeTimeoutError(request_id) from exc
+                logger.info(
+                    "bridge_request_resolved",
+                    connection_id=str(connection_id),
+                    request_id=request_id,
+                    channel="capability",
+                    result_type=type(result).__name__,
+                )
+                logger.debug(
+                    "bridge_request_resolved_payload",
+                    connection_id=str(connection_id),
+                    request_id=request_id,
+                    capability=capability,
+                    result_type=type(result).__name__,
+                )
+                observe(
+                    "remote_failure" if result.get("ok") is False else "remote_success",
+                    category="addon.bridge",
+                )
+                return result
+            except BaseException as exc:
+                observe("request_failed", category="addon.bridge", error_type=type(exc).__name__)
                 raise
-            logger.info(
-                "bridge_request_sent",
-                connection_id=str(connection_id),
-                request_id=request_id,
-                channel="capability",
-                payload_bytes=payload_bytes,
-            )
-            try:
-                result: dict[str, Any] = await asyncio.wait_for(
-                    request.future,
-                    self._timeout_seconds,
-                )
-            except TimeoutError as exc:
-                logger.warning(
-                    "bridge_request_timeout",
-                    connection_id=str(connection_id),
-                    request_id=request_id,
-                    channel="capability",
-                    payload_bytes=payload_bytes,
-                )
-                raise BridgeTimeoutError(request_id) from exc
-            logger.info(
-                "bridge_request_resolved",
-                connection_id=str(connection_id),
-                request_id=request_id,
-                channel="capability",
-                result_type=type(result).__name__,
-            )
-            logger.debug(
-                "bridge_request_resolved_payload",
-                connection_id=str(connection_id),
-                request_id=request_id,
-                capability=capability,
-                result_type=type(result).__name__,
-            )
-            return result
-        finally:
-            session.cancel_request(request_id)
+            finally:
+                session.cancel_request(request_id)
 
     def is_bridge_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is an addon response fragment."""
@@ -308,6 +345,7 @@ class AddonBridgeService:
 
     def close_connection(self, connection_id: UUID) -> None:
         """Tear down the per-connection session on disconnect."""
+        self._diagnostics.pop(connection_id, None)
         session = self._sessions.pop(connection_id, None)
         if session is not None:
             session.close()

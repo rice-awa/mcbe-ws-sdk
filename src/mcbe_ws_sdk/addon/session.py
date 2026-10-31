@@ -25,7 +25,10 @@ from mcbe_ws_sdk.reassembly import ChunkBuffer, ReassemblyCore
 if TYPE_CHECKING:
     from mcbe_ws_sdk.extensions.mcbews_v1.models import UiChatChunk, UiChatMessage
 
+from dataclasses import replace
+
 from mcbe_ws_sdk.requests import CATEGORY_ADDON, PendingRequest, RequestTable
+from mcbe_ws_sdk.tracing import current_trace
 
 
 class _ChunkWithContent(Protocol):
@@ -127,6 +130,7 @@ class AddonBridgeSession:
             )
         except RequestLimitError as exc:
             raise BridgeLimitError("maximum pending requests exceeded") from exc
+        entry.trace = replace(current_trace(), request_id=entry.request_id)
         return PendingAddonRequest(entry)
 
     def handle_chat_chunk(self, chunk_message: str) -> AddonBridgeChunk:

@@ -14,16 +14,19 @@ itself (for example :class:`~mcbe_ws_sdk.errors.SendQueueFullError`).
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import UUID
 
 import structlog
 
 from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.delivery.outbound import McbeOutboundDelivery
+from mcbe_ws_sdk.diagnostics import Diagnostics
 from mcbe_ws_sdk.errors import RequestTimeoutError
 from mcbe_ws_sdk.gateway.connection import SendPayload
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse
 from mcbe_ws_sdk.requests import CATEGORY_COMMAND, RequestTable
+from mcbe_ws_sdk.tracing import observe, trace_scope
 
 logger = structlog.get_logger(__name__)
 
@@ -40,15 +43,23 @@ class NativeCommandClient:
         send_payload: SendPayload,
         timeout_seconds: float = 5.0,
         log_raw_payloads: bool = False,
+        diagnostics: Diagnostics | None = None,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._connection_id = connection_id
+        self._diagnostics = diagnostics
         self._requests = requests
         self._timeout = timeout_seconds
+
+        async def send_command(payload: str) -> None:
+            request_id = str(json.loads(payload)["header"]["requestId"])
+            with trace_scope(connection_id=str(connection_id), request_id=request_id):
+                await send_payload(payload)
+
         self._delivery = McbeOutboundDelivery(
             connection_id=connection_id,
-            send_payload=send_payload,
+            send_payload=send_command,
             settings=flow,
             log_raw_payloads=log_raw_payloads,
         )
@@ -58,6 +69,16 @@ class NativeCommandClient:
         return self._timeout
 
     async def run(self, command: str) -> MinecraftCommandResponse:
+        """Run a command within the current operation trace and await its reply.
+
+        Registers before sending. The timeout covers remote waiting after send;
+        encoding, admission, transport and remote error-frame failures propagate.
+        Nonzero statusCode replies are returned unchanged for legacy compatibility.
+        """
+        with trace_scope(connection_id=str(self._connection_id), diagnostics=self._diagnostics):
+            return await self._run(command)
+
+    async def _run(self, command: str) -> MinecraftCommandResponse:
         """Send ``command`` and return its reply.
 
         Registration happens in ``before_send``, so a reply delivered while the
@@ -74,11 +95,9 @@ class NativeCommandClient:
         registered: list[str] = []
 
         def _register(request_id: str) -> None:
-            self._requests.reserve(
-                CATEGORY_COMMAND,
-                request_id=request_id,
-                future=future,
-            )
+            with trace_scope(request_id=request_id):
+                self._requests.reserve(CATEGORY_COMMAND, request_id=request_id, future=future)
+                observe("request_registered", category=CATEGORY_COMMAND)
             registered.append(request_id)
 
         try:
@@ -88,6 +107,11 @@ class NativeCommandClient:
                 before_send=_register,
             )
         except BaseException as exc:
+            observe(
+                "request_failed",
+                request_id=registered[0] if registered else None,
+                error_type=type(exc).__name__,
+            )
             if registered:
                 self._requests.discard(CATEGORY_COMMAND, registered[0])
                 if not future.done():
@@ -95,8 +119,18 @@ class NativeCommandClient:
             raise
 
         try:
-            return await asyncio.wait_for(future, self._timeout)
+            response = await asyncio.wait_for(future, self._timeout)
+            status = response.body.get("statusCode")
+            observe(
+                ("remote_failure" if status != 0 else "remote_success")
+                if isinstance(status, int)
+                else "remote_response",
+                request_id=request_id,
+                category=CATEGORY_COMMAND,
+            )
+            return response
         except TimeoutError as exc:
+            observe("request_timeout", request_id=request_id, category=CATEGORY_COMMAND)
             logger.warning(
                 "native_command_timeout",
                 connection_id=str(self._connection_id),
@@ -104,6 +138,9 @@ class NativeCommandClient:
                 timeout_seconds=self._timeout,
             )
             raise RequestTimeoutError(request_id, self._timeout) from exc
+        except BaseException as exc:
+            observe("request_failed", request_id=request_id, error_type=type(exc).__name__)
+            raise
         finally:
             self._requests.discard(CATEGORY_COMMAND, request_id)
 

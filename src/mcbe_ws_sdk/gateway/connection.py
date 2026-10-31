@@ -20,6 +20,7 @@ entirely onto the host's ``HostSink``.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -36,8 +37,10 @@ from mcbe_ws_sdk.gateway.sink import (
     ResponseSink,
     RouteEnvelope,
 )
+from mcbe_ws_sdk.tracing import TraceContext, current_trace, trace_scope
 
 if TYPE_CHECKING:
+    from mcbe_ws_sdk.diagnostics import Diagnostics
     from mcbe_ws_sdk.gateway.commands import NativeCommandClient
     from mcbe_ws_sdk.gateway.native_events import NativeEventSubscriptions
     from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
@@ -72,6 +75,9 @@ def enqueue_response(state: ConnectionState, message: object) -> None:
             dropped_type=type(dropped).__name__ if dropped is not None else None,
             maxsize=queue.maxsize,
         )
+    if state._response_traces.maxlen != (queue.maxsize or 256):
+        state._response_traces = deque(state._response_traces, maxlen=queue.maxsize or 256)
+    state._response_traces.append((message, current_trace()))
     queue.put_nowait(message)
 
 
@@ -101,6 +107,11 @@ class ConnectionState:
     runtime: ConnectionRuntime | None = field(default=None, repr=False)
     requests: RequestTable | None = field(default=None, repr=False)
     command_client: NativeCommandClient | None = field(default=None, repr=False)
+
+    _response_traces: deque[tuple[object, TraceContext]] = field(
+        default_factory=lambda: deque(maxlen=256), repr=False, kw_only=True
+    )
+    diagnostics: Diagnostics | None = field(default=None, repr=False, kw_only=True)
 
     @property
     def native_events(self) -> NativeEventSubscriptions:
@@ -229,6 +240,8 @@ class ConnectionManager:
             # Legacy path: fail SDK-tracked native command waiters so host
             # tasks do not hang after disconnect.
             state.requests.close()
+        if state.diagnostics is not None:
+            await state.diagnostics.close()
         if state.response_queue is not None:
             discarded = state.response_queue.qsize()
             if discarded:
@@ -237,6 +250,7 @@ class ConnectionManager:
                     connection_id=str(connection_id),
                     discarded=discarded,
                 )
+        state._response_traces.clear()
         await self._bus.emit(WsEventType.DISCONNECTED, state)
         logger.info("connection_dropped", connection_id=str(connection_id))
 
@@ -282,7 +296,16 @@ class ConnectionManager:
                     )
                     continue
                 try:
-                    await self._route_envelope(state, envelope)
+                    context = TraceContext(connection_id=str(state.id))
+                    for index, (queued, trace) in enumerate(state._response_traces):
+                        if queued is message:
+                            context = trace
+                            del state._response_traces[index]
+                            break
+                    with trace_scope(
+                        context=context, connection_id=str(state.id), diagnostics=state.diagnostics
+                    ):
+                        await self._route_envelope(state, envelope)
                 except Exception:
                     logger.exception(
                         "response_sink_dispatch_failed",

@@ -28,9 +28,18 @@ from mcbe_ws_sdk.gateway.hook import (
     ConnectionHook,
     LegacyUiChatHook,
     LegacyUiChatHookAdapter,
+    NativeEventHook,
     NoOpHook,
 )
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
+from mcbe_ws_sdk.gateway.native_events import (
+    InterceptResult,
+    NativeEvent,
+    NativeEventSubscriptions,
+    NativeInterceptor,
+    NativeObserver,
+    NativeSubscriptionToken,
+)
 from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
 from mcbe_ws_sdk.gateway.sender import OutboundScheduler, SendPriority
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
@@ -42,6 +51,14 @@ from mcbe_ws_sdk.gateway.sink import (
 )
 
 __all__ = [
+    "NativeEvent",
+    "NativeEventSubscriptions",
+    "NativeSubscriptionToken",
+    "InterceptResult",
+    "NativeObserver",
+    "NativeInterceptor",
+    "NativeEventHook",
+
     "BusinessDispatcher",
     "ConnectionHook",
     "AddonControlHook",

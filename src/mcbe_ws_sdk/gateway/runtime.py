@@ -24,6 +24,7 @@ from uuid import UUID
 import structlog
 
 from mcbe_ws_sdk.config import DispatchSettings, FlowControlSettings, SendSchedulerSettings
+from mcbe_ws_sdk.diagnostics import Diagnostics
 from mcbe_ws_sdk.errors import RequestClosedError, SendClosedError
 from mcbe_ws_sdk.gateway.commands import NativeCommandClient
 from mcbe_ws_sdk.gateway.connection import SendPayload
@@ -31,6 +32,7 @@ from mcbe_ws_sdk.gateway.dispatch import BusinessDispatcher
 from mcbe_ws_sdk.gateway.native_events import NativeEventSubscriptions
 from mcbe_ws_sdk.gateway.sender import OutboundScheduler, SendPriority
 from mcbe_ws_sdk.requests import RequestTable
+from mcbe_ws_sdk.tracing import trace_scope
 
 logger = structlog.get_logger(__name__)
 
@@ -46,10 +48,12 @@ class ConnectionRuntime:
         send: SendSchedulerSettings,
         flow: FlowControlSettings,
         transport: SendPayload,
+        diagnostics: Diagnostics | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.connection_id = connection_id
+        self.diagnostics = diagnostics
         self.business = BusinessDispatcher(
             connection_id=connection_id,
             max_queue=dispatch.business_queue_maxsize,
@@ -87,6 +91,7 @@ class ConnectionRuntime:
             flow=flow,
             send_payload=self.send_from_host,
             timeout_seconds=dispatch.command_timeout_seconds,
+            diagnostics=diagnostics,
         )
         self.native_events = NativeEventSubscriptions(
             self._send_subscription,
@@ -126,7 +131,8 @@ class ConnectionRuntime:
         not declare a category are treated as requests.
         """
         self._raise_if_closed()
-        await self.scheduler.send_from_host(payload)
+        with trace_scope(connection_id=str(self.connection_id), diagnostics=self.diagnostics):
+            await self.scheduler.send_from_host(payload)
 
     async def send_bulk_from_host(self, payload: str) -> None:
         """``ConnectionState.send_bulk`` adapter for long tellraw/scriptevent text.
@@ -135,11 +141,8 @@ class ConnectionRuntime:
         accept either callable without knowing about the scheduler.
         """
         self._raise_if_closed()
-        await self.scheduler.send(
-            payload,
-            priority=SendPriority.BULK,
-            source="host.bulk",
-        )
+        with trace_scope(connection_id=str(self.connection_id), diagnostics=self.diagnostics):
+            await self.scheduler.send(payload, priority=SendPriority.BULK, source="host.bulk")
 
     async def send_raw(
         self,
@@ -150,7 +153,8 @@ class ConnectionRuntime:
     ) -> None:
         """Send one frame through the scheduler with an explicit priority."""
         self._raise_if_closed()
-        await self.scheduler.send(payload, priority=priority, source=source)
+        with trace_scope(connection_id=str(self.connection_id), diagnostics=self.diagnostics):
+            await self.scheduler.send(payload, priority=priority, source=source)
 
     async def _send_subscription(self, payload: str) -> None:
         await self.send_raw(payload, priority=SendPriority.CONTROL, source="native_subscription")
@@ -188,6 +192,8 @@ class ConnectionRuntime:
         await self.business.close()
         await self.events.close()
         await self.scheduler.close(SendClosedError(reason))
+        if self.diagnostics is not None:
+            await self.diagnostics.close()
         self._lanes.clear()
         logger.debug(
             "connection_runtime_closed",

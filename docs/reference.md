@@ -10,6 +10,8 @@ Private names (`_*`) are filtered out. Prefer the public re-exports on
     options:
       show_submodules: false
 
+See [native events](native-events.md) for observer, interceptor and subscription contracts.
+
 ## Gateway
 
 ::: mcbe_ws_sdk.gateway
@@ -63,6 +65,14 @@ Private names (`_*`) are filtered out. Prefer the public re-exports on
 ::: mcbe_ws_sdk.config
 
 ::: mcbe_ws_sdk.logging
+
+## Tracing and diagnostics
+
+See [diagnostic contracts](diagnostics.md) for packet privacy and delivery stages.
+
+::: mcbe_ws_sdk.tracing
+
+::: mcbe_ws_sdk.diagnostics
 
 ## Errors
 

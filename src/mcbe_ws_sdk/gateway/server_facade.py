@@ -41,6 +41,12 @@ import websockets
 from mcbe_ws_sdk.addon import AddonBridgeService
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.config import GatewaySettings
+from mcbe_ws_sdk.diagnostics import (
+    DiagnosticObserver,
+    Diagnostics,
+    DiagnosticSettings,
+    is_external_echo,
+)
 from mcbe_ws_sdk.errors import (
     FacadeLifecycleError,
     ProtocolError,
@@ -65,6 +71,7 @@ from mcbe_ws_sdk.profiles.mcbews_v1.classifier import ToolPlayerMessage
 from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
 from mcbe_ws_sdk.requests import CATEGORY_COMMAND, RequestTable
+from mcbe_ws_sdk.tracing import TraceContext, current_trace, observe, trace_scope
 
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
@@ -90,7 +97,11 @@ class McbeServerFacade:
         addon: AddonBridgeService | None = None,
         registry: CommandRegistry | None = None,
         surface: MessageSurfaceConfig | None = None,
+        diagnostics: DiagnosticSettings | None = None,
+        diagnostic_observers: tuple[DiagnosticObserver, ...] = (),
     ) -> None:
+        self._diagnostic_settings = diagnostics
+        self._diagnostic_observers = diagnostic_observers
         self._settings = settings if settings is not None else GatewaySettings()
         self._hook = hook if hook is not None else NoOpHook()
         self._legacy_ui_chat_hook = (
@@ -271,6 +282,10 @@ class McbeServerFacade:
 
     def _install_tracking(self, state: ConnectionState, raw_send: SendPayload) -> None:
         """Attach the SDK-owned runtime / request tracking for one connection."""
+        state.diagnostics = Diagnostics(
+            state.id, self._diagnostic_settings, self._diagnostic_observers
+        )
+        self._addon.set_diagnostics(state.id, state.diagnostics)
         if self.reliable_dispatch:
             runtime = ConnectionRuntime(
                 connection_id=state.id,
@@ -278,6 +293,7 @@ class McbeServerFacade:
                 send=self._settings.send,
                 flow=self._settings.flow,
                 transport=raw_send,
+                diagnostics=state.diagnostics,
             )
             state.runtime = runtime
             state.requests = runtime.requests
@@ -295,6 +311,7 @@ class McbeServerFacade:
             flow=self._settings.flow,
             send_payload=raw_send,
             timeout_seconds=self._settings.dispatch.command_timeout_seconds,
+            diagnostics=state.diagnostics,
         )
 
     async def _send_frame(
@@ -347,8 +364,11 @@ class McbeServerFacade:
         runtime = state.runtime
         if runtime is None:
             try:
+                observe("processing_started", label=label)
                 await fn(*args, **kwargs)
+                observe("processing_completed", label=label)
             except Exception:
+                observe("processing_failed", label=label)
                 logger.exception(log_event, connection_id=str(state.id))
             return
 
@@ -362,6 +382,72 @@ class McbeServerFacade:
         runtime.business.submit(run, lane=lane, label=label)
 
     async def _handle_raw(self, state: ConnectionState, raw: str | bytes) -> None:
+        """Capture inbound metadata and restore request correlation before routing."""
+        try:
+            packet = json.loads(raw)
+        except (ValueError, TypeError):
+            packet = {}
+        if not isinstance(packet, dict):
+            packet = {}
+        header = packet.get("header", {})
+        body = packet.get("body", {})
+        header = header if isinstance(header, dict) else {}
+        body = body if isinstance(body, dict) else {}
+        request_id = str(header.get("requestId", "")) or None
+        purpose = str(header.get("messagePurpose", "event"))
+        context = TraceContext(connection_id=str(state.id))
+        pending = (
+            state.requests.get(CATEGORY_COMMAND, request_id)
+            if (
+                state.requests is not None
+                and request_id
+                and purpose in {"commandResponse", "error"}
+            )
+            else None
+        )
+        wire_context = (
+            state.diagnostics.take_context(request_id)
+            if state.diagnostics is not None
+            and request_id
+            and purpose in {"commandResponse", "error"}
+            else None
+        )
+        if pending is not None:
+            context = pending.trace
+        elif wire_context is not None:
+            context = wire_context
+            request_id = context.request_id
+        elif self._addon.is_bridge_chat_message(
+            str(body.get("sender", "")), str(body.get("message", ""))
+        ):
+            parts = str(body["message"]).split("|", 4)
+            logical_id = parts[2] if len(parts) > 2 else ""
+            request_id = logical_id
+            context = self._addon.request_trace(state.id, logical_id) or context
+        player = body.get("sender") if header.get("eventName") == "PlayerMessage" else None
+        echo = (
+            purpose == "event"
+            and header.get("eventName") == "PlayerMessage"
+            and is_external_echo(str(body.get("sender", "")), body.get("type"))
+        )
+        with trace_scope(
+            context=context,
+            connection_id=str(state.id),
+            request_id=request_id,
+            player=player if pending is None and context.player is None else None,
+            diagnostics=state.diagnostics,
+        ):
+            if state.diagnostics is not None:
+                state.diagnostics.record(
+                    "received",
+                    packet=raw,
+                    wire_request_id=str(header.get("requestId", "")),
+                    frame_type=purpose,
+                    classification="external_echo" if echo else "inbound",
+                )
+            await self._route_raw(state, raw)
+
+    async def _route_raw(self, state: ConnectionState, raw: str | bytes) -> None:
         """Route one inbound WS frame to the right branch."""
         await self._emit_event(state, WsEventType.RAW_INBOUND, state, raw)
 
@@ -539,14 +625,16 @@ class McbeServerFacade:
             return
         event = NativeEvent(header["eventName"], packet)
 
-        async def observe() -> None:
+        async def notify_observers() -> None:
             await runtime.native_events.notify(event)
 
-        runtime.events.submit(observe, lane="events", label=event.name)
+        runtime.events.submit(notify_observers, lane="events", label=event.name)
 
         async def deliver() -> None:
+            observe("processing_started", event_name=event.name)
             transformed = await runtime.native_events.apply(event)
             if transformed is None:
+                observe("processing_rejected", event_name=event.name)
                 return
             if transformed.name == "PlayerMessage":
                 message = self._handler.parse_player_message(transformed.packet)
@@ -564,6 +652,7 @@ class McbeServerFacade:
                 callback = getattr(self._hook, "on_native_event", None)
                 if callback is not None:
                     await callback(state, transformed)
+            observe("processing_completed", event_name=event.name)
 
         runtime.business.submit(
             deliver,
@@ -711,7 +800,36 @@ class McbeServerFacade:
                 current_state,
                 payload,
             )
-            await websocket.send(payload)
+            try:
+                packet = json.loads(payload)
+                header = packet.get("header", {}) if isinstance(packet, dict) else {}
+            except (ValueError, TypeError):
+                header = {}
+            header = header if isinstance(header, dict) else {}
+            with trace_scope(
+                connection_id=str(connection_id),
+                request_id=current_trace().request_id or str(header.get("requestId", "")) or None,
+                diagnostics=current_state.diagnostics,
+            ):
+                diagnostics = current_state.diagnostics
+                fields = {
+                    "wire_request_id": str(header.get("requestId", "")),
+                    "frame_type": str(header.get("messagePurpose", "")),
+                }
+                if diagnostics is not None:
+                    diagnostics.remember(fields["wire_request_id"])
+                    diagnostics.record("prepared", packet=payload, **fields)
+                try:
+                    await websocket.send(payload)
+                except BaseException as exc:
+                    if diagnostics is not None:
+                        diagnostics.take_context(fields["wire_request_id"])
+                        diagnostics.record(
+                            "transport_failed", error_type=type(exc).__name__, **fields
+                        )
+                    raise
+                if diagnostics is not None:
+                    diagnostics.record("transport_sent", **fields)
 
         return send_payload
 
