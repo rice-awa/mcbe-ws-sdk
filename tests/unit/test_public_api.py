@@ -63,6 +63,7 @@ def test_public_api_snapshot() -> None:
         "ProtocolError",
         "RemoteCallError",
         "RequestClosedError",
+        "RequestDuplicateError",
         "RequestError",
         "RequestLimitError",
         "RequestTable",

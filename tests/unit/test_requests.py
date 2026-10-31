@@ -6,7 +6,11 @@ import asyncio
 
 import pytest
 
-from mcbe_ws_sdk.errors import RequestClosedError, RequestLimitError
+from mcbe_ws_sdk.errors import (
+    RequestClosedError,
+    RequestDuplicateError,
+    RequestLimitError,
+)
 from mcbe_ws_sdk.requests import CATEGORY_ADDON, CATEGORY_COMMAND, RequestTable
 
 
@@ -108,6 +112,44 @@ async def test_close_fails_every_pending_entry_once() -> None:
 
     with pytest.raises(RequestClosedError):
         table.reserve(CATEGORY_COMMAND, request_id="late")
+
+
+@pytest.mark.asyncio
+async def test_duplicate_id_is_rejected_without_losing_the_first_entry() -> None:
+    """A repeated id never overwrites the pending entry or double-counts it."""
+    table = RequestTable()
+    first = table.reserve(CATEGORY_ADDON, request_id="same")
+
+    with pytest.raises(RequestDuplicateError) as caught:
+        table.reserve(CATEGORY_ADDON, request_id="same")
+    assert caught.value.request_id == "same"
+    assert caught.value.category == CATEGORY_ADDON
+
+    # Exactly one live entry; closing fails that one and leaves nothing behind.
+    assert table.pending_count == 1
+    assert table.get(CATEGORY_ADDON, "same") is first
+    assert table.close(lambda request_id: RequestClosedError(request_id)) == 1
+    with pytest.raises(RequestClosedError):
+        await first.future
+    assert table.pending_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_entry_cancel_does_not_remove_reused_id() -> None:
+    """Cancelling an old entry must not touch a newer entry with the same id."""
+    table = RequestTable()
+    old = table.reserve(CATEGORY_COMMAND, request_id="same")
+    assert table.resolve(CATEGORY_COMMAND, "same", "done") is True
+    await old.future
+
+    new = table.reserve(CATEGORY_COMMAND, request_id="same")
+    assert table.cancel(old) is False
+    assert table.get(CATEGORY_COMMAND, "same") is new
+    assert not new.future.done()
+
+    assert table.cancel(new) is True
+    assert new.future.cancelled()
+    assert table.pending_count == 0
 
 
 @pytest.mark.asyncio

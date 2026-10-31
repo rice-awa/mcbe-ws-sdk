@@ -107,31 +107,36 @@ class AddonBridgeService:
         """
         session = self._session_for(connection_id)
         request = session.create_request(capability=capability, payload=payload)
-        command = encode_bridge_request(
-            request_id=request.request_id,
-            capability=capability,
-            payload=payload,
-            profile=self._profile,
-        )
-        payload_bytes = len(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        )
-        # INFO stays free of payload/command content (may contain player data).
-        logger.info(
-            "bridge_request_outbound",
-            request_id=request.request_id,
-            channel="capability",
-            payload_bytes=payload_bytes,
-        )
-        logger.debug(
-            "bridge_request_outbound",
-            connection_id=str(connection_id),
-            request_id=request.request_id,
-            capability=capability,
-            command_bytes=len(command.encode("utf-8")),
-            timeout_seconds=self._timeout_seconds,
-        )
+        request_id = request.request_id
+        # Every failure after registration - including encoding and logging
+        # preparation before the transport call - must release the pending
+        # entry. Repeated failures therefore never exhaust the pending quota,
+        # and the original exception is propagated unchanged.
         try:
+            command = encode_bridge_request(
+                request_id=request_id,
+                capability=capability,
+                payload=payload,
+                profile=self._profile,
+            )
+            payload_bytes = len(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            )
+            # INFO stays free of payload/command content (may contain player data).
+            logger.info(
+                "bridge_request_outbound",
+                request_id=request_id,
+                channel="capability",
+                payload_bytes=payload_bytes,
+            )
+            logger.debug(
+                "bridge_request_outbound",
+                connection_id=str(connection_id),
+                request_id=request_id,
+                capability=capability,
+                command_bytes=len(command.encode("utf-8")),
+                timeout_seconds=self._timeout_seconds,
+            )
             try:
                 await send_command(command)
             except Exception as exc:
@@ -141,7 +146,7 @@ class AddonBridgeService:
                 logger.warning(
                     "bridge_request_send_failed",
                     connection_id=str(connection_id),
-                    request_id=request.request_id,
+                    request_id=request_id,
                     channel="capability",
                     payload_bytes=payload_bytes,
                     error_type=type(exc).__name__,
@@ -150,7 +155,7 @@ class AddonBridgeService:
             logger.info(
                 "bridge_request_sent",
                 connection_id=str(connection_id),
-                request_id=request.request_id,
+                request_id=request_id,
                 channel="capability",
                 payload_bytes=payload_bytes,
             )
@@ -163,28 +168,28 @@ class AddonBridgeService:
                 logger.warning(
                     "bridge_request_timeout",
                     connection_id=str(connection_id),
-                    request_id=request.request_id,
+                    request_id=request_id,
                     channel="capability",
                     payload_bytes=payload_bytes,
                 )
-                raise BridgeTimeoutError(request.request_id) from exc
+                raise BridgeTimeoutError(request_id) from exc
             logger.info(
                 "bridge_request_resolved",
                 connection_id=str(connection_id),
-                request_id=request.request_id,
+                request_id=request_id,
                 channel="capability",
                 result_type=type(result).__name__,
             )
             logger.debug(
                 "bridge_request_resolved_payload",
                 connection_id=str(connection_id),
-                request_id=request.request_id,
+                request_id=request_id,
                 capability=capability,
                 result_type=type(result).__name__,
             )
             return result
         finally:
-            session.cancel_request(request.request_id)
+            session.cancel_request(request_id)
 
     def is_bridge_chat_message(self, sender: str, message: str) -> bool:
         """True if the player chat message is an addon response fragment."""

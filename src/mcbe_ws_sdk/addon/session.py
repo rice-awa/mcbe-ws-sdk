@@ -37,28 +37,55 @@ class _ChunkWithContent(Protocol):
 T = TypeVar("T", bound=_ChunkWithContent)
 
 
-@dataclass(frozen=True, slots=True)
 class PendingAddonRequest:
-    """Compatibility view over one entry in the shared request table."""
+    """Compatibility value for a pending addon bridge request.
 
-    entry: PendingRequest
+    Two forms are supported so the shared request table could be introduced
+    without breaking the pre-existing public shape:
 
-    @property
-    def request_id(self) -> str:
-        return self.entry.request_id
+    * ``PendingAddonRequest(entry)`` - the session's view over a
+      :class:`~mcbe_ws_sdk.requests.PendingRequest` in the shared table.
+    * ``PendingAddonRequest(request_id, capability, payload, future)`` - the
+      original four-argument constructor, including keyword use. Such an
+      instance is standalone (``entry`` is ``None``).
 
-    @property
-    def capability(self) -> str:
-        return str(self.entry.metadata.get("capability", ""))
+    Attributes are plain and mutable, matching the original dataclass contract;
+    assignment does not retarget a shared entry.
+    """
 
-    @property
-    def payload(self) -> dict[str, Any]:
-        payload = self.entry.metadata.get("payload", {})
-        return payload if isinstance(payload, dict) else {}
+    entry: PendingRequest | None
 
-    @property
-    def future(self) -> asyncio.Future[Any]:
-        return self.entry.future
+    def __init__(
+        self,
+        request_id: str | PendingRequest,
+        capability: str | None = None,
+        payload: dict[str, Any] | None = None,
+        future: asyncio.Future[Any] | None = None,
+    ) -> None:
+        if isinstance(request_id, PendingRequest):
+            if capability is not None or payload is not None or future is not None:
+                raise TypeError(
+                    "PendingAddonRequest(entry) accepts no capability/payload/future arguments"
+                )
+            metadata = request_id.metadata
+            metadata_payload = metadata.get("payload", {})
+            self.entry = request_id
+            self.request_id = request_id.request_id
+            self.capability = str(metadata.get("capability", ""))
+            self.payload = metadata_payload if isinstance(metadata_payload, dict) else {}
+            self.future = request_id.future
+            return
+
+        if capability is None or payload is None or future is None:
+            raise TypeError(
+                "PendingAddonRequest requires (request_id, capability, payload, future) "
+                "or a single PendingRequest entry"
+            )
+        self.entry = None
+        self.request_id = request_id
+        self.capability = capability
+        self.payload = payload
+        self.future = future
 
 
 @dataclass

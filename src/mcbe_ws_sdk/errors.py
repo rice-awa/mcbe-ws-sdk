@@ -81,6 +81,23 @@ class RequestLimitError(RequestError, RuntimeError):
         super().__init__(message)
 
 
+class RequestDuplicateError(RequestError, ValueError):
+    """Raised when an id is registered twice in the same request category.
+
+    Rejecting the duplicate keeps exactly one future attached to the id: the
+    original request stays cancellable and can still be resolved or failed by
+    its reply. A later registration may reuse the id only after the first entry
+    reached a terminal state.
+    """
+
+    def __init__(self, request_id: str, category: str) -> None:
+        super().__init__(
+            f"duplicate pending request id {request_id!r} in category {category!r}"
+        )
+        self.request_id = request_id
+        self.category = category
+
+
 class SendError(McbeWsSdkError):
     """Base class for outbound send-scheduler errors."""
 

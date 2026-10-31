@@ -17,7 +17,7 @@ from uuid import UUID
 import pytest
 
 from mcbe_ws_sdk.addon.service import AddonBridgeService, AddonMessageResult
-from mcbe_ws_sdk.addon.session import AddonBridgeSession
+from mcbe_ws_sdk.addon.session import AddonBridgeSession, PendingAddonRequest
 from mcbe_ws_sdk.config import AddonBridgeSettings
 from mcbe_ws_sdk.errors import (
     BridgeClosedError,
@@ -242,6 +242,33 @@ async def test_send_failure_cleans_pending_request() -> None:
     with pytest.raises(LookupError):
         await service.request_capability(connection_id, "x", {}, fail)
     assert service._sessions[connection_id]._pending_requests == {}
+
+
+@pytest.mark.asyncio
+async def test_encoding_failure_after_registration_leaves_no_pending_request() -> None:
+    """R02-4: a payload that cannot be encoded releases the registered entry."""
+    service = AddonBridgeService(AddonBridgeSettings(max_pending_requests=2))
+    connection_id = UUID(int=57)
+    sent: list[str] = []
+
+    async def send_command(command: str) -> None:
+        sent.append(command)
+
+    payload = {"invalid": {1}}
+    with pytest.raises(TypeError):
+        await service.request_capability(connection_id, "x", payload, send_command)
+
+    session = service._sessions[connection_id]
+    assert session._pending_requests == {}
+    assert sent == []
+
+    # Repeating the same failure must not exhaust the pending quota: each
+    # attempt is fully released before the next one registers. Five attempts
+    # exceed the configured limit of two.
+    for _ in range(5):
+        with pytest.raises(TypeError):
+            await service.request_capability(connection_id, "x", payload, send_command)
+        assert session._pending_requests == {}
 
 
 @pytest.mark.asyncio
@@ -537,3 +564,53 @@ async def test_ui_callback_failure_is_awaited_and_no_task_leaks() -> None:
             UUID(int=52), "MCBEWS_BRIDGE", _complete_ui_chunk("Alice", "hello")
         )
     assert set(asyncio.all_tasks()) == before
+
+
+@pytest.mark.asyncio
+async def test_pending_addon_request_keeps_legacy_constructor_and_assignment() -> None:
+    """The pre-shared-table constructor and mutable attributes still work."""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[object] = loop.create_future()
+
+    request = PendingAddonRequest("legacy-1", "get_greeting", {"player": "Steve"}, future)
+    assert request.entry is None
+    assert request.request_id == "legacy-1"
+    assert request.capability == "get_greeting"
+    assert request.payload == {"player": "Steve"}
+    assert request.future is future
+
+    # The original type was mutable; assignment must not raise.
+    request.capability = "changed"
+    request.payload = {"player": "Alex"}
+    assert request.capability == "changed"
+    assert request.payload == {"player": "Alex"}
+
+    future.set_result({"ok": True})
+    assert await request.future == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_pending_addon_request_entry_view_and_keyword_constructor() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings())
+    entry = session.create_request("get_inventory_snapshot", {"target": "Steve"})
+
+    assert entry.entry is not None
+    assert entry.request_id == entry.entry.request_id
+    assert entry.capability == "get_inventory_snapshot"
+    assert entry.payload == {"target": "Steve"}
+    assert entry.future is entry.entry.future
+
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[object] = loop.create_future()
+    keywords = PendingAddonRequest(
+        request_id="legacy-2",
+        capability="c",
+        payload={"x": 1},
+        future=future,
+    )
+    assert keywords.entry is None
+    assert keywords.request_id == "legacy-2"
+    assert keywords.future is future
+    future.cancel()
+
+    session.close()

@@ -21,7 +21,11 @@ from typing import Any
 
 import structlog
 
-from mcbe_ws_sdk.errors import RequestClosedError, RequestLimitError
+from mcbe_ws_sdk.errors import (
+    RequestClosedError,
+    RequestDuplicateError,
+    RequestLimitError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -139,14 +143,22 @@ class RequestTable:
 
         Raises:
             RequestClosedError: The table was closed.
+            RequestDuplicateError: ``request_id`` is already pending in
+                ``category``. The existing entry is left untouched.
             RequestLimitError: The pending-request limit was reached.
         """
         if self._closed:
             raise RequestClosedError(request_id=request_id, reason="request table is closed")
+        bucket = self._entries.get(category)
+        if bucket is not None and request_id in bucket:
+            raise RequestDuplicateError(request_id, category)
         if self._count >= self._max_pending:
             raise RequestLimitError(
                 f"maximum pending requests exceeded ({self._max_pending}) for {self._name}"
             )
+        if bucket is None:
+            bucket = {}
+            self._entries[category] = bucket
         if future is None:
             future = asyncio.get_running_loop().create_future()
         entry = PendingRequest(
@@ -156,7 +168,7 @@ class RequestTable:
             metadata=metadata if metadata is not None else {},
             created_at=self._clock(),
         )
-        self._entries.setdefault(category, {})[request_id] = entry
+        bucket[request_id] = entry
         self._count += 1
         return entry
 
@@ -178,7 +190,15 @@ class RequestTable:
         return entry.fail(error)
 
     def cancel(self, entry: PendingRequest) -> bool:
-        """Cancel ``entry`` and remove it from the table."""
+        """Cancel ``entry`` and remove it from the table.
+
+        The entry is removed only when it is still the entry registered under
+        its id. A stale ``PendingRequest`` whose id was reused after it reached
+        a terminal state can therefore never cancel the newer request.
+        """
+        bucket = self._entries.get(entry.category)
+        if bucket is None or bucket.get(entry.request_id) is not entry:
+            return False
         if self._pop(entry.category, entry.request_id) is None:
             return False
         return entry.cancel()
