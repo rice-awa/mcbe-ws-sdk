@@ -124,33 +124,73 @@ player chat
 
 ## How WS-side `!wscmd` is wired
 
-The SDK can **send** a `commandRequest` (`McbeOutboundDelivery.send_raw_command`)
-and **deliver** the matching `commandResponse` to
-`ConnectionHook.on_command_response`, but it intentionally does **not** keep a
-pending-future map — that correlation is host-owned. This example shows the
-minimal pattern in `WsCommandRunner`:
+`ConnectionState.command_client` is an SDK-owned `NativeCommandClient`. It
+registers the request *before* sending and pairs the matching `commandResponse`
+through the shared request table, so the host keeps no wait table:
 
 ```text
 !wscmd time query daytime
-  → on_player_message schedules a background task (must not block the receive loop)
-  → WsCommandRunner.run()
-  → send_raw_command(..., before_send=register future by requestId)
+  → on_player_message awaits state.command_client.run(command)
+  → send_raw_command(...) registers requestId, then sends
   → Bedrock replies with commandResponse
-  → facade → on_command_response → WsCommandRunner.resolve()
-  → future completes → tellraw statusCode / statusMessage
+  → facade resolves the pending request, then calls on_command_response
+  → run() returns the typed response → tellraw statusCode / statusMessage
 ```
 
-**Do not `await runner.run()` (or addon `client.request()`) directly inside
-`on_player_message`.** The facade processes inbound frames with
-`async for raw in websocket: await _handle_raw(...)`, which awaits the hook.
-Blocking there for a `commandResponse` / bridge chat chunk starves the receive
-loop: the game may still execute the command, but the Python side times out
-forever. This example uses `asyncio.create_task(...)` so the hook returns
-immediately.
+`on_command_response` is still invoked for every response (the SDK resolves its
+own request first), so hosts can keep observing acks.
+
+### Reliable vs legacy callback behavior
+
+This example enables the reliable path explicitly:
+
+```python
+GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
+```
+
+- **Reliable** (`mode="reliable"`): the reader keeps draining frames while a
+  host callback runs. A callback may `await state.command_client.run(...)` or
+  `await addon_client.request(...)` directly. Work is serialised per player
+  (`player:<sender>`): the same player stays FIFO and different players run
+  concurrently.
+- **Legacy** (the SDK default, `DispatchSettings()`): callbacks are awaited
+  inline by the single read loop, exactly as before. Awaiting a reply that only
+  that loop can deliver still deadlocks; schedule `asyncio.create_task(...)` or
+  enable reliable mode.
+
+The example branches on `state.runtime is not None`, so both paths work.
+
+### Sending long text
+
+Pass `send_bulk=state.send_bulk` to `McbeOutboundDelivery` to mark tellraw /
+scriptevent chunks as bulk; raw commands stay request-class frames. On the
+reliable path the scheduler keeps a bounded reservation for control frames,
+sends requests ahead of bulk, and applies a fairness quota so bulk traffic is
+not starved by sustained request/control load. `state.send_payload` keeps its
+old single-argument contract, so existing host code is unchanged.
 
 Use `!wscmd` when you only need a normal Minecraft command and do not want to
 depend on the bridge addon. Use `!cmd` when you need the addon's
 `run_world_command` path (denylist, Script API side effects, etc.).
+
+## Recommended production settings
+
+The SDK default remains `dispatch.mode="legacy"` so existing hosts keep their
+original ordering. For a new deployment this example changes only one setting:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `dispatch.mode` | `"reliable"` | the reader no longer blocks on host callbacks |
+| `dispatch.business_queue_maxsize` | `256` (default) | bounded overload; submissions are rejected explicitly |
+| `dispatch.max_concurrent_business_tasks` | `64` (default) | bounded per-connection concurrency |
+| `send.queue_maxsize` / `send.queue_max_bytes` | `256` / `4 MiB` (default) | bounded outbound memory |
+| `send.control_reserve_slots` / `send.control_reserve_bytes` | `1` / `4096` (default) | control frames keep room while bulk is in flight |
+| `send.fairness_quota` | `8` (default) | a lower priority gets one turn after 8 higher-priority frames |
+| `send.capacity_timeout_seconds` | `5.0` (default) | one total admission deadline; notifications do not restart it |
+
+These are `GatewaySettings()` defaults; enabling reliable mode is the only change
+this example makes. No MCBE real-world validation has been recorded for these
+values yet (tracked for R18).
 
 Important details:
 

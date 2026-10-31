@@ -121,30 +121,65 @@ handler 位于 `addon/scripts/bridge/capabilities/runWorldCommand.ts`，并已�
 
 ## WS 侧 `!wscmd` 调用链路
 
-SDK 可以**发送** `commandRequest`（`McbeOutboundDelivery.send_raw_command`），
-并把匹配的 `commandResponse` **交给** `ConnectionHook.on_command_response`，
-但故意**不**维护 pending future 表——关联由 host 负责。本示例在
-`WsCommandRunner` 中展示最小模式：
+`ConnectionState.command_client` 是 SDK 持有的 `NativeCommandClient`：发送前
+先登记请求，再用共享请求表配对匹配的 `commandResponse`，宿主不再维护等待表：
 
 ```text
 !wscmd time query daytime
-  → on_player_message 调度后台 task（绝不能阻塞接收循环）
-  → WsCommandRunner.run()
-  → send_raw_command(..., before_send=按 requestId 登记 future)
+  → on_player_message await state.command_client.run(command)
+  → send_raw_command(...) 先按 requestId 登记，再发送
   → Bedrock 返回 commandResponse
-  → facade → on_command_response → WsCommandRunner.resolve()
-  → future 完成 → tellraw statusCode / statusMessage
+  → facade 先完成挂起请求，再调用 on_command_response
+  → run() 返回类型化响应 → tellraw statusCode / statusMessage
 ```
 
-**不要在 `on_player_message` 里直接 `await runner.run()`（或 addon
-`client.request()`）。** facade 用
-`async for raw in websocket: await _handle_raw(...)` 处理入站帧，并会 await
-hook。若在这里阻塞等待 `commandResponse` / bridge 聊天分片，接收循环会被饿死：
-游戏侧命令可能已执行，但 Python 侧会一直超时。本示例用
-`asyncio.create_task(...)` 让 hook 立即返回。
+每一条响应仍会交给 `on_command_response`（SDK 已先完成自己的请求），宿主可以继续
+观察确认帧。
+
+### reliable 与 legacy 的回调行为
+
+本示例显式启用可靠路径：
+
+```python
+GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
+```
+
+- **reliable**（`mode="reliable"`）：宿主回调运行时读取循环继续收帧，回调可以直接
+  `await state.command_client.run(...)` 或 `await addon_client.request(...)`。
+  工作按玩家（`player:<sender>`）串行：同一玩家保持 FIFO，不同玩家可并发。
+- **legacy**（SDK 默认，`DispatchSettings()`）：回调仍由唯一读取循环内联 await，
+  与旧行为一致。此时在回调里等待只有读取循环才能送达的回复仍会死锁；应使用
+  `asyncio.create_task(...)`，或启用 reliable 模式。
+
+示例用 `state.runtime is not None` 区分两条路径，二者都能运行。
+
+### 长文本发送
+
+给 `McbeOutboundDelivery` 传入 `send_bulk=state.send_bulk`，tellraw / scriptevent
+分片就会标记为 bulk，原生命令仍是 request 类帧。可靠路径上调度器为控制帧保留受限
+容量、让请求帧先于 bulk，并用公平配额避免持续请求／控制流量饿死 bulk。
+`state.send_payload` 仍保持旧的单参数合同，现有宿主代码无需修改。
 
 只需要普通 Minecraft 命令、不想依赖 bridge addon 时用 `!wscmd`；
 需要 addon 的 `run_world_command` 路径（黑名单、Script API 副作用等）时用 `!cmd`。
+
+## 推荐的生产配置
+
+SDK 默认仍是 `dispatch.mode="legacy"`，保证现有宿主顺序不变。新部署时本示例只改
+一项：
+
+| 配置 | 值 | 依据 |
+| --- | --- | --- |
+| `dispatch.mode` | `"reliable"` | 读取循环不再等待宿主回调 |
+| `dispatch.business_queue_maxsize` | `256`（默认） | 有界过载，超出显式拒绝 |
+| `dispatch.max_concurrent_business_tasks` | `64`（默认） | 限制每连接并发 |
+| `send.queue_maxsize` / `send.queue_max_bytes` | `256` / `4 MiB`（默认） | 限制出站内存 |
+| `send.control_reserve_slots` / `send.control_reserve_bytes` | `1` / `4096`（默认） | bulk 在途时仍给控制帧留出容量 |
+| `send.fairness_quota` | `8`（默认） | 高优先级连续 8 帧后给低优先级一次机会 |
+| `send.capacity_timeout_seconds` | `5.0`（默认） | 单次总等待截止时间，通知不会重置 |
+
+以上均为 `GatewaySettings()` 默认值；本示例只改 reliable 模式。这些值尚未有 MCBE
+实机验证记录。
 
 要点：
 
