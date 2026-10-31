@@ -26,10 +26,8 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-import pytest
-
 from mcbe_ws_sdk.addon.service import AddonBridgeService
-from mcbe_ws_sdk.config import AddonBridgeSettings, GatewaySettings
+from mcbe_ws_sdk.config import AddonBridgeSettings, DispatchSettings, GatewaySettings
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import NoOpHook
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
@@ -50,11 +48,12 @@ class ScriptedBridgeTransport:
     3. end of stream.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, wait_after_reply: asyncio.Event | None = None) -> None:
         self.sent: list[str] = []
         self.frames_read = 0
         self._reply_frame: str | None = None
         self._reply_available = asyncio.Event()
+        self._wait_after_reply = wait_after_reply
 
     def _player_message_frame(self) -> str:
         return json.dumps(
@@ -70,10 +69,8 @@ class ScriptedBridgeTransport:
             return
         body = json.loads(payload[len(_REQUEST_SCRIPT_EVENT_PREFIX) :])
         request_id = body["request_id"]
-        content = json.dumps(
-            {"request_id": request_id, "payload": {"ok": True}},
-            separators=(",", ":"),
-        )
+        content = json.dumps({"ok": True}, separators=(",", ":"))
+
         message = f"{MCBEWS_V1.capability_response_chat_prefix}|{request_id}|1/1|{content}"
         self._reply_frame = json.dumps(
             {
@@ -94,6 +91,10 @@ class ScriptedBridgeTransport:
         assert self._reply_frame is not None
         yield self._reply_frame
         self.frames_read += 1
+        if self._wait_after_reply is not None:
+            # Keep the stream open until the business task has recorded its
+            # outcome, so end-of-stream teardown cannot cancel it mid-flight.
+            await self._wait_after_reply.wait()
 
 
 class AwaitingHook(NoOpHook):
@@ -106,6 +107,7 @@ class AwaitingHook(NoOpHook):
         self.frames_read_after = 0
         self.outcome: dict[str, Any] | Exception | None = None
         self.messages: list[PlayerMessageEvent] = []
+        self.finished = asyncio.Event()
 
     async def on_player_message(
         self,
@@ -120,7 +122,9 @@ class AwaitingHook(NoOpHook):
             self.outcome = await client.request(_CAPABILITY, {"player": player_event.sender})
         except Exception as exc:  # noqa: BLE001 - recorded for the assertion
             self.outcome = exc
-        self.frames_read_after = self._transport.frames_read
+        finally:
+            self.frames_read_after = self._transport.frames_read
+            self.finished.set()
 
 
 def _require_send(state: ConnectionState) -> Any:
@@ -130,32 +134,41 @@ def _require_send(state: ConnectionState) -> Any:
 
 def _build(
     transport: ScriptedBridgeTransport,
+    *,
+    reliable: bool = False,
 ) -> tuple[McbeServerFacade, AwaitingHook]:
     service = AddonBridgeService(AddonBridgeSettings(timeout_seconds=0.2))
     hook = AwaitingHook(service, transport)
+    settings = GatewaySettings(
+        dispatch=DispatchSettings(mode="reliable" if reliable else "legacy"),
+    )
     facade = McbeServerFacade(
-        settings=GatewaySettings(),
+        settings=settings,
         hook=hook,
         addon=service,
     )
     return facade, hook
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R00-3: the legacy read loop awaits hook.on_player_message inline, so an "
-        "addon reply issued from a callback cannot be read and the request times "
-        "out. R01 must serve this path and remove this xfail."
-    ),
-)
-async def test_legacy_read_loop_blocks_while_hook_awaits_addon_reply() -> None:
+async def test_reliable_read_loop_serves_addon_reply_issued_from_callback() -> None:
+    """R00-3 regression: the reliable path must not block the reader on a hook.
+
+    R00 saved this as a strict xfail against the legacy serial reader. R01 makes
+    it pass on the explicitly enabled reliable path; the legacy reader keeps its
+    own pinned behaviour in the next test.
+    """
+
     transport = ScriptedBridgeTransport()
-    facade, hook = _build(transport)
+    facade, hook = _build(transport, reliable=True)
+    transport._wait_after_reply = hook.finished
 
     await asyncio.wait_for(facade._on_connection(transport), timeout=5)
 
     assert hook.outcome == {"ok": True}
+    # The reply frame was read while the callback was still waiting. The legacy
+    # reader pins ``frames_read_after == 1``; the reliable reader has pulled at
+    # least the reply frame (2) by then.
+    assert hook.frames_read_after >= 2
 
 
 async def test_legacy_read_loop_does_not_read_ahead_while_hook_waits() -> None:

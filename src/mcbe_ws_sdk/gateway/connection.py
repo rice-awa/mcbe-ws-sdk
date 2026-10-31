@@ -23,6 +23,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import structlog
@@ -35,6 +36,11 @@ from mcbe_ws_sdk.gateway.sink import (
     ResponseSink,
     RouteEnvelope,
 )
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.gateway.commands import NativeCommandClient
+    from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
+    from mcbe_ws_sdk.requests import RequestTable
 
 logger = structlog.get_logger(__name__)
 
@@ -82,6 +88,13 @@ class ConnectionState:
     _player_name: str | None = field(default=None, repr=False)
     send_payload: SendPayload | None = None
     response_queue: asyncio.Queue[object] | None = None
+    # The reliable path attaches an SDK-owned runtime. The legacy path leaves
+    # ``runtime`` as ``None``; ``requests`` / ``command_client`` are still
+    # installed so native command awaiting works without changing callback
+    # ordering.
+    runtime: ConnectionRuntime | None = field(default=None, repr=False)
+    requests: RequestTable | None = field(default=None, repr=False)
+    command_client: NativeCommandClient | None = field(default=None, repr=False)
 
     @property
     def player_name(self) -> str | None:
@@ -157,18 +170,35 @@ class ConnectionManager:
         return state
 
     async def drop_connection(self, connection_id: UUID) -> None:
-        """Cancel the sender coroutine, drop the connection, emit DISCONNECTED."""
+        """Cancel the sender, release the runtime, drop, emit DISCONNECTED.
+
+        The connection is removed from the active map first so no new frame is
+        routed to its transport. Teardown is idempotent: a second call is a
+        no-op, and runtime close is guarded internally as well.
+        """
         state = self._connections.pop(connection_id, None)
-        if state is not None and state.response_queue is not None:
-            discarded = state.response_queue.qsize()
-            if discarded:
-                logger.warning(
-                    "response_queue_discarded",
-                    connection_id=str(connection_id),
-                    discarded=discarded,
-                )
         await self._cancel_sender(connection_id)
         if state is not None:
+            if state.runtime is not None:
+                try:
+                    await state.runtime.close(reason="connection dropped")
+                except Exception:
+                    logger.exception(
+                        "connection_runtime_close_failed",
+                        connection_id=str(connection_id),
+                    )
+            elif state.requests is not None:
+                # Legacy path: fail SDK-tracked native command waiters so host
+                # tasks do not hang after disconnect.
+                state.requests.close()
+            if state.response_queue is not None:
+                discarded = state.response_queue.qsize()
+                if discarded:
+                    logger.warning(
+                        "response_queue_discarded",
+                        connection_id=str(connection_id),
+                        discarded=discarded,
+                    )
             await self._bus.emit(WsEventType.DISCONNECTED, state)
             logger.info("connection_dropped", connection_id=str(connection_id))
 

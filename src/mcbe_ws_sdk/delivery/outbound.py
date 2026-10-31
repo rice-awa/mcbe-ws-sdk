@@ -1,15 +1,19 @@
 """MCBE outbound delivery adapter."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.flow import FlowControlMiddleware
-from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
 
 logger = structlog.get_logger(__name__)
 ws_raw_logger = structlog.get_logger("websocket.raw")

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from math import isfinite
 from numbers import Real
 from types import MappingProxyType
+from typing import Literal
 
 from mcbe_ws_sdk.errors import ConfigurationError
 from mcbe_ws_sdk.profiles.mcbews_v1.manifest import MCBEWS_V1_MANIFEST
@@ -126,8 +127,68 @@ class WebsocketTransportConfig:
         _require_positive_int(self.response_queue_maxsize, "websocket.response_queue_maxsize")
 
 
+DispatchMode = Literal["legacy", "reliable"]
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchSettings:
+    """Business-task and request-lifecycle knobs for the opt-in reliable path.
+
+    ``mode="legacy"`` keeps the original serial callback contract. Selecting
+    ``"reliable"`` is explicit; it does not change the wire format and does not
+    affect the legacy entry point.
+    """
+
+    mode: DispatchMode = "legacy"
+    business_queue_maxsize: int = 256
+    max_concurrent_business_tasks: int = 64
+    event_queue_maxsize: int = 256
+    max_pending_requests: int = 128
+    command_timeout_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("legacy", "reliable"):
+            raise ConfigurationError("gateway.dispatch.mode must be 'legacy' or 'reliable'")
+        for name in (
+            "business_queue_maxsize",
+            "max_concurrent_business_tasks",
+            "event_queue_maxsize",
+            "max_pending_requests",
+        ):
+            _require_positive_int(getattr(self, name), f"gateway.dispatch.{name}")
+        _require_finite_real(
+            self.command_timeout_seconds,
+            "gateway.dispatch.command_timeout_seconds",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SendSchedulerSettings:
+    """Per-connection outbound scheduler capacity and rate limit."""
+
+    queue_maxsize: int = 256
+    queue_max_bytes: int = 4 * 1024 * 1024
+    min_interval_seconds: float = 0.0
+    capacity_timeout_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.queue_maxsize, "gateway.send.queue_maxsize")
+        _require_positive_int(self.queue_max_bytes, "gateway.send.queue_max_bytes")
+        _require_finite_real(
+            self.min_interval_seconds,
+            "gateway.send.min_interval_seconds",
+            allow_zero=True,
+        )
+        _require_finite_real(
+            self.capacity_timeout_seconds,
+            "gateway.send.capacity_timeout_seconds",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class GatewaySettings:
     flow: FlowControlSettings = field(default_factory=FlowControlSettings)
     addon: AddonBridgeSettings = field(default_factory=AddonBridgeSettings)
     websocket: WebsocketTransportConfig = field(default_factory=WebsocketTransportConfig)
+    dispatch: DispatchSettings = field(default_factory=DispatchSettings)
+    send: SendSchedulerSettings = field(default_factory=SendSchedulerSettings)

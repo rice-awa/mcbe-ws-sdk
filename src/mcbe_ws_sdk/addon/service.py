@@ -97,7 +97,14 @@ class AddonBridgeService:
         payload: dict[str, Any],
         send_command: CommandSender,
     ) -> dict[str, Any]:
-        """Send a bridge request and wait for the addon's chat callback."""
+        """Send a bridge request and wait for the addon's chat callback.
+
+        The request is registered in the shared request table *before* the
+        outbound frame is encoded and sent, so a reply delivered synchronously
+        during ``send_command`` still resolves this request. ``timeout_seconds``
+        covers only the wait for that reply, measured after the frame was
+        accepted by the send path; send/queue failures propagate immediately.
+        """
         session = self._session_for(connection_id)
         request = session.create_request(capability=capability, payload=payload)
         command = encode_bridge_request(
@@ -148,7 +155,10 @@ class AddonBridgeService:
                 payload_bytes=payload_bytes,
             )
             try:
-                result = await asyncio.wait_for(request.future, self._timeout_seconds)
+                result: dict[str, Any] = await asyncio.wait_for(
+                    request.future,
+                    self._timeout_seconds,
+                )
             except TimeoutError as exc:
                 logger.warning(
                     "bridge_request_timeout",

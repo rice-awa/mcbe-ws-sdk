@@ -66,8 +66,11 @@ let bridgeActive = false;
 const preReadyQueue: RouterEvent[] = [];
 let processingTail: Promise<void> = Promise.resolve();
 let lastResponseSendOutcome: ResponseSendOutcome | null = null;
+let activePending = 0;
+let droppedActiveRequests = 0;
 
 export const MAX_PRE_READY_REQUESTS = 64;
+export const MAX_ACTIVE_REQUESTS = 64;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -170,10 +173,29 @@ export function parseBridgeRequest(message: string): ParseResult {
 // Pre-ready state machine
 // ---------------------------------------------------------------------------
 
+function extractRequestId(message: string): string | undefined {
+  const parsed = parseBridgeRequest(message);
+  return parsed.ok ? parsed.request.request_id : parsed.requestId;
+}
+
 function schedule(event: RouterEvent): void {
+  if (activePending >= MAX_ACTIVE_REQUESTS) {
+    droppedActiveRequests += 1;
+    const requestId = extractRequestId(event.message);
+    console.warn(
+      `[bridge] active queue full: code=BRIDGE_ACTIVE_QUEUE_FULL, requestId=${requestId ?? "unknown"}, ` +
+        `activePending=${activePending}`
+    );
+    return;
+  }
+  activePending += 1;
   processingTail = processingTail
     .then(async () => {
-      await handleBridgeScriptEvent(event);
+      try {
+        await handleBridgeScriptEvent(event);
+      } finally {
+        activePending -= 1;
+      }
     })
     .catch(logUnexpectedRouterFailure);
 }
@@ -352,6 +374,16 @@ export function _testingGetQueueSize(): number {
 }
 
 /** @internal */
+export function _testingGetActiveQueueSize(): number {
+  return activePending;
+}
+
+/** @internal */
+export function _testingGetDroppedCount(): number {
+  return droppedActiveRequests;
+}
+
+/** @internal */
 export function _testingFlush(): Promise<void> {
   return processingTail;
 }
@@ -370,4 +402,6 @@ export function _testingReset(): void {
   isBridgeRouterRegistered = false;
   processingTail = Promise.resolve();
   lastResponseSendOutcome = null;
+  activePending = 0;
+  droppedActiveRequests = 0;
 }

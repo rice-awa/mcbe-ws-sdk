@@ -11,6 +11,7 @@ Verifies the key extraction invariants:
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import UUID
 
 import pytest
@@ -204,6 +205,33 @@ async def test_service_request_capability_end_to_end() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reply_delivered_during_send_is_not_lost() -> None:
+    """Registration happens before send, so a synchronous reply still pairs."""
+    service = AddonBridgeService(AddonBridgeSettings(timeout_seconds=1.0))
+    connection_id = UUID(int=56)
+
+    async def send_command(command: str) -> None:
+        _, _message_id, encoded = command.split(" ", 2)
+        request_id = json.loads(encoded)["request_id"]
+        result = await service.handle_player_message(
+            connection_id,
+            "MCBEWS_BRIDGE",
+            f"MCBEWS|BRIDGE|{request_id}|1/1|" + json.dumps({"ok": True}),
+        )
+        assert result.handled
+
+    result = await service.request_capability(
+        connection_id,
+        "get_greeting",
+        {"player": "Steve"},
+        send_command,
+    )
+
+    assert result == {"ok": True}
+    assert service._sessions[connection_id]._pending_requests == {}
+
+
+@pytest.mark.asyncio
 async def test_send_failure_cleans_pending_request() -> None:
     service = AddonBridgeService(AddonBridgeSettings())
     connection_id = UUID(int=51)
@@ -272,6 +300,16 @@ async def test_close_connection_finishes_pending_request_with_bridge_closed() ->
 
     with pytest.raises(BridgeClosedError):
         await request.future
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_excessive_pending_requests() -> None:
+    session = AddonBridgeSession(AddonBridgeSettings(max_pending_requests=1))
+    session.create_request("first", {})
+
+    with pytest.raises(BridgeLimitError, match="maximum pending requests exceeded"):
+        session.create_request("second", {})
+    assert len(session._pending_requests) == 1
 
 
 @pytest.mark.asyncio

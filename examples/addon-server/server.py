@@ -25,7 +25,6 @@ import json
 from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
-from uuid import UUID
 
 import structlog
 
@@ -56,9 +55,6 @@ from mcbe_ws_sdk.protocol.minecraft import (
 # with sender "外部". Treat those as transport noise, not real player chat.
 _EXTERNAL_ECHO_SENDERS = frozenset({"外部", "External"})
 
-# How long to wait for a commandResponse after a WS-side commandRequest.
-_WS_COMMAND_TIMEOUT_SECONDS = 5.0
-
 _HELP_TEXT = (
     "Addon 示例命令：\n"
     "  !player [target]  获取玩家快照（默认自己）\n"
@@ -70,104 +66,6 @@ _HELP_TEXT = (
 )
 
 logger = structlog.get_logger("example")
-
-
-class WsCommandRunner:
-    """Host-owned request/response tracker for WS ``commandRequest`` frames.
-
-    The SDK deliberately does not keep a ``pending_command_futures`` map on
-    :class:`ConnectionState` — that plumbing is host-owned. This helper is the
-    minimal pattern:
-
-    1. ``run()`` registers a future under the outbound ``requestId``;
-    2. ``resolve()`` is called from ``on_command_response``;
-    3. ``close_connection()`` fails any leftovers on disconnect.
-    """
-
-    def __init__(
-        self,
-        flow: FlowControlSettings,
-        *,
-        timeout: float = _WS_COMMAND_TIMEOUT_SECONDS,
-    ) -> None:
-        self._flow = flow
-        self._timeout = timeout
-        self._pending: dict[UUID, dict[str, asyncio.Future[MinecraftCommandResponse]]] = {}
-
-    def _bucket(
-        self,
-        connection_id: UUID,
-    ) -> dict[str, asyncio.Future[MinecraftCommandResponse]]:
-        bucket = self._pending.get(connection_id)
-        if bucket is None:
-            bucket = {}
-            self._pending[connection_id] = bucket
-        return bucket
-
-    async def run(
-        self,
-        state: ConnectionState,
-        command: str,
-    ) -> MinecraftCommandResponse:
-        if state.send_payload is None:
-            raise RuntimeError("connection has no send_payload")
-
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[MinecraftCommandResponse] = loop.create_future()
-        delivery = McbeOutboundDelivery(
-            connection_id=state.id,
-            send_payload=state.send_payload,
-            settings=self._flow,
-        )
-        bucket = self._bucket(state.id)
-
-        def _register(request_id: str) -> None:
-            bucket[request_id] = future
-
-            def _cleanup(done: asyncio.Future[MinecraftCommandResponse]) -> None:
-                if bucket.get(request_id) is done:
-                    bucket.pop(request_id, None)
-
-            future.add_done_callback(_cleanup)
-
-        request_id = await delivery.send_raw_command(
-            command,
-            source="ws_run_command",
-            before_send=_register,
-        )
-        logger.info(
-            "ws_command_sent",
-            connection_id=str(state.id),
-            request_id=request_id,
-            command=command,
-        )
-        try:
-            return await asyncio.wait_for(future, self._timeout)
-        except TimeoutError as exc:
-            bucket.pop(request_id, None)
-            raise TimeoutError(
-                f"WS command timed out after {self._timeout:.0f}s (request_id={request_id})"
-            ) from exc
-
-    def resolve(self, state: ConnectionState, response: MinecraftCommandResponse) -> bool:
-        """Complete a pending future if this response is tracked. Returns True if handled."""
-        bucket = self._pending.get(state.id)
-        if not bucket:
-            return False
-        future = bucket.pop(response.request_id, None)
-        if future is None or future.done():
-            return False
-        future.set_result(response)
-        return True
-
-    def close_connection(self, connection_id: UUID) -> None:
-        bucket = self._pending.pop(connection_id, None)
-        if bucket is None:
-            return
-        for future in bucket.values():
-            if not future.done():
-                future.set_exception(ConnectionError("connection closed before commandResponse"))
-        bucket.clear()
 
 
 class MinecraftSink(DefaultResponseSink):
@@ -209,13 +107,11 @@ class AddonDemoHook(NoOpHook):
         self,
         addon: AddonBridgeService,
         flow: FlowControlSettings,
-        ws_commands: WsCommandRunner,
         *,
         log_raw_payloads: bool = False,
     ) -> None:
         self._addon = addon
         self._flow = flow
-        self._ws_commands = ws_commands
         self._log_raw_payloads = log_raw_payloads
 
     @staticmethod
@@ -263,7 +159,6 @@ class AddonDemoHook(NoOpHook):
         )
 
     async def on_disconnected(self, state: ConnectionState) -> None:
-        self._ws_commands.close_connection(state.id)
         logger.info("disconnected", connection_id=str(state.id))
 
     async def on_player_message(
@@ -305,15 +200,17 @@ class AddonDemoHook(NoOpHook):
             message_type=player_event.type,
         )
 
-        # CRITICAL: do not await run()/addon request on this stack.
-        # McbeServerFacade processes inbound frames with:
-        #   async for raw in websocket: await self._handle_raw(...)
-        # which awaits on_player_message. If we block here waiting for a
-        # commandResponse (or bridge chat chunk), the receive loop cannot
-        # read that response frame → permanent timeout even though the game
-        # executed the command. Schedule work on a background task instead.
         # Use event.sender as the authoritative player identity. Do not use
         # ConnectionState.player_name: one WS connection can carry many players.
+        #
+        # Reliable dispatch already runs this callback in an SDK-owned business
+        # task, so it can await a bridge reply directly. The legacy path still
+        # awaits the callback inside the reader; there we must not block on a
+        # reply that only the reader can deliver, so schedule a background task.
+        if state.runtime is not None:
+            await self._dispatch_command(state, player_event.sender, message)
+            return
+
         task = asyncio.create_task(
             self._dispatch_command(state, player_event.sender, message),
             name=f"addon-demo:{player_event.sender}",
@@ -481,8 +378,13 @@ class AddonDemoHook(NoOpHook):
         )
         self._reply(state, sender, f"正在执行 {label}…")
 
+        if state.command_client is None:
+            self._reply(state, sender, f"{label} 失败：连接没有命令客户端。")
+            return
         try:
-            response = await self._ws_commands.run(state, command)
+            # The SDK registers the request before sending and pairs the
+            # commandResponse; no host-side wait table is needed.
+            response = await state.command_client.run(command)
         except TimeoutError as exc:
             logger.warning(
                 "ws_command_timeout",
@@ -520,18 +422,8 @@ class AddonDemoHook(NoOpHook):
             body=response.body,
         )
 
-        # Resolve host-tracked WS run_command futures first. Untracked frames
-        # (tellraw/scriptevent acks from our own replies) fall through after the
-        # raw log above.
-        if self._ws_commands.resolve(state, response):
-            logger.info(
-                "ws_command_response",
-                connection_id=str(state.id),
-                request_id=response.request_id,
-                status_code=response.body.get("statusCode"),
-            )
-            return
-
+        # The SDK already resolved its tracked native command request before
+        # invoking this hook. Remaining frames are tellraw/scriptevent acks.
         status = response.body.get("statusCode")
         if status not in (None, 0):
             logger.warning(
@@ -702,11 +594,9 @@ async def main(argv: Sequence[str] | None = None) -> None:
     # pending-request futures on a single session map.
     addon = AddonBridgeService(settings.addon)
     flow = settings.flow
-    # WS commandRequest/response correlation is host-owned (not in the SDK).
-    ws_commands = WsCommandRunner(flow)
     facade = McbeServerFacade(
         settings=settings,
-        hook=AddonDemoHook(addon, flow, ws_commands, log_raw_payloads=args.log_raw),
+        hook=AddonDemoHook(addon, flow, log_raw_payloads=args.log_raw),
         sink=MinecraftSink(flow, log_raw_payloads=args.log_raw),
         addon=addon,
     )

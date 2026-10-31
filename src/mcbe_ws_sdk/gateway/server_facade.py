@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -40,7 +41,8 @@ import websockets
 from mcbe_ws_sdk.addon import AddonBridgeService
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.config import GatewaySettings
-from mcbe_ws_sdk.errors import FacadeLifecycleError, ProtocolError
+from mcbe_ws_sdk.errors import FacadeLifecycleError, ProtocolError, RemoteCallError
+from mcbe_ws_sdk.gateway.commands import NativeCommandClient
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.handler import MessageSurfaceConfig, MinecraftProtocolHandler
@@ -50,10 +52,13 @@ from mcbe_ws_sdk.gateway.hook import (
     LegacyUiChatHookAdapter,
     NoOpHook,
 )
+from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
+from mcbe_ws_sdk.gateway.sender import SendPriority
 from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink
 from mcbe_ws_sdk.profiles.mcbews_v1.classifier import ToolPlayerMessage
 from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
+from mcbe_ws_sdk.requests import CATEGORY_COMMAND, RequestTable
 
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
@@ -125,6 +130,16 @@ class McbeServerFacade:
     def settings(self) -> GatewaySettings:
         return self._settings
 
+    @property
+    def reliable_dispatch(self) -> bool:
+        """Whether the opt-in reliable dispatch path is enabled.
+
+        The legacy path keeps the original serial callback contract; the
+        reliable path runs host callbacks in SDK-owned business tasks while the
+        reader keeps draining frames.
+        """
+        return self._settings.dispatch.mode == "reliable"
+
     # -- lifetime ---------------------------------------------------------------
 
     async def run_lifetime(
@@ -188,24 +203,44 @@ class McbeServerFacade:
     async def _on_connection(self, websocket: ServerConnection) -> None:
         """Per-connection protocol driver: handshake → message loop → teardown."""
         connection_id = uuid4()
+        raw_send = self._wrap_send(websocket, connection_id=connection_id)
         state = await self._manager.create_connection(
             connection_id=connection_id,
-            send_payload=self._wrap_send(websocket, connection_id=connection_id),
+            send_payload=raw_send,
         )
+        self._install_tracking(state, raw_send)
 
         try:
             assert state.send_payload is not None
-            await state.send_payload('{"Result":"true"}')
-            await state.send_payload(self._handler.create_subscribe_message())
+            await self._send_frame(
+                state,
+                '{"Result":"true"}',
+                priority=SendPriority.CONTROL,
+                source="handshake",
+            )
+            await self._send_frame(
+                state,
+                self._handler.create_subscribe_message(),
+                priority=SendPriority.CONTROL,
+                source="subscribe",
+            )
             logger.info(
                 "event_subscribed",
                 connection_id=str(state.id),
                 events=list(self._handler.SUBSCRIBED_EVENTS),
             )
-            # CONNECTED is emitted only after handshake + subscribe succeed,
-            # immediately before the host hook (D8). Welcome is host-owned.
-            await self._manager.event_bus.emit(WsEventType.CONNECTED, state)
-            await self._hook.on_connected(state)
+            # CONNECTED is emitted only after handshake + subscribe succeed.
+            # On the reliable path the event and the host hook are dispatched
+            # asynchronously; the reader is not blocked by either.
+            await self._emit_event(state, WsEventType.CONNECTED, state)
+            await self._invoke_hook(
+                state,
+                self._hook.on_connected,
+                state,
+                lane="connection",
+                label="on_connected",
+                log_event="hook_on_connected_failed",
+            )
 
             async for raw in websocket:
                 await self._handle_raw(state, raw)
@@ -228,9 +263,100 @@ class McbeServerFacade:
             except Exception:
                 logger.exception("hook_on_disconnected_failed", connection_id=str(state.id))
 
+    def _install_tracking(self, state: ConnectionState, raw_send: SendPayload) -> None:
+        """Attach the SDK-owned runtime / request tracking for one connection."""
+        if self.reliable_dispatch:
+            runtime = ConnectionRuntime(
+                connection_id=state.id,
+                dispatch=self._settings.dispatch,
+                send=self._settings.send,
+                flow=self._settings.flow,
+                transport=raw_send,
+            )
+            state.runtime = runtime
+            state.requests = runtime.requests
+            state.command_client = runtime.commands
+            state.send_payload = runtime.send_from_host
+            return
+        state.requests = RequestTable(
+            max_pending=self._settings.dispatch.max_pending_requests,
+            name=f"commands:{state.id}",
+        )
+        state.command_client = NativeCommandClient(
+            connection_id=state.id,
+            requests=state.requests,
+            flow=self._settings.flow,
+            send_payload=raw_send,
+            timeout_seconds=self._settings.dispatch.command_timeout_seconds,
+        )
+
+    async def _send_frame(
+        self,
+        state: ConnectionState,
+        payload: str,
+        *,
+        priority: SendPriority = SendPriority.REQUEST,
+        source: str = "facade",
+    ) -> None:
+        """Send one frame through the reliable scheduler when it is active."""
+        runtime = state.runtime
+        if runtime is not None:
+            await runtime.send_raw(payload, priority=priority, source=source)
+            return
+        if state.send_payload is None:
+            raise RuntimeError("connection has no send_payload")
+        await state.send_payload(payload)
+
+    async def _emit_event(self, state: ConnectionState, event: WsEventType, *args: Any) -> None:
+        """Emit a bus event inline (legacy) or on the observation lane (reliable)."""
+        runtime = state.runtime
+        bus = self._manager.event_bus
+        if runtime is None:
+            await bus.emit(event, *args)
+            return
+
+        async def run() -> None:
+            await bus.emit(event, *args)
+
+        accepted = runtime.events.submit(run, lane="events", label=event.value)
+        if not accepted:
+            logger.warning(
+                "event_dispatch_overloaded",
+                connection_id=str(state.id),
+                event_type=event.value,
+            )
+
+    async def _invoke_hook(
+        self,
+        state: ConnectionState,
+        fn: Callable[..., Awaitable[None]],
+        *args: Any,
+        lane: str,
+        label: str,
+        log_event: str,
+        **kwargs: Any,
+    ) -> None:
+        """Await a host hook inline (legacy) or submit it to a business lane."""
+        runtime = state.runtime
+        if runtime is None:
+            try:
+                await fn(*args, **kwargs)
+            except Exception:
+                logger.exception(log_event, connection_id=str(state.id))
+            return
+
+        async def run() -> None:
+            try:
+                await fn(*args, **kwargs)
+            except Exception:
+                logger.exception(log_event, connection_id=str(state.id))
+
+        # Rejections are counted/logged by the dispatcher; the reader moves on.
+        runtime.business.submit(run, lane=lane, label=label)
+
     async def _handle_raw(self, state: ConnectionState, raw: str | bytes) -> None:
         """Route one inbound WS frame to the right branch."""
-        await self._manager.event_bus.emit(WsEventType.RAW_INBOUND, state, raw)
+        await self._emit_event(state, WsEventType.RAW_INBOUND, state, raw)
 
         data: dict[str, Any] | None = None
         try:
@@ -262,19 +388,22 @@ class McbeServerFacade:
                     connection_id=str(state.id),
                 )
                 return
-            await self._manager.event_bus.emit(WsEventType.ERROR, state, error)
-            try:
-                await self._hook.on_error(state, error)
-            except Exception:
-                logger.exception(
-                    "hook_on_error_failed",
-                    connection_id=str(state.id),
-                )
+            self._fail_tracked_command_request(state, error)
+            await self._emit_event(state, WsEventType.ERROR, state, error)
+            await self._invoke_hook(
+                state,
+                self._hook.on_error,
+                state,
+                error,
+                lane="control",
+                label="on_error",
+                log_event="hook_on_error_failed",
+            )
             return
 
-        # Branch C — commandResponse: host-side command-execution future plumbing.
-        # We only detect the frame + forward to the hook; there is intentionally
-        # no ``pending_command_futures`` map on the state (that is host-owned).
+        # Branch C — commandResponse. The SDK resolves its own tracked native
+        # command requests inline (so a reply is never blocked by a business
+        # handler), then forwards the frame to the host hook as before.
         if self._is_command_response(data):
             try:
                 response = self._extract_command_response(data)
@@ -284,14 +413,17 @@ class McbeServerFacade:
                     connection_id=str(state.id),
                 )
                 return
-            await self._manager.event_bus.emit(WsEventType.COMMAND_RESPONSE, state, response)
-            try:
-                await self._hook.on_command_response(state, response)
-            except Exception:
-                logger.exception(
-                    "hook_on_command_response_failed",
-                    connection_id=str(state.id),
-                )
+            self._resolve_tracked_command_response(state, response)
+            await self._emit_event(state, WsEventType.COMMAND_RESPONSE, state, response)
+            await self._invoke_hook(
+                state,
+                self._hook.on_command_response,
+                state,
+                response,
+                lane="control",
+                label="on_command_response",
+                log_event="hook_on_command_response_failed",
+            )
             return
 
         # Parse a PlayerMessage event (returns None for any other event kind).
@@ -324,19 +456,22 @@ class McbeServerFacade:
                 return
 
             if result.bridge_chunk is not None:
-                await self._manager.event_bus.emit(
+                await self._emit_event(
+                    state,
                     WsEventType.BRIDGE_CHUNK,
                     state,
                     result.bridge_chunk,
                 )
             if result.ui_chunk is not None:
-                await self._manager.event_bus.emit(
+                await self._emit_event(
+                    state,
                     WsEventType.UI_CHAT_CHUNK,
                     state,
                     result.ui_chunk,
                 )
             if result.ui_message is not None:
-                await self._manager.event_bus.emit(
+                await self._emit_event(
+                    state,
                     WsEventType.UI_CHAT_REASSEMBLED,
                     state,
                     result.ui_message,
@@ -361,16 +496,54 @@ class McbeServerFacade:
             )
 
         # Branch B — player command/chat. Pass the parsed command to the hook so
-        # the host does not re-run the registry (D1).
+        # the host does not re-run the registry (D1). In reliable mode each player
+        # gets their own lane: one player's slow handler cannot block another,
+        # while consecutive messages from the same player stay ordered.
         parsed = self._handler.parse_typed_command(event.message)
-        await self._manager.event_bus.emit(WsEventType.PLAYER_MESSAGE, state, event)
-        try:
-            await self._hook.on_player_message(state, event, parsed=parsed)
-        except Exception:
-            logger.exception(
-                "hook_on_player_message_failed",
-                connection_id=str(state.id),
-            )
+        await self._emit_event(state, WsEventType.PLAYER_MESSAGE, state, event)
+        await self._invoke_hook(
+            state,
+            self._hook.on_player_message,
+            state,
+            event,
+            parsed=parsed,
+            lane=f"player:{event.sender}",
+            label="on_player_message",
+            log_event="hook_on_player_message_failed",
+        )
+
+    def _resolve_tracked_command_response(
+        self,
+        state: ConnectionState,
+        response: MinecraftCommandResponse,
+    ) -> None:
+        """Resolve an SDK-tracked native command request, if any."""
+        table = state.requests
+        if table is None:
+            return
+        table.resolve(CATEGORY_COMMAND, response.request_id, response)
+
+    def _fail_tracked_command_request(
+        self,
+        state: ConnectionState,
+        error: MinecraftErrorFrame,
+    ) -> None:
+        """Fail an SDK-tracked native command request on a matching error frame."""
+        table = state.requests
+        if table is None:
+            return
+        body = error.body if isinstance(error.body, dict) else {}
+        status_message = body.get("statusMessage")
+        message = str(status_message) if status_message else "remote error"
+        table.fail(
+            CATEGORY_COMMAND,
+            error.request_id,
+            RemoteCallError(
+                error.request_id,
+                code=error.header.get("code"),
+                message=message,
+            ),
+        )
 
     async def _on_ui_chat_reassembled(
         self,
@@ -386,25 +559,31 @@ class McbeServerFacade:
                 player=message.player_name,
             )
             return
-        try:
-            await self._invoke_ui_chat_hook(state, message)
-        except Exception:
-            # Isolate host hook failures so a broken UI-chat handler cannot tear
-            # the connection or poison the addon reassembly path.
-            logger.exception(
-                "hook_on_ui_chat_reassembled_failed",
-                connection_id=str(connection_id),
-                player=message.player_name,
-            )
+        await self._invoke_ui_chat_hook(state, message)
 
     async def _invoke_ui_chat_hook(self, state: ConnectionState, message: UiChatMessage) -> None:
         """Invoke the typed UI callback, or an explicitly supplied legacy adapter."""
-
+        lane = f"player:{message.player_name}"
         if self._legacy_ui_chat_hook is not None:
-            await self._legacy_ui_chat_hook.invoke(state, message)
+            await self._invoke_hook(
+                state,
+                self._legacy_ui_chat_hook.invoke,
+                state,
+                message,
+                lane=lane,
+                label="on_ui_chat_reassembled",
+                log_event="hook_on_ui_chat_reassembled_failed",
+            )
             return
-        callback = self._hook.on_ui_chat_reassembled
-        await callback(state, message)
+        await self._invoke_hook(
+            state,
+            self._hook.on_ui_chat_reassembled,
+            state,
+            message,
+            lane=lane,
+            label="on_ui_chat_reassembled",
+            log_event="hook_on_ui_chat_reassembled_failed",
+        )
 
     async def _invoke_addon_control_hook(
         self,
@@ -424,14 +603,25 @@ class McbeServerFacade:
                 channel=message.channel,
             )
             return
-        try:
-            await callback(state, message)
-        except Exception:
-            logger.exception(
-                "hook_on_addon_control_message_failed",
-                connection_id=str(state.id),
-                channel=message.channel,
-            )
+        player = self._control_player_name(message)
+        await self._invoke_hook(
+            state,
+            callback,
+            state,
+            message,
+            lane=f"player:{player}" if player else "control",
+            label="on_addon_control_message",
+            log_event="hook_on_addon_control_message_failed",
+        )
+
+    @staticmethod
+    def _control_player_name(message: ToolPlayerMessage) -> str | None:
+        """Return the explicit player identity carried by a control DTO, if any."""
+        if message.session_request is not None:
+            return message.session_request.player_name
+        if message.approval_decision is not None:
+            return message.approval_decision.player_name
+        return None
 
     def _wrap_send(
         self,
@@ -450,7 +640,8 @@ class McbeServerFacade:
                     connection_id=str(connection_id),
                 )
                 return
-            await self._manager.event_bus.emit(
+            await self._emit_event(
+                current_state,
                 WsEventType.RAW_OUTBOUND,
                 current_state,
                 payload,

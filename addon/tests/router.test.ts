@@ -11,7 +11,10 @@ import {
   setCapabilityHandler,
   shouldHandleScriptEvent,
   MAX_PRE_READY_REQUESTS,
+  MAX_ACTIVE_REQUESTS,
   _testingGetQueueSize,
+  _testingGetActiveQueueSize,
+  _testingGetDroppedCount,
   _testingFlush,
   _testingGetLastResponseSendOutcome,
   _testingReset,
@@ -311,6 +314,102 @@ describe("pre-ready queue", () => {
     } as ScriptEventCommandMessageAfterEvent);
 
     expect(_testingGetQueueSize()).toBe(MAX_PRE_READY_REQUESTS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Active queue
+// ---------------------------------------------------------------------------
+
+function emitRequest(requestId: string): void {
+  system.afterEvents.scriptEventReceive.emit({
+    id: BRIDGE_REQUEST_MESSAGE_ID,
+    message: JSON.stringify({ request_id: requestId, capability: "test", payload: {} }),
+    sourceType: "Server",
+  } as ScriptEventCommandMessageAfterEvent);
+}
+
+/** A handler that blocks until the returned release function is called. */
+function blockingHandler(): { handler: CapabilityHandler; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const handler: CapabilityHandler = async () => {
+    await gate;
+    return { ok: true };
+  };
+  return { handler, release };
+}
+
+describe("active queue", () => {
+  it("bounds the active queue and drops overflow requests", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sender = vi.fn(async (_rid: string, _body: string) => {});
+    await activateBridge(sender);
+
+    const { handler, release } = blockingHandler();
+    setCapabilityHandler(handler);
+    registerBridgeRouter();
+
+    for (let i = 0; i < MAX_ACTIVE_REQUESTS + 5; i++) emitRequest(`r${i}`);
+
+    // The first handler blocks, so the serial chain fills up and the rest drop.
+    expect(_testingGetActiveQueueSize()).toBeLessThanOrEqual(MAX_ACTIVE_REQUESTS);
+    expect(_testingGetActiveQueueSize()).toBe(MAX_ACTIVE_REQUESTS);
+    expect(_testingGetDroppedCount()).toBe(5);
+
+    release();
+    await _testingFlush();
+
+    expect(_testingGetActiveQueueSize()).toBe(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("does not send responses for dropped active requests", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sender = vi.fn(async (_rid: string, _body: string) => {});
+    await activateBridge(sender);
+
+    const { handler, release } = blockingHandler();
+    setCapabilityHandler(handler);
+    registerBridgeRouter();
+
+    for (let i = 0; i < MAX_ACTIVE_REQUESTS + 3; i++) emitRequest(`r${i}`);
+
+    expect(_testingGetDroppedCount()).toBe(3);
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("BRIDGE_ACTIVE_QUEUE_FULL"));
+
+    release();
+    await _testingFlush();
+
+    // The first MAX_ACTIVE_REQUESTS requestIds are answered; overflow ids never are.
+    expect(sender).toHaveBeenCalledTimes(MAX_ACTIVE_REQUESTS);
+    for (let i = MAX_ACTIVE_REQUESTS; i < MAX_ACTIVE_REQUESTS + 3; i++) {
+      expect(sender).not.toHaveBeenCalledWith(`r${i}`, expect.anything());
+    }
+    consoleSpy.mockRestore();
+  });
+
+  it("resets active queue counters", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sender = vi.fn(async (_rid: string, _body: string) => {});
+    await activateBridge(sender);
+
+    const { handler, release } = blockingHandler();
+    setCapabilityHandler(handler);
+    registerBridgeRouter();
+
+    for (let i = 0; i < MAX_ACTIVE_REQUESTS + 1; i++) emitRequest(`r${i}`);
+
+    expect(_testingGetDroppedCount()).toBe(1);
+    release();
+    await _testingFlush();
+
+    _testingReset();
+    expect(_testingGetActiveQueueSize()).toBe(0);
+    expect(_testingGetDroppedCount()).toBe(0);
+    consoleSpy.mockRestore();
   });
 });
 

@@ -10,7 +10,12 @@ from typing import Any, Generic, Protocol, TypeVar
 from uuid import uuid4
 
 from mcbe_ws_sdk.config import AddonBridgeSettings
-from mcbe_ws_sdk.errors import BridgeClosedError, BridgeLimitError, ProtocolError
+from mcbe_ws_sdk.errors import (
+    BridgeClosedError,
+    BridgeLimitError,
+    ProtocolError,
+    RequestLimitError,
+)
 from mcbe_ws_sdk.profiles.mcbews_v1.codec import (
     decode_bridge_chat_chunk,
     decode_ui_chat_chunk,
@@ -22,6 +27,7 @@ from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     UiChatChunk,
     UiChatMessage,
 )
+from mcbe_ws_sdk.requests import CATEGORY_ADDON, PendingRequest, RequestTable
 
 
 class _ChunkWithContent(Protocol):
@@ -31,14 +37,28 @@ class _ChunkWithContent(Protocol):
 T = TypeVar("T", bound=_ChunkWithContent)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class PendingAddonRequest:
-    """Pending state for a single bridge request."""
+    """Compatibility view over one entry in the shared request table."""
 
-    request_id: str
-    capability: str
-    payload: dict[str, Any]
-    future: asyncio.Future[dict[str, Any]]
+    entry: PendingRequest
+
+    @property
+    def request_id(self) -> str:
+        return self.entry.request_id
+
+    @property
+    def capability(self) -> str:
+        return str(self.entry.metadata.get("capability", ""))
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        payload = self.entry.metadata.get("payload", {})
+        return payload if isinstance(payload, dict) else {}
+
+    @property
+    def future(self) -> asyncio.Future[Any]:
+        return self.entry.future
 
 
 @dataclass
@@ -61,27 +81,34 @@ class AddonBridgeSession:
         self._settings = settings
         self._profile = settings.profile
         self._clock = clock
-        self._pending_requests: dict[str, PendingAddonRequest] = {}
+        self._requests = RequestTable(
+            max_pending=settings.max_pending_requests,
+            clock=clock,
+            name=f"addon:{id(self):x}",
+        )
         self._chunk_buffers: dict[str, ChunkBuffer[AddonBridgeChunk]] = {}
         self._ui_chat_chunk_buffers: dict[str, ChunkBuffer[UiChatChunk]] = {}
+
+    @property
+    def _pending_requests(self) -> dict[str, PendingRequest]:
+        """Live bridge pending requests (compatibility/inspection view)."""
+        return self._requests.entries(CATEGORY_ADDON)
 
     def create_request(
         self,
         capability: str,
         payload: dict[str, Any],
     ) -> PendingAddonRequest:
-        """Create and register a pending request."""
-        if len(self._pending_requests) >= self._settings.max_pending_requests:
-            raise BridgeLimitError("maximum pending requests exceeded")
-        loop = asyncio.get_running_loop()
-        request = PendingAddonRequest(
-            request_id=f"addon-{uuid4().hex}",
-            capability=capability,
-            payload=payload,
-            future=loop.create_future(),
-        )
-        self._pending_requests[request.request_id] = request
-        return request
+        """Register a pending request before its outbound frame is sent."""
+        try:
+            entry = self._requests.reserve(
+                CATEGORY_ADDON,
+                request_id=f"addon-{uuid4().hex}",
+                metadata={"capability": capability, "payload": payload},
+            )
+        except RequestLimitError as exc:
+            raise BridgeLimitError("maximum pending requests exceeded") from exc
+        return PendingAddonRequest(entry)
 
     def handle_chat_chunk(self, chunk_message: str) -> AddonBridgeChunk:
         """Consume a chat fragment; resolve its request future once complete."""
@@ -90,10 +117,15 @@ class AddonBridgeSession:
         except ValueError as exc:
             protocol_error = ProtocolError(str(exc))
             request_id = self._pending_bridge_request_id(chunk_message)
-            if request_id is not None and request_id in self._pending_requests:
+            pending = (
+                self._requests.get(CATEGORY_ADDON, request_id)
+                if request_id is not None
+                else None
+            )
+            if request_id is not None and pending is not None:
                 self._fail_bridge_request(request_id, protocol_error)
             raise protocol_error from exc
-        if chunk.request_id not in self._pending_requests:
+        if self._requests.get(CATEGORY_ADDON, chunk.request_id) is None:
             return chunk
 
         try:
@@ -119,16 +151,14 @@ class AddonBridgeSession:
             self._fail_bridge_request(chunk.request_id, protocol_error)
             raise protocol_error from exc
 
-        request = self._pending_requests.pop(chunk.request_id, None)
-        if request is not None and not request.future.done():
-            request.future.set_result(response.payload)
+        # A duplicate or late fragment finds no pending entry and is ignored;
+        # it can never revive an already terminal request.
+        self._requests.resolve(CATEGORY_ADDON, chunk.request_id, response.payload)
         return chunk
 
     def _fail_bridge_request(self, request_id: str, error: Exception) -> None:
-        request = self._pending_requests.pop(request_id, None)
         self._chunk_buffers.pop(request_id, None)
-        if request is not None and not request.future.done():
-            request.future.set_exception(error)
+        self._requests.fail(CATEGORY_ADDON, request_id, error)
 
     def _pending_bridge_request_id(self, chunk_message: str) -> str | None:
         parts = chunk_message.split("|", 4)
@@ -144,19 +174,15 @@ class AddonBridgeSession:
         return request_id
 
     def cancel_request(self, request_id: str) -> None:
-        request = self._pending_requests.pop(request_id, None)
+        entry = self._requests.get(CATEGORY_ADDON, request_id)
         self._chunk_buffers.pop(request_id, None)
-        if request is not None and not request.future.done():
-            request.future.cancel()
+        if entry is not None:
+            self._requests.cancel(entry)
 
     def close(self) -> None:
-        """Close the session, failing every pending request."""
-        pending_ids = list(self._pending_requests)
-        for request_id in pending_ids:
-            request = self._pending_requests.pop(request_id, None)
-            self._chunk_buffers.pop(request_id, None)
-            if request is not None and not request.future.done():
-                request.future.set_exception(BridgeClosedError(request_id))
+        """Close the session, failing every pending request exactly once."""
+        self._requests.close(lambda request_id: BridgeClosedError(request_id))
+        self._chunk_buffers.clear()
         self._ui_chat_chunk_buffers.clear()
 
     def handle_ui_chat_chunk(self, chunk_message: str) -> tuple[UiChatChunk, UiChatMessage | None]:
