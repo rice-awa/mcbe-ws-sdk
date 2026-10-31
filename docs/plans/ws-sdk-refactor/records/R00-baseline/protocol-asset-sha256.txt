@@ -1,0 +1,3 @@
+b70d8a3b8b63e322d8df25ac88d3f5a1e02d46409af99f712ce9909dd1249df1  src/mcbe_ws_sdk/profiles/mcbews_v1/manifest.json
+7a87d311d49314d3cdd19e41a5729d54ef4e7f349c2fc95bf913c28e428a3ac0  src/mcbe_ws_sdk/profiles/mcbews_v1/vectors.json
+7929566dde85bef77d4867118e76c60e25124770c2577a59fb7d10c4f9fd076a  tests/fixtures/mcbews_v1_vectors.json
