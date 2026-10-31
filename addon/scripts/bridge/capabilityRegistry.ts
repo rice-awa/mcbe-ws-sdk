@@ -8,8 +8,40 @@ export type CapabilityContext = {
 };
 
 export type V2CallOptions = { metadata?: Record<string, unknown>; traceId?: string };
+export type V2RequestOptions = V2CallOptions & { cancellation?: V2RequestCancellation };
+
+/** Use a separate handle per request for independent cancellation. */
+export class V2RequestCancellation {
+  private readonly listeners = new Set<() => void>();
+  private stopped = false;
+
+  get cancelled(): boolean {
+    return this.stopped;
+  }
+
+  /** Cancel locally; a request already delivered may still execute. */
+  cancel(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const listener of this.listeners) listener();
+    this.listeners.clear();
+  }
+
+  /** Register a cancellation callback and return its unsubscribe function. */
+  onCancel(listener: () => void): () => void {
+    if (this.stopped) {
+      listener();
+      return () => {};
+    }
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+}
+
 export type V2CapabilityClient = {
-  request(method: string, params: unknown, options?: V2CallOptions): Promise<Record<string, unknown>>;
+  request(method: string, params: unknown, options?: V2RequestOptions): Promise<Record<string, unknown>>;
   notify(method: string, params: unknown, options?: V2CallOptions): Promise<void>;
 };
 

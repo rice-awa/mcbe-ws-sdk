@@ -1,9 +1,15 @@
-import type { CapabilityContext, CapabilityRegistry, V2CallOptions, V2CapabilityClient } from "../capabilityRegistry";
+import type {
+  CapabilityContext,
+  CapabilityRegistry,
+  V2CallOptions,
+  V2CapabilityClient,
+  V2RequestOptions,
+} from "../capabilityRegistry";
 import { isObject, Message, V2ProtocolError } from "./codec";
 import { fragment, ReassemblyPool } from "./transport";
 
 type Timeout = (callback: () => void) => () => void;
-type Pending = { resolve: (value: Message) => void; reject: (reason: Error) => void };
+type Pending = { resolve: (value: Message) => void; reject: (reason: unknown) => void };
 
 export type V2EndpointOptions = {
   epoch: string;
@@ -60,32 +66,48 @@ export class V2Endpoint implements V2CapabilityClient {
     }
   }
 
-  async request(method: string, params: unknown, options: V2CallOptions = {}): Promise<Message> {
+  async request(method: string, params: unknown, options: V2RequestOptions = {}): Promise<Message> {
+    if (options.cancellation?.cancelled) throw new Error("request cancelled");
     if (this.pending.size >= (this.options.maxPending ?? 128)) throw new Error("pending limit exceeded");
     const id = this.nextId();
     let entry!: Pending;
-    const response = new Promise<Message>((resolve, reject) => {
-      entry = { resolve, reject };
-    });
-    void response.catch(() => {});
-    this.pending.set(id, entry);
+    let active = true;
     let cancelTimeout = () => {};
-    let cancelled = false;
+    let unsubscribe = () => {};
+    const response = new Promise<Message>((resolve, reject) => {
+      const finish = (complete: () => void) => {
+        if (!active) return;
+        active = false;
+        this.pending.delete(id);
+        cancelTimeout();
+        unsubscribe();
+        complete();
+      };
+      entry = {
+        resolve: (value) => finish(() => resolve(value)),
+        reject: (reason) => finish(() => reject(reason)),
+      };
+    });
+    this.pending.set(id, entry);
     try {
-      cancelTimeout = this.options.timeout(() => entry.reject(new Error("request timed out")));
-      const sent = this.send(
-        { v: "MCBEWS/2", kind: "request", id, method, params, meta: this.metadata(options) },
-        () => cancelled
-      );
-      await Promise.race([sent, response.then(() => undefined)]);
-      const result = await response;
-      if (isObject(result.error)) throw new Error(`${String(result.error.code)}: ${String(result.error.message)}`);
-      return result;
-    } finally {
-      cancelled = true;
-      cancelTimeout();
-      this.pending.delete(id);
+      unsubscribe = options.cancellation?.onCancel(() => entry.reject(new Error("request cancelled"))) ?? unsubscribe;
+      if (!active) unsubscribe();
+      if (active) {
+        cancelTimeout = this.options.timeout(() => entry.reject(new Error("request timed out")));
+        if (!active) cancelTimeout();
+      }
+      if (active) {
+        void this.send(
+          { v: "MCBEWS/2", kind: "request", id, method, params, meta: this.metadata(options) },
+          () => !active
+        ).catch((error: unknown) => entry.reject(error));
+      }
+    } catch (error) {
+      entry.reject(error);
     }
+    const result = await response;
+    if (isObject(result.error)) throw new Error(`${String(result.error.code)}: ${String(result.error.message)}`);
+    return result;
   }
 
   async notify(method: string, params: unknown, options: V2CallOptions = {}): Promise<void> {

@@ -20,11 +20,12 @@ type InventorySnapshot = {
 };
 
 function normalizeInventoryItem(slot: number, item: ItemStack): InventoryItemSnapshot {
+  const nameTag = item.nameTag;
   return {
     slot,
     typeId: item.typeId,
     amount: item.amount,
-    nameTag: item.nameTag,
+    ...(nameTag === undefined ? {} : { nameTag }),
   };
 }
 

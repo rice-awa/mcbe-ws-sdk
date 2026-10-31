@@ -29,7 +29,8 @@ class CapabilityContext:
 
     caller: str = "internal"
     request_version: int = 1
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Metadata participates in equality but may be a mutable, unhashable mapping.
+    metadata: Mapping[str, Any] = field(default_factory=dict, hash=False)
     connection_id: str | None = None
     client: V2Endpoint | None = None
 
