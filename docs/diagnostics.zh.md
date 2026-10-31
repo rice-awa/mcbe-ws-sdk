@@ -59,7 +59,11 @@ secrets 替换字符串内的指定字面量，命令或桥接 JSON 嵌在字符
 这些业务密钥值。脱敏先于日志和观察者，每个观察者收到独立副本。
 完整包默认最大 1 MiB；超限保留元信息并标记 packet_omitted="size_limit"。
 
-state.diagnostics 提供 dropped_count、observer_failures、task_count。最多
+准备记录时的意外解析、编码或脱敏失败会丢弃整条记录，不记录其内容、不回退到未脱敏原文；
+脱敏嵌套上限为 64 层，包含诊断记录本身。
+
+state.diagnostics 提供 dropped_count、preparation_failures、observer_failures、task_count；
+准备失败也计入 dropped_count。最多
 queue_maxsize 条等待记录加一条执行中记录，满时立即丢诊断、不等待；日志／观察者
 异常被隔离。慢异步观察者仅延迟后续诊断，不阻塞读取、配对或传输。关闭丢弃等待项，
 取消并等待观察任务，无后台线程。同步重计算或阻塞日志处理器仍会阻塞事件循环，宿主

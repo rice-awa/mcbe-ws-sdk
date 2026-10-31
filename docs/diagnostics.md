@@ -70,7 +70,12 @@ runs before logging and every observer. Each observer receives a private copy.
 Oversized full packets omit the body and record packet_omitted="size_limit";
 max_packet_bytes defaults to 1 MiB. Full mode requires deliberate host opt-in.
 
-state.diagnostics exposes dropped_count, observer_failures and task_count.
+Packet preparation is best-effort: unexpected parsing, encoding or redaction failures drop
+the record without logging its contents or using an unredacted fallback. Redaction
+limits nesting to 64 levels, including the diagnostic record itself.
+
+state.diagnostics exposes dropped_count, preparation_failures, observer_failures
+and task_count. Preparation failures count toward dropped_count.
 The queue holds at most queue_maxsize pending records plus one active callback;
 full queues discard observations immediately. Logger/observer exceptions are
 isolated. A slow async observer cannot block the reader, request pairing or

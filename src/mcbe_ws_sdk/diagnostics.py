@@ -77,12 +77,13 @@ class Diagnostics:
             log_rejections=False,
         )
         self.observer_failures = 0
+        self.preparation_failures = 0
         self._wire_contexts: OrderedDict[str, TraceContext] = OrderedDict()
 
     @property
     def dropped_count(self) -> int:
-        """Rejected or discarded diagnostic records, including shutdown drops."""
-        return self._lane.rejected_count
+        """Preparation failures, queue rejections and shutdown drops."""
+        return self.preparation_failures + self._lane.rejected_count
 
     @property
     def task_count(self) -> int:
@@ -100,24 +101,26 @@ class Diagnostics:
         """Consume recent wire correlation; request tables remain authoritative."""
         return self._wire_contexts.pop(wire_request_id, None)
 
-    def _redact(self, value: Any) -> Any:
+    def _redact(self, value: Any, depth: int = 0) -> Any:
+        # Bound later deepcopy/serialization too, independent of Python's stack limit.
+        if depth > 64:
+            raise ValueError("diagnostic nesting limit exceeded")
         if isinstance(value, dict):
             return {
-                k: "[REDACTED]" if k.lower() in self._secret_keys else self._redact(v)
+                k: "[REDACTED]" if k.lower() in self._secret_keys else self._redact(v, depth + 1)
                 for k, v in value.items()
             }
         if isinstance(value, list):
-            return [self._redact(v) for v in value]
+            return [self._redact(v, depth + 1) for v in value]
         if isinstance(value, str):
             for secret in self.settings.secrets:
                 if secret:
                     value = value.replace(secret, "[REDACTED]")
         return value
 
-    def record(
+    def _prepare(
         self, stage: str, *, packet: str | bytes | None = None, **fields: str | int | None
-    ) -> None:
-        """Enqueue metadata immediately; never await observer code."""
+    ) -> dict[str, Any] | None:
         record: dict[str, Any] = {
             **asdict(current_trace()),
             **fields,
@@ -126,11 +129,11 @@ class Diagnostics:
         }
         config = self.settings
         if config.connection_ids and self._connection_id not in config.connection_ids:
-            return
+            return None
         if config.request_ids and not config.request_ids.intersection(
             {record.get("request_id"), record.get("wire_request_id")}
         ):
-            return
+            return None
         if packet is not None:
             raw = packet.encode("utf-8") if isinstance(packet, str) else packet
             record["byte_size"] = len(raw)
@@ -142,8 +145,22 @@ class Diagnostics:
                         value = json.loads(raw)
                     except (ValueError, UnicodeDecodeError):
                         value = raw.decode("utf-8", errors="replace")
-                    record["packet"] = self._redact(value)
+                    record["packet"] = value
         record = self._redact(record)
+        return record
+
+    def record(
+        self, stage: str, *, packet: str | bytes | None = None, **fields: str | int | None
+    ) -> None:
+        """Enqueue best-effort diagnostics; discard unsafe preparation failures."""
+        try:
+            record = self._prepare(stage, packet=packet, **fields)
+        except Exception:
+            # Never log the exception or fall back to an unredacted packet.
+            self.preparation_failures += 1
+            return
+        if record is None:
+            return
 
         async def deliver() -> None:
             try:

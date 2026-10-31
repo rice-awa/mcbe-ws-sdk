@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from uuid import UUID
@@ -362,6 +363,78 @@ async def test_transport_and_remote_failures_are_not_success() -> None:
     )
     assert state.requests.pending_count == 0
     await stop(ws, task)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parseable", [True, False])
+async def test_packet_preparation_failure_is_private_and_best_effort(
+    parseable, monkeypatch
+) -> None:
+    records, logs = [], []
+    seen = asyncio.Event()
+
+    class Logger:
+        def debug(self, event, **fields):
+            logs.append(fields)
+
+    monkeypatch.setattr("mcbe_ws_sdk.diagnostics.structlog.get_logger", lambda *args: Logger())
+
+    def observer(record):
+        records.append(record)
+        seen.set()
+
+    sink = Diagnostics(UUID(int=1), DiagnosticSettings(full_packets=True), (observer,))
+    depth = sys.getrecursionlimit() * 2 // 3 if parseable else sys.getrecursionlimit() + 100
+    raw = '{"n":' * depth + '{"password":"must-stay-private"}' + "}" * depth
+    if parseable:
+        assert isinstance(json.loads(raw), dict)
+    try:
+        sink.record("received", packet=raw)
+        sink.record("after_failure")
+        await asyncio.wait_for(seen.wait(), 1)
+        assert [r["stage"] for r in records] == ["after_failure"]
+        assert "must-stay-private" not in json.dumps([records, logs])
+        assert sink.preparation_failures == sink.dropped_count == 1
+        assert sink.observer_failures == 0
+    finally:
+        await sink.close()
+
+
+@pytest.mark.asyncio
+async def test_packet_encoding_failure_is_counted_without_delivery() -> None:
+    records = []
+    sink = Diagnostics(UUID(int=1), DiagnosticSettings(full_packets=True), (records.append,))
+    try:
+        sink.record("received", packet="private\ud800")
+        assert sink.preparation_failures == sink.dropped_count == 1
+        assert sink.task_count == 0
+        assert records == []
+    finally:
+        await sink.close()
+
+
+@pytest.mark.asyncio
+async def test_deep_valid_packet_cannot_interrupt_next_reply_pairing() -> None:
+    facade, ws, task, hook, state = await start(DiagnosticSettings(full_packets=True))
+    depth = sys.getrecursionlimit() * 2 // 3
+    raw = '{"n":' * depth + '{"password":"must-stay-private"}' + "}" * depth
+    assert isinstance(json.loads(raw), dict)
+
+    async def on_send(payload):
+        data = json.loads(payload)
+        if data.get("header", {}).get("messagePurpose") == "commandRequest":
+            await ws.push(raw)
+            await ws.push(_command_response_frame(data["header"]["requestId"]))
+
+    ws.on_send = on_send
+    try:
+        response = await asyncio.wait_for(state.command_client.run("say next"), 2)
+        assert response.body["statusCode"] == 0
+        assert state.requests.pending_count == 0
+        assert state.diagnostics.preparation_failures == 1
+        assert not task.done()
+    finally:
+        await stop(ws, task)
 
 
 @pytest.mark.asyncio
