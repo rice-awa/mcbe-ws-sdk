@@ -79,9 +79,9 @@ class RecordingHook(NoOpHook):
         self.messages: list[PlayerMessageEvent] = []
         self.errors: list[MinecraftErrorFrame] = []
         self.error_seen = asyncio.Event()
-        self.on_player: (
-            Callable[[ConnectionState, PlayerMessageEvent], Awaitable[None]] | None
-        ) = None
+        self.on_player: Callable[[ConnectionState, PlayerMessageEvent], Awaitable[None]] | None = (
+            None
+        )
 
     async def on_connected(self, state: ConnectionState) -> None:
         self.state = state
@@ -381,6 +381,63 @@ async def test_disconnect_reaps_business_tasks_and_rejects_late_sends() -> None:
     await facade.manager.drop_connection(state.id)
     await runtime.close()
     assert facade.manager.connection_count == 0
+
+
+@pytest.mark.asyncio
+async def test_facade_disconnect_joins_cancelled_manager_drop() -> None:
+    started, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    disconnected = asyncio.Event()
+    cleanup_observed: list[bool] = []
+
+    class ClosingHook(RecordingHook):
+        async def on_disconnected(self, state: ConnectionState) -> None:
+            runtime = state.runtime
+            cleanup_observed.append(
+                runtime is not None
+                and runtime.scheduler.is_closed
+                and runtime.business.task_count == 0
+                and runtime.requests.pending_count == 0
+            )
+            disconnected.set()
+
+    async def on_player(state: ConnectionState, event: PlayerMessageEvent) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    hook = ClosingHook()
+    hook.on_player = on_player
+    facade, websocket, task = await _start(hook)
+    state = _require_state(hook)
+    await websocket.push(_player_frame("Alice", "blocked"))
+    await asyncio.wait_for(started.wait(), 2)
+    first = asyncio.create_task(facade.manager.drop_connection(state.id))
+    try:
+        await asyncio.wait_for(cancelling.wait(), 2)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        drop_entered = asyncio.Event()
+        original_drop = facade.manager.drop_connection
+
+        async def observed_drop(connection_id: UUID) -> None:
+            drop_entered.set()
+            await original_drop(connection_id)
+
+        facade.manager.drop_connection = observed_drop  # type: ignore[method-assign]
+        await websocket.close()
+        await asyncio.wait_for(drop_entered.wait(), 2)
+        assert not task.done()
+        assert not disconnected.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 2)
+    assert cleanup_observed == [True]
+    assert facade.manager._drop_tasks == {}
+    assert facade.manager._sender_tasks == {}
 
 
 # --------------------------------------------------------------------------- #

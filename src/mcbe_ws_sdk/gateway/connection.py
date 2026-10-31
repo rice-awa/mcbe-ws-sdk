@@ -142,6 +142,7 @@ class ConnectionManager:
         self._response_queue_maxsize = response_queue_maxsize
         self._connections: dict[UUID, ConnectionState] = {}
         self._sender_tasks: dict[UUID, asyncio.Task[None]] = {}
+        self._drop_tasks: dict[UUID, asyncio.Task[None]] = {}
 
     @property
     def sink(self) -> ResponseSink:
@@ -177,35 +178,59 @@ class ConnectionManager:
     async def drop_connection(self, connection_id: UUID) -> None:
         """Cancel the sender, release the runtime, drop, emit DISCONNECTED.
 
-        The connection is removed from the active map first so no new frame is
-        routed to its transport. Teardown is idempotent: a second call is a
-        no-op, and runtime close is guarded internally as well.
+        Remove the connection from routing immediately. Concurrent callers await
+        the same cleanup, which continues even if a caller is cancelled.
         """
-        state = self._connections.pop(connection_id, None)
+        task = self._drop_tasks.get(connection_id)
+        if task is None:
+            state = self._connections.pop(connection_id, None)
+            if state is None:
+                return
+            task = asyncio.create_task(
+                self._drop_connection(state), name=f"connection-drop:{connection_id}"
+            )
+            self._drop_tasks[connection_id] = task
+            task.add_done_callback(lambda completed: self._drop_finished(connection_id, completed))
+        if task is asyncio.current_task():
+            # DISCONNECTED observers may repeat teardown of this connection.
+            return
+        await asyncio.shield(task)
+
+    def _drop_finished(self, connection_id: UUID, task: asyncio.Task[None]) -> None:
+        self._drop_tasks.pop(connection_id, None)
+        # A cancelled waiter may leave nobody to retrieve a teardown failure.
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(
+                "connection_drop_failed",
+                connection_id=str(connection_id),
+                exc_info=task.exception(),
+            )
+
+    async def _drop_connection(self, state: ConnectionState) -> None:
+        connection_id = state.id
         await self._cancel_sender(connection_id)
-        if state is not None:
-            if state.runtime is not None:
-                try:
-                    await state.runtime.close(reason="connection dropped")
-                except Exception:
-                    logger.exception(
-                        "connection_runtime_close_failed",
-                        connection_id=str(connection_id),
-                    )
-            elif state.requests is not None:
-                # Legacy path: fail SDK-tracked native command waiters so host
-                # tasks do not hang after disconnect.
-                state.requests.close()
-            if state.response_queue is not None:
-                discarded = state.response_queue.qsize()
-                if discarded:
-                    logger.warning(
-                        "response_queue_discarded",
-                        connection_id=str(connection_id),
-                        discarded=discarded,
-                    )
-            await self._bus.emit(WsEventType.DISCONNECTED, state)
-            logger.info("connection_dropped", connection_id=str(connection_id))
+        if state.runtime is not None:
+            try:
+                await state.runtime.close(reason="connection dropped")
+            except Exception:
+                logger.exception(
+                    "connection_runtime_close_failed",
+                    connection_id=str(connection_id),
+                )
+        elif state.requests is not None:
+            # Legacy path: fail SDK-tracked native command waiters so host
+            # tasks do not hang after disconnect.
+            state.requests.close()
+        if state.response_queue is not None:
+            discarded = state.response_queue.qsize()
+            if discarded:
+                logger.warning(
+                    "response_queue_discarded",
+                    connection_id=str(connection_id),
+                    discarded=discarded,
+                )
+        await self._bus.emit(WsEventType.DISCONNECTED, state)
+        logger.info("connection_dropped", connection_id=str(connection_id))
 
     def get_connection(self, connection_id: UUID) -> ConnectionState | None:
         return self._connections.get(connection_id)
@@ -219,7 +244,7 @@ class ConnectionManager:
 
     async def shutdown_all(self) -> None:
         """Drop every connection (on server stop)."""
-        for connection_id in list(self._connections):
+        for connection_id in dict.fromkeys((*self._connections, *self._drop_tasks)):
             await self.drop_connection(connection_id)
 
     async def _cancel_sender(self, connection_id: UUID) -> None:
