@@ -50,6 +50,22 @@ router.registerCapability("ts.notice", async (_name, payload, context) => {
   return {};
 });
 
+const streamGates = new Map();
+const incomingStreams = new Map();
+router.registerV2Stream("ts.stream", async function* (_name, payload, context) {
+  yield { first: true, metadata: context.metadata };
+  if (payload.gate) {
+    await new Promise((resolve) => {
+      streamGates.set(payload.gate, resolve);
+      context.cancellation.onCancel(resolve);
+    });
+    streamGates.delete(payload.gate);
+  }
+  if (payload.large) yield "玩家😀".repeat(payload.large);
+  if (payload.fail) throw new Error("producer failed");
+});
+router.registerV2Stream("ts.empty", async function* () {});
+
 async function main() {
   const automatic = process.argv.includes("--negotiate");
   const send = async (frame) => emit({ type: "frame", frame });
@@ -73,6 +89,25 @@ async function main() {
         .getV2Endpoint(item.epoch ?? "test")
         .notify(item.method, item.params, item.options)
         .catch((error) => emit({ type: "fatal", error: error.message }));
+    } else if (item.op === "stream") {
+      void (async () => {
+        try {
+          const stream = await router
+            .getV2Endpoint(item.epoch ?? "test")
+            .stream(item.method, item.params, item.options);
+          incomingStreams.set(item.key, stream);
+          for await (const value of stream) emit({ type: "stream-item", key: item.key, value });
+          emit({ type: "stream-end", key: item.key });
+        } catch (error) {
+          emit({ type: "stream-error", key: item.key, code: error.code, message: error.message });
+        } finally {
+          incomingStreams.delete(item.key);
+        }
+      })();
+    } else if (item.op === "stream_cancel") {
+      incomingStreams.get(item.key)?.cancel();
+    } else if (item.op === "stream_release") {
+      streamGates.get(item.gate)?.();
     } else if (item.op === "close") {
       router._testingReset();
       lines.close();

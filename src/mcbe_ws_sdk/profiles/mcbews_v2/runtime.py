@@ -14,6 +14,7 @@ from mcbe_ws_sdk.capability import CapabilityContext, CapabilityRegistry
 from mcbe_ws_sdk.errors import RemoteCallError, RequestClosedError, RequestTimeoutError
 from mcbe_ws_sdk.gateway.sender import SendPriority
 from mcbe_ws_sdk.profiles.mcbews_v2.codec import MANIFEST, V2ProtocolError
+from mcbe_ws_sdk.profiles.mcbews_v2.streams import IncomingStream, StreamManager, StreamRegistry
 from mcbe_ws_sdk.profiles.mcbews_v2.transport import ReassemblyPool, limits, send_downstream
 from mcbe_ws_sdk.tracing import current_trace, trace_scope
 
@@ -63,6 +64,7 @@ class V2Bridge:
         timeout_seconds: float = 5.0,
         negotiation_timeout_seconds: float = 1.0,
         negotiate: bool = True,
+        stream_limits: dict[str, int] | None = None,
     ) -> None:
         if (
             not math.isfinite(timeout_seconds)
@@ -72,6 +74,8 @@ class V2Bridge:
         ):
             raise ValueError("timeouts must be positive")
         self.registry = CapabilityRegistry()
+        self.streams = StreamRegistry()
+        self.stream_limits = stream_limits
         self.pool = ReassemblyPool()
         self.timeout_seconds = timeout_seconds
         self.negotiation_timeout_seconds = negotiation_timeout_seconds
@@ -293,6 +297,24 @@ class V2Bridge:
         result = await legacy(method, params)
         return {"v": "MCBEWS/1", "kind": "response", "result": result}
 
+    async def stream(
+        self,
+        connection_id: UUID,
+        method: str,
+        params: object,
+        *,
+        metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        require: Collection[str] = (),
+    ) -> IncomingStream:
+        """Open a negotiated request stream; legacy peers cannot provide streams."""
+        selection = await self.ready(connection_id)
+        if selection.endpoint is None or "stream/1" not in selection.features:
+            raise NegotiationError("unsupported required features: stream/1")
+        return await selection.endpoint.stream(
+            method, params, metadata=metadata, trace_id=trace_id, require=require
+        )
+
     def activate(
         self,
         state: ConnectionState,
@@ -369,6 +391,8 @@ class V2Bridge:
         endpoint = self._connections.get(connection_id)
         send = self._controls.get(connection_id)
         self.close(connection_id)
+        if endpoint is not None:
+            await endpoint.streams.wait_closed()
         if endpoint is not None and send is not None:
             try:
                 async with asyncio.timeout(min(self.negotiation_timeout_seconds, 1.0)):
@@ -404,6 +428,7 @@ class V2Endpoint:
         self._control_tasks: set[asyncio.Task[None]] = set()
         self._send_tasks: dict[str, asyncio.Task[None]] = {}
         self._closed = False
+        self.streams = StreamManager(self._send, owner.streams, overrides=owner.stream_limits)
 
     def _next_id(self) -> str:
         if self._closed:
@@ -446,7 +471,11 @@ class V2Endpoint:
             self._next_id(),
             overrides={"command_bytes": self._command_bytes},
             priority=(
-                SendPriority.CONTROL if message["kind"] == "response" else SendPriority.REQUEST
+                SendPriority.CONTROL
+                if message["kind"] in ("response", "stream_end", "stream_error", "stream_cancel")
+                else SendPriority.BULK
+                if message["kind"] == "stream_item"
+                else SendPriority.REQUEST
             ),
         )
 
@@ -527,6 +556,32 @@ class V2Endpoint:
             }
         )
 
+    async def stream(
+        self,
+        method: str,
+        params: object,
+        *,
+        metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        require: Collection[str] = (),
+    ) -> IncomingStream:
+        """Start consuming before the producer knows its final item count.
+
+        Use the returned iterator as an async context manager when consumption
+        may stop early. Buffers are bounded; a slow consumer fails explicitly.
+        """
+        self._check_features(metadata, trace_id, {*require, "stream/1"})
+        return await self.streams.open(
+            {
+                "v": _VERSION,
+                "kind": "stream_open",
+                "id": self._next_id(),
+                "method": method,
+                "params": params,
+                "meta": self._metadata(metadata, trace_id),
+            }
+        )
+
     async def receive(self, frame: str, *, source: str) -> None:
         """Pair responses inline and admit incoming calls to the business dispatcher."""
         if self._closed or not frame.startswith(f"MCBEWS2|a.{self.epoch}."):
@@ -535,6 +590,23 @@ class V2Endpoint:
         if message is None:
             return
         kind = message["kind"]
+        if kind.startswith("stream_"):
+            if "stream/1" not in self.features:
+                return
+            expected_origin = "a" if kind in ("stream_open", "stream_cancel") else "p"
+            if not message["id"].startswith(f"{expected_origin}.{self.epoch}."):
+                return
+            self.streams.receive(
+                message,
+                CapabilityContext(
+                    caller=source,
+                    request_version=2,
+                    metadata=message.get("meta", {}),
+                    connection_id=str(self._state.id),
+                    client=self,
+                ),
+            )
+            return
         if kind == "response":
             if message["id"].startswith(f"p.{self.epoch}.") and self._requests.resolve(
                 _CATEGORY, message["id"], message
@@ -643,6 +715,7 @@ class V2Endpoint:
         if self._closed:
             return
         self._closed = True
+        self.streams.close()
         self._owner._retire_endpoint(self._state.id, self)
         for task in self._control_tasks:
             task.cancel()

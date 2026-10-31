@@ -45,6 +45,38 @@
         "result",
         "error"
       ]
+    },
+    "stream_open": {
+      "required": [
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "stream_item": {
+      "required": [
+        "id",
+        "seq",
+        "item"
+      ]
+    },
+    "stream_end": {
+      "required": [
+        "id",
+        "seq"
+      ]
+    },
+    "stream_error": {
+      "required": [
+        "id",
+        "seq",
+        "error"
+      ]
+    },
+    "stream_cancel": {
+      "required": [
+        "id"
+      ]
     }
   },
   "id_pattern": "[pa][.][A-Za-z0-9_-]{1,24}[.][1-9][0-9]{0,9}",
@@ -58,7 +90,7 @@
     ],
     "unknown": "preserve recursively",
     "identity": "untrusted; never authorizes",
-    "capabilities": "unique <=16 tokens; stream/1 reserved, not implemented"
+    "capabilities": "unique <=16 tokens; stream/1 enables request streams"
   },
   "errors": [
     "MALFORMED_JSON",
@@ -89,7 +121,8 @@
     "features": [
       "metadata/1",
       "notifications/1",
-      "reverse/1"
+      "reverse/1",
+      "stream/1"
     ],
     "v1_methods": [
       "get_player_snapshot",
@@ -133,7 +166,7 @@
   },
   "types": {
     "v": "literal MCBEWS/2",
-    "kind": "request | response | notification",
+    "kind": "request | response | notification | stream_open | stream_item | stream_end | stream_error | stream_cancel",
     "id": "ASCII id_pattern string",
     "method": "ASCII method_pattern string",
     "params": "JSON value",
@@ -148,7 +181,9 @@
         "data": "JSON value"
       },
       "unknown": "reject"
-    }
+    },
+    "seq": "safe integer >=0; stream item index or next expected index at termination",
+    "item": "JSON value"
   },
   "json": {
     "numbers": "finite safe integers only, abs <=9007199254740991",
@@ -162,6 +197,16 @@
     "transport": "fresh sender-owned id; all indexes then decode; duplicate identical ignored, conflict drops",
     "reconnect": "fresh epoch, no replay",
     "cleanup": "30000ms idle expiry; completion/conflict/overflow/cancel/expiry tombstone for 30000ms; disconnect clears connection",
-    "tombstone_capacity": "active IDs + tombstones <=2048; reject new IDs when full"
+    "tombstone_capacity": "active IDs + tombstones <=2048; reject new IDs when full",
+    "stream": "open -> item(seq=0...), then exactly one end/error(next seq); caller cancel stops producer; late frames ignored; stream/1 required"
+  },
+  "streams": {
+    "max_active": 16,
+    "buffer_items": 32,
+    "buffer_bytes": 131072,
+    "connection_bytes": 262144,
+    "idle_ms": 30000,
+    "tombstones": 2048,
+    "tombstone_ms": 30000
   }
 }

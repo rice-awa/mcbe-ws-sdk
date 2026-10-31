@@ -8,8 +8,9 @@ import type {
 import { isObject, Message, V2ProtocolError } from "./codec";
 import { fragment, ReassemblyPool } from "./transport";
 import { MANIFEST } from "./assets";
+import { IncomingStream, StreamHandler, StreamLimits, StreamManager } from "./streams";
 
-type Timeout = (callback: () => void) => () => void;
+type Timeout = (callback: () => void, milliseconds?: number) => () => void;
 type Pending = { resolve: (value: Message) => void; reject: (reason: unknown) => void };
 
 export type V2EndpointOptions = {
@@ -22,6 +23,8 @@ export type V2EndpointOptions = {
   maxActive?: number;
   features?: readonly string[];
   onClose?: () => void;
+  streamLimits?: Partial<StreamLimits>;
+  streamHandlers?: Map<string, StreamHandler>;
   dispatch?: (method: string, params: Message, context: CapabilityContext) => Promise<Message>;
 };
 
@@ -33,6 +36,8 @@ export class V2Endpoint implements V2CapabilityClient {
   private readonly pending = new Map<string, Pending>();
   private readonly methods = new Set<string>();
   private readonly tasks = new Set<Promise<void>>();
+  private readonly streams: StreamManager;
+  private readonly streamHandlers: Map<string, StreamHandler>;
   private sequence = 0;
   private sending = 0;
   private closed = false;
@@ -46,6 +51,16 @@ export class V2Endpoint implements V2CapabilityClient {
       )
     );
     this.pool = options.pool ?? new ReassemblyPool();
+    this.streamHandlers = options.streamHandlers ?? new Map();
+    this.streams = new StreamManager({
+      epoch: this.epoch,
+      handlers: this.streamHandlers,
+      nextId: () => this.nextId(),
+      send: (message, cancelled) => this.send(message, cancelled),
+      timeout: options.timeout,
+      limits: options.streamLimits,
+      context: (message, source, cancellation) => ({ ...this.context(message, source), cancellation }),
+    });
   }
 
   private nextId(): string {
@@ -133,10 +148,34 @@ export class V2Endpoint implements V2CapabilityClient {
     await this.send({ v: "MCBEWS/2", kind: "notification", method, params, meta: this.metadata(options) });
   }
 
+  /** Register an async iterable producer; an active call keeps its captured handler. */
+  registerStream(name: string, handler: StreamHandler): () => void {
+    if (this.streamHandlers.has(name)) throw new Error(`stream already registered: ${name}`);
+    const registered: StreamHandler = (...args) => handler(...args);
+    this.streamHandlers.set(name, registered);
+    return () => {
+      if (this.streamHandlers.get(name) === registered) this.streamHandlers.delete(name);
+    };
+  }
+
+  /** Start consuming a negotiated request-stream without knowing its final length. */
+  async stream(method: string, params: unknown, options: V2RequestOptions = {}): Promise<IncomingStream> {
+    this.checkFeatures(options, "stream/1");
+    return this.streams.open(method, params, this.metadata(options), options);
+  }
+
+  get streamStats() {
+    return this.streams.stats;
+  }
+
   async receive(frame: string, source: string): Promise<void> {
     if (this.closed || !frame.startsWith(`MCBEWS2|p.${this.epoch}.`)) return;
     const message = this.pool.receive(this.epoch, source, frame, "down");
     if (!message) return;
+    if (typeof message.kind === "string" && message.kind.startsWith("stream_")) {
+      if (this.features.has("stream/1")) this.streams.receive(message, source);
+      return;
+    }
     if (message.kind === "response") {
       if (typeof message.id === "string" && message.id.startsWith(`a.${this.epoch}.`)) {
         this.pending.get(message.id)?.resolve(message);
@@ -163,18 +202,8 @@ export class V2Endpoint implements V2CapabilityClient {
       if (message.kind === "request") await this.replyError(message, "INVALID_PARAMS", "parameters must be an object");
       return;
     }
-    const meta = isObject(message.meta) ? message.meta : {};
-    const traceId = typeof meta["sdk.trace_id"] === "string" ? meta["sdk.trace_id"] : undefined;
-    const client: V2CapabilityClient = {
-      request: (method, params, options = {}) => this.request(method, params, { traceId, ...options }),
-      notify: (method, params, options = {}) => this.notify(method, params, { traceId, ...options }),
-    };
-    const context: CapabilityContext = {
-      caller: { kind: "server", source },
-      requestVersion: 2,
-      metadata: meta,
-      client,
-    };
+    const context = this.context(message, source);
+    const meta = context.metadata ?? {};
     const result = this.options.dispatch
       ? await this.options.dispatch(message.method as string, message.params, context)
       : await this.options.registry.dispatch(message.method as string, message.params, context);
@@ -199,6 +228,21 @@ export class V2Endpoint implements V2CapabilityClient {
     }
   }
 
+  private context(message: Message, source: string): CapabilityContext {
+    const meta = isObject(message.meta) ? message.meta : {};
+    const traceId = typeof meta["sdk.trace_id"] === "string" ? meta["sdk.trace_id"] : undefined;
+    return {
+      caller: { kind: "server", source },
+      requestVersion: 2,
+      metadata: meta,
+      client: {
+        request: (method, params, options = {}) => this.request(method, params, { traceId, ...options }),
+        notify: (method, params, options = {}) => this.notify(method, params, { traceId, ...options }),
+        stream: (method, params, options = {}) => this.stream(method, params, { traceId, ...options }),
+      },
+    };
+  }
+
   private async replyError(message: Message, code: string, detail: string): Promise<void> {
     await this.send({
       v: "MCBEWS/2",
@@ -211,12 +255,13 @@ export class V2Endpoint implements V2CapabilityClient {
 
   /** Wait for admitted handlers; useful for graceful shutdown and tests. */
   async drain(): Promise<void> {
-    await Promise.allSettled([...this.tasks]);
+    await Promise.allSettled([...this.tasks, this.streams.drain()]);
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.streams.close();
     this.options.onClose?.();
     for (const entry of this.pending.values()) entry.reject(new Error("endpoint closed"));
     this.pending.clear();

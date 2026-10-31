@@ -1,10 +1,12 @@
 /** Name-based capability registry shared by the router and hosts. */
+import type { IncomingStream } from "./v2/streams";
 
 export type CapabilityContext = {
   caller: { kind: "server"; source?: string };
   requestVersion: 1 | 2;
   metadata?: Record<string, unknown>;
   client?: V2CapabilityClient;
+  cancellation?: V2RequestCancellation;
 };
 
 export type V2CallOptions = { metadata?: Record<string, unknown>; traceId?: string; require?: readonly string[] };
@@ -43,6 +45,7 @@ export class V2RequestCancellation {
 export type V2CapabilityClient = {
   request(method: string, params: unknown, options?: V2RequestOptions): Promise<Record<string, unknown>>;
   notify(method: string, params: unknown, options?: V2CallOptions): Promise<void>;
+  stream(method: string, params: unknown, options?: V2RequestOptions): Promise<IncomingStream>;
 };
 
 export type CapabilityHandler = (

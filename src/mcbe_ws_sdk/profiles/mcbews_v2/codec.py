@@ -67,7 +67,7 @@ def validate(message: object, *, resource_limits: dict[str, int] = LIMITS) -> di
     if obj["v"] != MANIFEST["protocol"]:
         fail("UNSUPPORTED_VERSION")
     kind = obj.get("kind")
-    if not isinstance(kind, str) or kind not in ("request", "response", "notification"):
+    if not isinstance(kind, str) or kind not in MANIFEST["fields"] or kind == "common":
         fail()
     common = MANIFEST["fields"]["common"]
     fields = MANIFEST["fields"][kind]
@@ -78,9 +78,12 @@ def validate(message: object, *, resource_limits: dict[str, int] = LIMITS) -> di
     if kind == "response":
         if ("result" in obj) == ("error" in obj):
             fail()
-    else:
-        if not _matches(MANIFEST["method_pattern"], obj["method"]):
-            fail()
+    elif kind in ("request", "notification", "stream_open") and not _matches(
+        MANIFEST["method_pattern"], obj["method"]
+    ):
+        fail()
+    if "seq" in obj and (type(obj["seq"]) is not int or obj["seq"] < 0):
+        fail()
     if "id" in obj and not _matches(MANIFEST["id_pattern"], obj["id"]):
         fail()
     if "error" in obj:

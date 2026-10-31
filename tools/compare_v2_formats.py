@@ -12,6 +12,9 @@ def measure() -> list[dict[str, int | str]]:
     rows = []
     for vector in vectors["valid"]:
         msg = vector["message"]
+        # Keep the R09 eight-position candidate experiment scoped to atomic messages.
+        if msg["kind"].startswith("stream_"):
+            continue
         compact = [
             msg.get(k) for k in ("v", "kind", "id", "method", "params", "result", "error", "meta")
         ]

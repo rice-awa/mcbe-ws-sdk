@@ -9,6 +9,7 @@ import {
   _testingReset,
 } from "../scripts/bridge/router";
 import { fragment } from "../scripts/bridge/v2/transport";
+import { MANIFEST } from "../scripts/bridge/v2/assets";
 
 beforeEach(() => {
   _testingReset();
@@ -45,7 +46,7 @@ describe("v2 discovery", () => {
     );
     const parts = sent[0].split("|");
     expect(parts.slice(0, 2)).toEqual(["MCBEWS2N", "second"]);
-    expect(parts.slice(3)).toEqual(["2", "metadata/1,notifications/1,reverse/1"]);
+    expect(parts.slice(3)).toEqual(["2", MANIFEST.negotiation.features.join(",")]);
     expect(getV2Endpoint(parts[2])).toBeNull();
     enqueueOrHandle(event("mcbews:negotiate_v2", `MCBEWS2C|second|${parts[2]}`));
     expect(getV2Endpoint(parts[2])?.epoch).toBe(parts[2]);

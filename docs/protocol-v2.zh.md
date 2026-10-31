@@ -3,11 +3,11 @@
 权威来源是安装包内 profiles/mcbews_v2/manifest.json、vectors.json。
 独立 MCBEWS/2 标识；借鉴交互模型但不兼容 JSON-RPC。
 MCBEWS/1 资产、标识、导入、构造参数、默认行为不变。
-v2 为显式接入；持续流留待后续阶段。
+v2 为显式接入；持续流要求协商 `stream/1`。
 
 ## 逻辑消息
 
-按清单严格区分 request、response、notification 的必需、可选、禁止字段；未知核心键拒绝。
+按清单严格区分 request、response、notification 及下文流消息的字段；未知核心键拒绝。
 v固定MCBEWS/2，method为清单ASCII模式，params/result可为任意合法JSON（含null）。
 回复必须且只能有result/error之一。error含清单code、最多256 UTF-8字节的message、
 可选任意JSON data；其他键拒绝。只允许±9007199254740991内有限整数，布尔不当数字。
@@ -23,7 +23,7 @@ sequence为1–10位正十进制。回复回显请求编号，双向发起不冲
 
 meta最多4096紧凑JSON UTF-8字节；未知扩展递归保留。sdk.为核心保留前缀，仅允许
 sdk.trace_id（清单令牌）、sdk.identity（不可信对象）、sdk.capabilities（最多16个不重复令牌）。
-stream/1仅预留协商，不接受流帧。身份从不自动授权；未知保留键拒绝。深度/数字规则同上。
+`stream/1` 启用下文的流式消息。身份从不自动授权；未知保留键拒绝。深度/数字规则同上。
 
 ## 双向载体和资源
 
@@ -81,7 +81,7 @@ v2 清单定义 `mcbews:negotiate_v2` 控制事件。Python 发送 `MCBEWS2H|att
 
 单次探测期限覆盖发送和等待回复。没有响应时选择 v1；版本不支持、容量繁忙或确认
 未完成时明确报错。普通聊天和原生命令不受探测阻塞。v1 回退只允许清单中的已知方法，
-必需元数据和功能不会静默丢弃；`stream/1` 尚未实现。
+必需元数据和功能不会静默丢弃；流式调用必须协商 `stream/1`。
 
 世界共享池最多同时容纳 32 个活动连接和 32 个临时挑战。各连接的 endpoint、分片和
 等待请求独立；新连接不会替换其他连接。60 秒租约每 20 秒续期；facade 断连时有界地
@@ -90,3 +90,48 @@ v2 清单定义 `mcbews:negotiate_v2` 控制事件。Python 发送 `MCBEWS2H|att
 
 载体来源类型和路由令牌不能证明 WebSocket 身份，也不提供授权；宿主须独立完成认证
 和授权。关闭消息丢失时依赖租约清理；已经交给传输层的命令不能撤回。
+
+## 持续请求流
+
+Python 用 `bridge.streams.register(name, handler)` 注册异步生成器，接收
+`(name, params, CapabilityContext)`，逐项产生 JSON。调用
+`await bridge.stream(connection_id, name, params)` 或 `await endpoint.stream(name, params)`
+得到异步迭代器。可能提前退出时用 `async with stream:` 包住消费过程，或调用
+`await stream.aclose()`；取消正在等待下一项的任务也会取消该流。流注册与原子能力注册独立。
+
+附加包通过路由模块的 `registerV2Stream(name, handler)` 或 endpoint 的 `registerStream`
+注册返回 `AsyncIterable` 的生产者。`await endpoint.stream(name, params, options)` 返回
+异步迭代器；提前退出 `for await` 会调用 `return()` 并取消。也可用原有
+`V2RequestCancellation` 取消单条流。注销只影响后续调用。
+
+| 消息种类 | v/kind 之外的必需字段 | 方向 |
+| --- | --- | --- |
+| stream_open | id、method、params | 调用方到生产者 |
+| stream_item | id、seq、item | 生产者到调用方 |
+| stream_end | id、seq | 生产者到调用方 |
+| stream_error | id、seq、error | 生产者到调用方 |
+| stream_cancel | id | 调用方到生产者 |
+
+均允许可选 meta，其他字段拒绝。id 属于调用方，所有流消息回显它；每项逻辑消息另用
+发送方的新传输编号，可通过 R11 拆成多片。seq 与片段序号分离，第一项从 0 起，
+end/error 携带下一项预期序号；空流结束序号为 0，不需要事先提供总长度。乱序、重复逻辑项
+或结束时缺项以 INVALID_MESSAGE 失败并取消生产者。未知、迟到消息不创建流；墓碑窗口内
+重复 open 不重启生产者。墓碑表本身已满时，新 open 明确拒绝而不再存储编号；
+此时重复抑制与 R11 一样受墓碑容量边界限制。
+
+正常结束保留已缓冲项供消费；失败、取消、超载会清空缓冲，终止结果只确定一次。
+生产异常返回 HANDLER_FAILED，空闲超时返回 TIMEOUT。取消停止后续发送并关闭生产迭代器，
+不撤销已经执行的世界修改。Python 生产者须允许任务取消；JavaScript 生产者应响应
+`context.cancellation`，任意永不完成的 Promise 无法被强制解除。
+
+清单上限：每 endpoint 两个方向合计最多 16 条流，含已结束但仍有未读项的流；每消费者
+最多 32 项／131072 字节紧凑 item JSON，连接总缓冲 262144 字节。生产者逐项等待发送。
+open、生产下一项、发送单条逻辑消息各有 30000ms 空闲期限；接收一项刷新消费者计时，
+不是整条流的总时长。生产者及重复 open 墓碑合计最多 2048，墓碑保留 30000ms。
+Python `V2Bridge(stream_limits=...)` 与 TS `V2EndpointOptions.streamLimits` 只能降低上限。
+
+慢消费者超限会以 LIMIT_EXCEEDED 明确结束并发送取消；固定间隔和传输节奏不属于接收方背压。
+控制发送也有容量上限，控制通道或传输耗尽时由对端空闲超时兜住生命周期。尚未完成的传输
+分片继续受 R11 TTL 与配额限制，流取消无需解码不完整分片；断连清理整个连接池。
+旧端不支持流式时明确报能力不支持，不缓存完整结果伪装流式。接收额度的测量与决定见
+[第四阶段任务记录](https://github.com/Rice-awa/mcbe-ws-sdk/blob/main/docs/plans/ws-sdk-refactor/records/R16.zh.md)。

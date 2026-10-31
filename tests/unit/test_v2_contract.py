@@ -11,14 +11,24 @@ ASSETS = ROOT / "src/mcbe_ws_sdk/profiles/mcbews_v2"
 def test_contract_independent_and_all_axes_defined() -> None:
     manifest = json.loads((ASSETS / "manifest.json").read_text())
     assert manifest["protocol"] == "MCBEWS/2"
-    assert set(manifest["fields"]) == {"common", "request", "response", "notification"}
+    assert set(manifest["fields"]) == {
+        "common",
+        "request",
+        "response",
+        "notification",
+        "stream_open",
+        "stream_item",
+        "stream_end",
+        "stream_error",
+        "stream_cancel",
+    }
     assert manifest["limits"]["command_bytes"] == 461
     assert manifest["limits"]["upstream_code_points"] == 256
     assert manifest["carrier"]["event"] == "mcbews:packet_v2"
     old = json.loads((ASSETS.parent / "mcbews_v1/manifest.json").read_text())
     assert old["protocol_line"] == "MCBEWS/1"
     vectors = json.loads((ASSETS / "vectors.json").read_text())
-    assert [len(vectors[k]) for k in ("valid", "invalid", "raw_invalid")] == [7, 13, 3]
+    assert [len(vectors[k]) for k in ("valid", "invalid", "raw_invalid")] == [12, 18, 3]
     assert all("expected" in v for group in vectors.values() for v in group)
 
 

@@ -3,12 +3,12 @@
 Installed profiles/mcbews_v2/manifest.json and vectors.json are authoritative.
 A separate interaction protocol inspired by JSON-RPC, this is not JSON-RPC compatible.
 MCBEWS/1 assets, identifiers, imports, constructors and default routing stay unchanged.
-The v2 runtime is opt-in; continuous streams await a later stage.
+The v2 runtime is opt-in; request streams require negotiated `stream/1`.
 
 ## Logical messages
 
 Strict JSON object fields follow the manifest: v is exactly MCBEWS/2; kind is request,
-response or notification. Each kind lists required, optional and forbidden fields;
+response, notification, or one of the stream kinds below. Each kind lists required, optional and forbidden fields;
 unknown core keys are rejected. Method matches the ASCII manifest pattern. Params and
 result accept any JSON value including null. A response contains exactly one result or
 error. Error requires a listed code and scalar message (at most 256 UTF-8 bytes), with
@@ -33,8 +33,7 @@ compact JSON message is at most 65536 UTF-8 bytes.
 Meta is an object, at most 4096 compact JSON UTF-8 bytes. Unknown optional keys and
 nested values are preserved. The sdk. prefix is reserved: sdk.trace_id is a manifest
 token; sdk.identity is an untrusted object; sdk.capabilities is a unique list of at most
-16 manifest tokens. stream/1 reserves future negotiation only; stream frames are not
-accepted. Identity never authorizes a caller. Unknown reserved keys are rejected.
+16 manifest tokens. `stream/1` enables the stream kinds described below. Identity never authorizes a caller. Unknown reserved keys are rejected.
 The same depth and number rules apply to metadata.
 
 ## Bidirectional carrier and resources
@@ -119,7 +118,7 @@ The manifest specifies the complete control frames and limits.
 One discovery deadline covers sends and replies. No answer selects v1; an unsupported
 version, busy admission or incomplete confirmation fails explicitly. Ordinary chat
 and native commands remain independent. V1 fallback exposes only the manifest's known
-methods; required metadata and features are never discarded. `stream/1` is unimplemented.
+methods; required metadata and features are never discarded. streams require negotiated `stream/1`.
 
 Up to 32 peers and 32 provisional challenges share one world pool. Each peer has an
 independent endpoint, fragments and pending requests; a new peer never replaces another.
@@ -131,3 +130,60 @@ unsent replies are suppressed. No request or world mutation is replayed automati
 Carrier source type and routing tokens do not prove WebSocket identity or authorize a
 caller. Hosts must authenticate and authorize independently. A lost close relies on
 lease expiry; a command already handed to the transport cannot be retracted.
+
+## Request streams
+
+Python registers an async generator with `bridge.streams.register(name, handler)`.
+The handler receives `(name, params, CapabilityContext)` and yields JSON items.
+`await bridge.stream(connection_id, name, params)` or `await endpoint.stream(name, params)`
+returns an async iterator. Use `async with stream:` around consumption when stopping
+before completion, or call `await stream.aclose()`. Cancelling a pending iterator read
+also cancels that stream. Existing atomic capability registrations stay independent.
+
+The addon registers producers with `registerV2Stream(name, handler)` in the bridge router,
+or `endpoint.registerStream(name, handler)`. Handlers return an `AsyncIterable`.
+`await endpoint.stream(name, params, options)` returns an async iterator; early exit from
+`for await` invokes `return()` and cancellation. The existing `V2RequestCancellation`
+handle can cancel one stream. Registration removal affects future calls only.
+
+| Kind | Required fields beyond v/kind | Direction |
+| --- | --- | --- |
+| stream_open | id, method, params | Caller to producer |
+| stream_item | id, seq, item | Producer to caller |
+| stream_end | id, seq | Producer to caller |
+| stream_error | id, seq, error | Producer to caller |
+| stream_cancel | id | Caller to producer |
+
+All kinds allow optional meta and reject other fields. IDs belong to the caller;
+responses echo that ID. Each logical item has a fresh sender-owned transport ID and
+may use multiple R11 fragments. Item sequence numbers are separate from fragment
+indexes: first item is seq=0, end/error carries the next expected seq. Total length is
+unknown until termination. An empty stream ends at seq=0. A sequence mismatch fails
+with INVALID_MESSAGE and cancels the producer; unknown or late messages allocate no
+stream. Duplicate opens cannot restart a producer within the tombstone window.
+If the tombstone table itself is full, new opens are rejected without storing another
+ID; duplicate suppression then has the same capacity boundary as R11.
+
+Normal completion preserves already buffered items until consumed. Failure, local
+cancellation and overload discard buffered items and settle the consumer once. Producer
+exceptions map to HANDLER_FAILED; inactivity maps to TIMEOUT. Cancellation stops future
+items and closes the producer iterator; it never rolls back world changes. Python
+producers must allow task cancellation. JavaScript producers should cooperate with
+`context.cancellation`: an arbitrary unresolved Promise cannot be forcibly unwound.
+
+Manifest stream maxima: 16 active streams per endpoint (both directions, including
+completed streams with unread items); 32 buffered items / 131072 item JSON UTF-8 bytes
+per consumer; 262144 buffered bytes per endpoint. A producer only sends one logical
+item at a time. Opening, producing the next item, and sending each message each have a
+30000 ms idle deadline; receiving items refreshes the consumer idle timer. This is not
+a total stream lifetime limit. Duplicate-open tombstones last 30000 ms with at most
+2048 active producers plus tombstones. Limits can only be lowered through Python
+`V2Bridge(stream_limits=...)` or addon `V2EndpointOptions.streamLimits`.
+
+Slow consumers fail explicitly with LIMIT_EXCEEDED and send cancellation. Fixed send
+intervals and transport pacing do not provide receiver backpressure. Control sends are
+bounded; when their capacity or the transport is exhausted, remote idle expiry still
+bounds the lifetime. Incomplete transport messages retain the R11 TTL and quotas;
+logical stream cancellation does not require decoding incomplete fragments. Disconnect
+clears the connection pool. Old peers fail capability checks rather than buffering a
+whole response and presenting it as a stream.

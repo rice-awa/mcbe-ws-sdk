@@ -161,8 +161,9 @@ async def test_real_node_addon_negotiates_and_exchanges_v2() -> None:
         assert result["result"]["payload"] == {"n": 1}
         assert result["meta"] == meta
         assert result["result"]["caller"] == {"kind": "server", "source": "Entity"}
-        with pytest.raises(NegotiationError, match="stream"):
-            await bridge.request(hook.state.id, "ts.echo", {}, require={"stream/1"})
+        assert "stream/1" in selected.features
+        with pytest.raises(NegotiationError, match="credit"):
+            await bridge.request(hook.state.id, "ts.echo", {}, require={"credit/1"})
     finally:
         await _stop(websocket, task)
         await write({"op": "close"})

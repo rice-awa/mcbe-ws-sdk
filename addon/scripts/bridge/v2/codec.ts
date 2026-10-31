@@ -47,7 +47,12 @@ export function validate(message: unknown, resourceLimits = MANIFEST.limits): Me
   const obj = tree(message, 0, resourceLimits.depth);
   if (!isObject(obj) || !("v" in obj)) fail();
   if (obj.v !== MANIFEST.protocol) fail("UNSUPPORTED_VERSION");
-  if (typeof obj.kind !== "string" || !["request", "response", "notification"].includes(obj.kind)) fail();
+  if (
+    typeof obj.kind !== "string" ||
+    !Object.prototype.hasOwnProperty.call(MANIFEST.fields, obj.kind) ||
+    obj.kind === "common"
+  )
+    fail();
   const fields = MANIFEST.fields[obj.kind],
     common = MANIFEST.fields.common;
   const required = [...common.required, ...fields.required];
@@ -55,7 +60,12 @@ export function validate(message: unknown, resourceLimits = MANIFEST.limits): Me
   if (required.some((k) => !(k in obj)) || Object.keys(obj).some((k) => !allowed.includes(k))) fail();
   if (obj.kind === "response") {
     if ("result" in obj === "error" in obj) fail();
-  } else if (!matches(MANIFEST.method_pattern, obj.method)) fail();
+  } else if (
+    (obj.kind === "request" || obj.kind === "notification" || obj.kind === "stream_open") &&
+    !matches(MANIFEST.method_pattern, obj.method)
+  )
+    fail();
+  if ("seq" in obj && (!Number.isSafeInteger(obj.seq) || (obj.seq as number) < 0)) fail();
   if ("id" in obj && !matches(MANIFEST.id_pattern, obj.id)) fail();
   if ("error" in obj) {
     const err = obj.error;

@@ -108,6 +108,64 @@
         }
       },
       "expected": "ok"
+    },
+    {
+      "name": "stream_open",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_open",
+        "id": "p.epoch.1",
+        "method": "count",
+        "params": {}
+      },
+      "expected": "ok"
+    },
+    {
+      "name": "stream_item",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_item",
+        "id": "p.epoch.1",
+        "seq": 0,
+        "item": {
+          "text": "玩家😀",
+          "null": null
+        }
+      },
+      "expected": "ok"
+    },
+    {
+      "name": "stream_end",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_end",
+        "id": "p.epoch.1",
+        "seq": 1
+      },
+      "expected": "ok"
+    },
+    {
+      "name": "stream_error",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_error",
+        "id": "p.epoch.1",
+        "seq": 0,
+        "error": {
+          "code": "TIMEOUT",
+          "message": "idle"
+        }
+      },
+      "expected": "ok"
+    },
+    {
+      "name": "stream_cancel",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_cancel",
+        "id": "p.epoch.1"
+      },
+      "expected": "ok"
     }
   ],
   "invalid": [
@@ -285,6 +343,58 @@
     {
       "name": "array_root",
       "message": [],
+      "expected": "INVALID_MESSAGE"
+    },
+    {
+      "name": "negative-seq",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_item",
+        "id": "p.epoch.1",
+        "seq": -1,
+        "item": null
+      },
+      "expected": "INVALID_MESSAGE"
+    },
+    {
+      "name": "boolean-seq",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_end",
+        "id": "p.epoch.1",
+        "seq": true
+      },
+      "expected": "INVALID_MESSAGE"
+    },
+    {
+      "name": "missing-seq",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_end",
+        "id": "p.epoch.1"
+      },
+      "expected": "INVALID_MESSAGE"
+    },
+    {
+      "name": "extra-seq",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_cancel",
+        "id": "p.epoch.1",
+        "seq": 0
+      },
+      "expected": "INVALID_MESSAGE"
+    },
+    {
+      "name": "extra-result",
+      "message": {
+        "v": "MCBEWS/2",
+        "kind": "stream_item",
+        "id": "p.epoch.1",
+        "seq": 0,
+        "item": null,
+        "result": null
+      },
       "expected": "INVALID_MESSAGE"
     }
   ],

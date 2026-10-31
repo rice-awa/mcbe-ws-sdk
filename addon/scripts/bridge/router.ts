@@ -12,6 +12,7 @@ import type {
 import { utf8ByteLength } from "./chunking";
 import { MANIFEST as V2_MANIFEST } from "./v2/assets";
 import { V2Endpoint } from "./v2/runtime";
+import type { StreamHandler } from "./v2/streams";
 import { ReassemblyPool } from "./v2/transport";
 import { matches } from "./v2/codec";
 
@@ -77,6 +78,7 @@ let lastResponseSendOutcome: ResponseSendOutcome | null = null;
 let activePending = 0;
 let droppedActiveRequests = 0;
 const v2Pool = new ReassemblyPool();
+const v2StreamHandlers = new Map<string, StreamHandler>();
 type V2Peer = { endpoint: V2Endpoint; expires: number };
 type V2Challenge = { epoch: string; expires: number };
 const v2Peers = new Map<string, V2Peer>();
@@ -419,6 +421,16 @@ export function getV2Endpoint(epoch: string): V2Endpoint | null {
   return v2Peers.get(epoch)?.endpoint ?? null;
 }
 
+/** Register a stream producer for current and future negotiated peers. */
+export function registerV2Stream(name: string, handler: StreamHandler): () => void {
+  if (v2StreamHandlers.has(name)) throw new Error(`stream already registered: ${name}`);
+  const registered: StreamHandler = (...args) => handler(...args);
+  v2StreamHandlers.set(name, registered);
+  return () => {
+    if (v2StreamHandlers.get(name) === registered) v2StreamHandlers.delete(name);
+  };
+}
+
 /** Activate an explicitly agreed v2 epoch without changing the legacy router. */
 export function activateV2Bridge(epoch: string, send: (frame: string) => Promise<void>): V2Endpoint {
   pruneV2Peers();
@@ -427,12 +439,13 @@ export function activateV2Bridge(epoch: string, send: (frame: string) => Promise
     epoch,
     registry: capabilityRegistry,
     pool: v2Pool,
+    streamHandlers: v2StreamHandlers,
     send,
     onClose: () => {
       v2Peers.delete(epoch);
     },
-    timeout: (callback) => {
-      const handle = system.runTimeout(callback, 100);
+    timeout: (callback, milliseconds = 5000) => {
+      const handle = system.runTimeout(callback, Math.max(1, Math.ceil(milliseconds / 50)));
       return () => system.clearRun(handle);
     },
     dispatch: async (method, payload, context) => {
@@ -597,6 +610,7 @@ export function _testingGetLastResponseSendOutcome(): ResponseSendOutcome | null
 export function _testingReset(): void {
   for (const epoch of v2Peers.keys()) retireV2Peer(epoch);
   v2Challenges.clear();
+  v2StreamHandlers.clear();
   if (v2Pruner !== null) system.clearRun(v2Pruner);
   v2Pruner = null;
   v2Sender = null;
