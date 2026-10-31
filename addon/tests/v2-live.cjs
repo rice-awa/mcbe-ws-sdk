@@ -64,13 +64,13 @@ async function main() {
       router.enqueueOrHandle({ id: "mcbews:negotiate_v2", message: item.frame, sourceType: "Entity" });
     } else if (item.op === "request") {
       void router
-        .getV2Endpoint()
+        .getV2Endpoint(item.epoch ?? "test")
         .request(item.method, item.params, item.options)
         .then((message) => emit({ type: "result", key: item.key, message }))
         .catch((error) => emit({ type: "error", key: item.key, message: error.message }));
     } else if (item.op === "notify") {
       void router
-        .getV2Endpoint()
+        .getV2Endpoint(item.epoch ?? "test")
         .notify(item.method, item.params, item.options)
         .catch((error) => emit({ type: "fatal", error: error.message }));
     } else if (item.op === "close") {

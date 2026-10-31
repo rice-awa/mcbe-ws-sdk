@@ -7,7 +7,7 @@ export type CapabilityContext = {
   client?: V2CapabilityClient;
 };
 
-export type V2CallOptions = { metadata?: Record<string, unknown>; traceId?: string };
+export type V2CallOptions = { metadata?: Record<string, unknown>; traceId?: string; require?: readonly string[] };
 export type V2RequestOptions = V2CallOptions & { cancellation?: V2RequestCancellation };
 
 /** Use a separate handle per request for independent cancellation. */

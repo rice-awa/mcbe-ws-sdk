@@ -82,15 +82,37 @@
     "event": "mcbews:negotiate_v2",
     "hello_prefix": "MCBEWS2H",
     "response_prefix": "MCBEWS2N",
-    "versions": ["MCBEWS/2", "MCBEWS/1"],
-    "features": ["metadata/1", "notifications/1", "reverse/1"],
-    "v1_methods": ["get_player_snapshot", "get_inventory_snapshot"],
+    "versions": [
+      "MCBEWS/2",
+      "MCBEWS/1"
+    ],
+    "features": [
+      "metadata/1",
+      "notifications/1",
+      "reverse/1"
+    ],
+    "v1_methods": [
+      "get_player_snapshot",
+      "get_inventory_snapshot"
+    ],
     "max_attempts": 1,
-    "hello": "MCBEWS2H|epoch",
-    "response": "MCBEWS2N|epoch|2|comma-separated-features",
-    "epoch": "fresh 1-24 character ASCII alphanumeric, underscore or hyphen token",
-    "acceptance": "only the trusted bridge player may answer one outstanding epoch",
-    "legacy": "timeout selects MCBEWS/1 without replay; metadata and required features never downgrade"
+    "hello": "MCBEWS2H|attempt",
+    "response": "MCBEWS2N|attempt|epoch|2|comma-separated-features",
+    "epoch": "fresh addon-issued 1-24 character routing token; not authentication",
+    "acceptance": "one outstanding attempt and fresh challenge must match before activation",
+    "legacy": "timeout selects MCBEWS/1 without replay; metadata and required features never downgrade",
+    "confirm": "MCBEWS2C|attempt|epoch",
+    "ready": "MCBEWS2N|attempt|epoch|ready",
+    "busy": "MCBEWS2N|attempt|-|busy",
+    "refresh": "MCBEWS2R|epoch",
+    "lease_ack": "MCBEWS2N|epoch|lease",
+    "close": "MCBEWS2X|epoch",
+    "max_peers": 32,
+    "max_challenges": 32,
+    "challenge_ms": 10000,
+    "lease_ms": 60000,
+    "refresh_ms": 20000,
+    "max_control_sends": 64
   },
   "limits": {
     "command_bytes": 461,

@@ -94,7 +94,7 @@ Create `V2Bridge` and pass it as `v2` to a reliable `McbeServerFacade`. Discover
 starts once per connection in the background; `await bridge.ready(state.id)` returns
 the selected version, features and v2 endpoint. Use `bridge.request(state.id, ...)`
 for negotiated calls, and register Python handlers on `bridge.registry`. The addon
-router exposes `getV2Endpoint()` and its existing capability registry.
+router exposes `getV2Endpoint(epoch)` and its existing capability registry.
 The endpoint rejects a new call while its method's ordering group is active, or when
 business capacity is exhausted. This allows reverse calls to other groups without
 waiting on a group already held by an ancestor. Notifications receive no error reply.
@@ -110,22 +110,24 @@ and releases the connection's fragments; idle partial messages expire by TTL.
 
 ## Discovery and fallback
 
-The v2 manifest defines the `mcbews:negotiate_v2` hello event. Its payload is
-`MCBEWS2H|epoch`; the bridge player replies
-`MCBEWS2N|epoch|2|metadata/1,notifications/1,reverse/1`. The facade accepts only a
-matching pending epoch from the trusted bridge player. It sends one random epoch per
-connection and waits at most the configured discovery timeout;
-normal chat and native commands continue while discovery runs. A new addon responds
-with its supported features and keeps serving v1. A missing or old addon causes a v1
-selection; negotiated fallback permits only the manifest's known v1 methods. Existing
-v1 clients retain their previous behavior. A required feature, explicit metadata or
-trace ID fails if unavailable; `stream/1` is not implemented.
+The v2 manifest defines the `mcbews:negotiate_v2` control event. Python sends
+`MCBEWS2H|attempt`; the addon replies with a fresh routing epoch and its features.
+Python confirms that challenge, and the addon sends `ready` after admitting the peer.
+The matching endpoint and features are installed before the next frame is read.
+The manifest specifies the complete control frames and limits.
 
-Reconnect generates a fresh epoch and does not replay requests. Both ends reject
-frames from earlier epochs, including unsolicited messages and fragments. The addon
-keeps a bounded set of used epochs and rejects new hellos if it is full. The bridge
-is not an authorization boundary: transport attribution and metadata do not replace
-host authentication or authorization. Timeout does not retract a command already sent.
-The addon currently supports one active epoch: a new hello closes the previous
-endpoint even if it has unfinished messages. Concurrent connections and uninterrupted
-epoch changes remain pending review.
+One discovery deadline covers sends and replies. No answer selects v1; an unsupported
+version, busy admission or incomplete confirmation fails explicitly. Ordinary chat
+and native commands remain independent. V1 fallback exposes only the manifest's known
+methods; required metadata and features are never discarded. `stream/1` is unimplemented.
+
+Up to 32 peers and 32 provisional challenges share one world pool. Each peer has an
+independent endpoint, fragments and pending requests; a new peer never replaces another.
+The 60-second lease is refreshed every 20 seconds, and facade disconnect sends a bounded
+best-effort close. Unreachable peers expire; stale frames and confirmations cannot
+reactivate their epochs. Already started handlers may finish after closure, but their
+unsent replies are suppressed. No request or world mutation is replayed automatically.
+
+Carrier source type and routing tokens do not prove WebSocket identity or authorize a
+caller. Hosts must authenticate and authorize independently. A lost close relies on
+lease expiry; a command already handed to the transport cannot be retracted.

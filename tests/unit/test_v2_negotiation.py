@@ -33,16 +33,23 @@ async def test_new_peers_negotiate_and_reconnect_with_fresh_epoch() -> None:
 
         async def answer(payload: str) -> None:
             command = json.loads(payload).get("body", {}).get("commandLine", "")
-            prefix = "scriptevent mcbews:negotiate_v2 MCBEWS2H|"
+            prefix = "scriptevent mcbews:negotiate_v2 "
             if command.startswith(prefix):
-                epoch = command[len(prefix) :]
-                epochs.append(epoch)
-                await websocket.push(
-                    _player_frame(
-                        "MCBEWS_BRIDGE",
-                        f"MCBEWS2N|{epoch}|2|metadata/1,notifications/1,reverse/1",
+                parts = command[len(prefix) :].split("|")
+                if parts[0] == "MCBEWS2H":
+                    attempt = parts[1]
+                    epoch = "e" + attempt[:23]
+                    epochs.append(epoch)
+                    await websocket.push(
+                        _player_frame(
+                            "MCBEWS_BRIDGE",
+                            f"MCBEWS2N|{attempt}|{epoch}|2|metadata/1,notifications/1,reverse/1",
+                        )
                     )
-                )
+                elif parts[0] == "MCBEWS2C":
+                    await websocket.push(
+                        _player_frame("MCBEWS_BRIDGE", f"MCBEWS2N|{parts[1]}|{parts[2]}|ready")
+                    )
 
         websocket.on_send = answer
         task = asyncio.create_task(facade._on_connection(websocket))
@@ -205,7 +212,9 @@ async def test_unsupported_version_is_an_error_not_a_legacy_downgrade() -> None:
         prefix = "scriptevent mcbews:negotiate_v2 MCBEWS2H|"
         if command.startswith(prefix):
             epoch = command[len(prefix) :]
-            await websocket.push(_player_frame("MCBEWS_BRIDGE", f"MCBEWS2N|{epoch}|3|metadata/1"))
+            await websocket.push(
+                _player_frame("MCBEWS_BRIDGE", f"MCBEWS2N|{epoch}|challenge|3|metadata/1")
+            )
 
     websocket.on_send = answer
     task = asyncio.create_task(facade._on_connection(websocket))
@@ -281,11 +290,15 @@ async def test_stale_responses_unsolicited_and_fragments_are_ignored() -> None:
         request = await asyncio.wait_for(outgoing.get(), 2)
         stale_reply = {"v": "MCBEWS/2", "kind": "response", "id": request["id"], "result": "stale"}
         stale_notice = {
-            "v": "MCBEWS/2", "kind": "notification", "method": "notice",
+            "v": "MCBEWS/2",
+            "kind": "notification",
+            "method": "notice",
             "params": {"value": "stale" * 100},
         }
         fresh_notice = {
-            "v": "MCBEWS/2", "kind": "notification", "method": "notice",
+            "v": "MCBEWS/2",
+            "kind": "notification",
+            "method": "notice",
             "params": {"value": "fresh"},
         }
         for frame in fragment(stale_reply, "a.previous.1", "up"):

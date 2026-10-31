@@ -301,7 +301,7 @@ class McbeServerFacade:
             logger.exception("connection_error", connection_id=str(state.id))
         finally:
             if self._v2 is not None:
-                self._v2.close(state.id)
+                await self._v2.close_connection(state.id)
             if self._addon is not None:
                 try:
                     self._addon.close_connection(state.id)
@@ -688,11 +688,13 @@ class McbeServerFacade:
                 if message is None:
                     return
                 # Transforms cannot manufacture reserved bridge/control input.
-                if self._addon.is_tool_player_channel_message(message.message) or (
-                    self._v2 is not None and message.message.startswith("MCBEWS2|")
-                ) or (
-                    self._v2 is not None
-                    and message.message.startswith(f"{self._v2.negotiation_prefix}|")
+                if (
+                    self._addon.is_tool_player_channel_message(message.message)
+                    or (self._v2 is not None and message.message.startswith("MCBEWS2|"))
+                    or (
+                        self._v2 is not None
+                        and message.message.startswith(f"{self._v2.negotiation_prefix}|")
+                    )
                 ):
                     logger.warning("native_transform_reserved_channel", connection_id=str(state.id))
                     return

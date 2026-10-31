@@ -7,6 +7,7 @@ import type {
 } from "../capabilityRegistry";
 import { isObject, Message, V2ProtocolError } from "./codec";
 import { fragment, ReassemblyPool } from "./transport";
+import { MANIFEST } from "./assets";
 
 type Timeout = (callback: () => void) => () => void;
 type Pending = { resolve: (value: Message) => void; reject: (reason: unknown) => void };
@@ -19,12 +20,15 @@ export type V2EndpointOptions = {
   pool?: ReassemblyPool;
   maxPending?: number;
   maxActive?: number;
+  features?: readonly string[];
+  onClose?: () => void;
   dispatch?: (method: string, params: Message, context: CapabilityContext) => Promise<Message>;
 };
 
 /** A bounded endpoint whose reader pairs replies before dispatching capabilities. */
 export class V2Endpoint implements V2CapabilityClient {
   readonly epoch: string;
+  readonly features: ReadonlySet<string>;
   private readonly pool: ReassemblyPool;
   private readonly pending = new Map<string, Pending>();
   private readonly methods = new Set<string>();
@@ -36,6 +40,11 @@ export class V2Endpoint implements V2CapabilityClient {
   constructor(private readonly options: V2EndpointOptions) {
     if (!/^[A-Za-z0-9_-]{1,24}$/.test(options.epoch)) throw new Error("invalid epoch");
     this.epoch = options.epoch;
+    this.features = new Set(
+      (options.features ?? MANIFEST.negotiation.features).filter((feature) =>
+        MANIFEST.negotiation.features.includes(feature)
+      )
+    );
     this.pool = options.pool ?? new ReassemblyPool();
   }
 
@@ -44,6 +53,14 @@ export class V2Endpoint implements V2CapabilityClient {
     this.sequence += 1;
     if (this.sequence > 9999999999) throw new Error("epoch exhausted");
     return `a.${this.epoch}.${this.sequence}`;
+  }
+
+  private checkFeatures(options: V2CallOptions, feature: string): void {
+    const required = new Set(options.require ?? []);
+    required.add(feature);
+    if (options.metadata !== undefined || options.traceId !== undefined) required.add("metadata/1");
+    const missing = [...required].filter((item) => !this.features.has(item));
+    if (missing.length) throw new Error(`unsupported required features: ${missing.sort().join(", ")}`);
   }
 
   private metadata(options: V2CallOptions): Message {
@@ -67,6 +84,7 @@ export class V2Endpoint implements V2CapabilityClient {
   }
 
   async request(method: string, params: unknown, options: V2RequestOptions = {}): Promise<Message> {
+    this.checkFeatures(options, "reverse/1");
     if (options.cancellation?.cancelled) throw new Error("request cancelled");
     if (this.pending.size >= (this.options.maxPending ?? 128)) throw new Error("pending limit exceeded");
     const id = this.nextId();
@@ -111,6 +129,7 @@ export class V2Endpoint implements V2CapabilityClient {
   }
 
   async notify(method: string, params: unknown, options: V2CallOptions = {}): Promise<void> {
+    this.checkFeatures(options, "notifications/1");
     await this.send({ v: "MCBEWS/2", kind: "notification", method, params, meta: this.metadata(options) });
   }
 
@@ -198,6 +217,7 @@ export class V2Endpoint implements V2CapabilityClient {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.options.onClose?.();
     for (const entry of this.pending.values()) entry.reject(new Error("endpoint closed"));
     this.pending.clear();
     this.pool.close(this.epoch);

@@ -16,7 +16,7 @@ OUTPUT = ROOT / 'addon/scripts/bridge/v2/assets.ts'
 def render() -> str:
     lines = ['/** Generated from v2 manifest/vectors; do not edit. */']
     types = {
-        'manifest': '{ protocol: string; fields: Record<string, { required: string[]; optional?: string[]; exclusive?: string[] }>; id_pattern: string; method_pattern: string; token_pattern: string; metadata: { reserved: string[] }; errors: string[]; carrier: { event: string; prefix: string }; negotiation: { event: string; hello_prefix: string; response_prefix: string; versions: string[]; features: string[]; v1_methods: string[]; max_attempts: number; hello: string; response: string; epoch: string; acceptance: string; legacy: string }; limits: Record<string, number> }',
+        'manifest': '{ protocol: string; fields: Record<string, { required: string[]; optional?: string[]; exclusive?: string[] }>; id_pattern: string; method_pattern: string; token_pattern: string; metadata: { reserved: string[] }; errors: string[]; carrier: { event: string; prefix: string }; negotiation: { event: string; hello_prefix: string; response_prefix: string; versions: string[]; features: string[]; v1_methods: string[]; max_attempts: number; hello: string; response: string; confirm: string; ready: string; busy: string; refresh: string; lease_ack: string; close: string; epoch: string; acceptance: string; legacy: string; max_peers: number; max_challenges: number; challenge_ms: number; lease_ms: number; refresh_ms: number; max_control_sends: number }; limits: Record<string, number> }',
         'vectors': '{ valid: Vector[]; invalid: Vector[]; raw_invalid: { name: string; wire: string; expected: string }[] }',
     }
     lines.append('export type Vector = { name: string; message: unknown; expected: string };')

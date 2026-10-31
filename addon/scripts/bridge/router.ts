@@ -77,11 +77,28 @@ let lastResponseSendOutcome: ResponseSendOutcome | null = null;
 let activePending = 0;
 let droppedActiveRequests = 0;
 const v2Pool = new ReassemblyPool();
-let v2Endpoint: V2Endpoint | null = null;
+type V2Peer = { endpoint: V2Endpoint; expires: number };
+type V2Challenge = { epoch: string; expires: number };
+const v2Peers = new Map<string, V2Peer>();
+const v2Challenges = new Map<string, V2Challenge>();
+const v2TokenSeed =
+  Math.floor(Math.random() * 0x100000000)
+    .toString(36)
+    .padStart(7, "0") +
+  Math.floor(Math.random() * 0x1000000)
+    .toString(36)
+    .padStart(5, "0");
+let v2TokenSequence = 0;
+let v2ControlSends = 0;
 let v2Pruner: number | null = null;
 let v2Sender: ((frame: string) => Promise<void>) | null = null;
 let pendingV2Hello: string | null = null;
-const seenV2Epochs = new Set<string>();
+
+export const V2_MAX_PEERS = V2_MANIFEST.negotiation.max_peers;
+export const V2_MAX_CHALLENGES = V2_MANIFEST.negotiation.max_challenges;
+export const V2_LEASE_MS = V2_MANIFEST.negotiation.lease_ms;
+const V2_CHALLENGE_MS = V2_MANIFEST.negotiation.challenge_ms;
+const V2_MAX_CONTROL_SENDS = V2_MANIFEST.negotiation.max_control_sends;
 
 export const MAX_PRE_READY_REQUESTS = 64;
 export const MAX_ACTIVE_REQUESTS = 64;
@@ -216,17 +233,23 @@ function schedule(event: RouterEvent): void {
 
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
   if (event.id === V2_MANIFEST.negotiation.event) {
-    const prefix = V2_MANIFEST.negotiation.hello_prefix + "|";
-    if (!event.message.startsWith(prefix)) return;
-    const epoch = event.message.slice(prefix.length);
-    if (!matches("[A-Za-z0-9_-]{1,24}", epoch)) return;
-    if (!bridgeActive) pendingV2Hello = epoch;
-    else void acceptV2Hello(epoch).catch(logUnexpectedRouterFailure);
+    if (event.message.length > 100) return;
+    if (!bridgeActive) {
+      const match = /^MCBEWS2H\|([A-Za-z0-9_-]{1,24})$/.exec(event.message);
+      if (match) pendingV2Hello = match[1];
+    } else {
+      handleV2Control(event.message);
+    }
     return;
   }
   if (event.id === V2_MANIFEST.carrier.event) {
-    if (bridgeActive && v2Endpoint) {
-      void v2Endpoint.receive(event.message, event.sourceType).catch(logUnexpectedRouterFailure);
+    if (!bridgeActive) return;
+    pruneV2Peers();
+    const match = /^MCBEWS2\|p\.([A-Za-z0-9_-]{1,24})\.[1-9][0-9]{0,9}\|/.exec(event.message);
+    const peer = match && v2Peers.get(match[1]);
+    if (peer) {
+      peer.expires = Date.now() + V2_LEASE_MS;
+      void peer.endpoint.receive(event.message, event.sourceType).catch(logUnexpectedRouterFailure);
     }
     return;
   }
@@ -280,7 +303,7 @@ export async function activateBridge(sender: ResponseSender, sendV2?: (frame: st
   if (pendingV2Hello) {
     const epoch = pendingV2Hello;
     pendingV2Hello = null;
-    await acceptV2Hello(epoch);
+    handleV2Control(`${V2_MANIFEST.negotiation.hello_prefix}|${epoch}`);
   }
   while (preReadyQueue.length > 0) {
     const event = preReadyQueue.shift();
@@ -289,31 +312,125 @@ export async function activateBridge(sender: ResponseSender, sendV2?: (frame: st
   await processingTail;
 }
 
-async function acceptV2Hello(epoch: string): Promise<void> {
+function sendV2Control(frame: string, onFailure?: () => void): boolean {
   const send = v2Sender;
-  if (!send || seenV2Epochs.has(epoch) || seenV2Epochs.size >= V2_MANIFEST.limits.tombstones) return;
-  if (v2Endpoint) {
-    v2Endpoint.close();
-    v2Endpoint = null;
+  if (!send || v2ControlSends >= V2_MAX_CONTROL_SENDS) return false;
+  v2ControlSends += 1;
+  try {
+    void send(frame)
+      .catch((error: unknown) => {
+        onFailure?.();
+        logUnexpectedRouterFailure(error);
+      })
+      .finally(() => {
+        v2ControlSends -= 1;
+      });
+  } catch (error) {
+    v2ControlSends -= 1;
+    onFailure?.();
+    logUnexpectedRouterFailure(error);
+    return false;
   }
-  activateV2Bridge(epoch, send);
-  seenV2Epochs.add(epoch);
-  await send(`${V2_MANIFEST.negotiation.response_prefix}|${epoch}|2|${V2_MANIFEST.negotiation.features.join(",")}`);
+  return true;
 }
 
-/** Return the endpoint selected by discovery, or null before discovery succeeds. */
-export function getV2Endpoint(): V2Endpoint | null {
-  return v2Endpoint;
+function retireV2Peer(epoch: string): void {
+  const peer = v2Peers.get(epoch);
+  if (!peer) return;
+  v2Peers.delete(epoch);
+  peer.endpoint.close();
+}
+
+function pruneV2Peers(): void {
+  const now = Date.now();
+  v2Pool.prune();
+  for (const [attempt, challenge] of v2Challenges) {
+    if (now >= challenge.expires) v2Challenges.delete(attempt);
+  }
+  for (const [epoch, peer] of v2Peers) {
+    if (now >= peer.expires) retireV2Peer(epoch);
+  }
+}
+
+function handleV2Control(frame: string): void {
+  pruneV2Peers();
+  const parts = frame.split("|");
+  const attempt = parts[1];
+  if (!attempt || !matches("[A-Za-z0-9_-]{1,24}", attempt)) return;
+  if (parts[0] === "MCBEWS2H" && parts.length === 2) {
+    if (v2ControlSends >= V2_MAX_CONTROL_SENDS - 1) {
+      sendV2Control(`MCBEWS2N|${attempt}|-|busy`);
+      return;
+    }
+    let challenge = v2Challenges.get(attempt);
+    if (!challenge) {
+      if (v2Challenges.size >= V2_MAX_CHALLENGES || v2Peers.size >= V2_MAX_PEERS) {
+        sendV2Control(`MCBEWS2N|${attempt}|-|busy`);
+        return;
+      }
+      if (v2TokenSequence >= Number.MAX_SAFE_INTEGER) {
+        sendV2Control(`MCBEWS2N|${attempt}|-|busy`);
+        return;
+      }
+      challenge = {
+        epoch: `${v2TokenSeed}_${(++v2TokenSequence).toString(36)}`,
+        expires: Date.now() + V2_CHALLENGE_MS,
+      };
+      v2Challenges.set(attempt, challenge);
+    }
+    const expected = challenge;
+    if (
+      !sendV2Control(`MCBEWS2N|${attempt}|${challenge.epoch}|2|${V2_MANIFEST.negotiation.features.join(",")}`, () => {
+        if (v2Challenges.get(attempt) === expected) v2Challenges.delete(attempt);
+      })
+    )
+      v2Challenges.delete(attempt);
+    return;
+  }
+  if (parts[0] === "MCBEWS2C" && parts.length === 3) {
+    const challenge = v2Challenges.get(attempt);
+    if (!challenge || challenge.epoch !== parts[2]) return;
+    v2Challenges.delete(attempt);
+    if (v2Peers.size >= V2_MAX_PEERS) {
+      sendV2Control(`MCBEWS2N|${attempt}|-|busy`);
+      return;
+    }
+    const epoch = challenge.epoch;
+    const send = v2Sender;
+    if (!send) return;
+    activateV2Bridge(epoch, send);
+    if (!sendV2Control(`MCBEWS2N|${attempt}|${epoch}|ready`, () => retireV2Peer(epoch))) retireV2Peer(epoch);
+    return;
+  }
+  if (parts.length !== 2) return;
+  const peer = v2Peers.get(attempt);
+  if (!peer) return;
+  if (parts[0] === "MCBEWS2R") {
+    peer.expires = Date.now() + V2_LEASE_MS;
+    sendV2Control(`MCBEWS2N|${attempt}|lease`);
+  } else if (parts[0] === "MCBEWS2X") {
+    retireV2Peer(attempt);
+  }
+}
+
+/** Return the endpoint for a specific admitted routing epoch. */
+export function getV2Endpoint(epoch: string): V2Endpoint | null {
+  pruneV2Peers();
+  return v2Peers.get(epoch)?.endpoint ?? null;
 }
 
 /** Activate an explicitly agreed v2 epoch without changing the legacy router. */
 export function activateV2Bridge(epoch: string, send: (frame: string) => Promise<void>): V2Endpoint {
-  if (v2Endpoint) throw new Error("v2 bridge already active");
-  v2Endpoint = new V2Endpoint({
+  pruneV2Peers();
+  if (v2Peers.has(epoch) || v2Peers.size >= V2_MAX_PEERS) throw new Error("v2 peer limit or duplicate epoch");
+  const endpoint = new V2Endpoint({
     epoch,
     registry: capabilityRegistry,
     pool: v2Pool,
     send,
+    onClose: () => {
+      v2Peers.delete(epoch);
+    },
     timeout: (callback) => {
       const handle = system.runTimeout(callback, 100);
       return () => system.clearRun(handle);
@@ -327,8 +444,9 @@ export function activateV2Bridge(epoch: string, send: (frame: string) => Promise
       }
     },
   });
-  if (v2Pruner === null) v2Pruner = system.runInterval(() => v2Pool.prune(), 100);
-  return v2Endpoint;
+  v2Peers.set(epoch, { endpoint, expires: Date.now() + V2_LEASE_MS });
+  if (v2Pruner === null) v2Pruner = system.runInterval(pruneV2Peers, 100);
+  return endpoint;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,13 +595,12 @@ export function _testingGetLastResponseSendOutcome(): ResponseSendOutcome | null
 
 /** @internal */
 export function _testingReset(): void {
-  v2Endpoint?.close();
-  v2Endpoint = null;
+  for (const epoch of v2Peers.keys()) retireV2Peer(epoch);
+  v2Challenges.clear();
   if (v2Pruner !== null) system.clearRun(v2Pruner);
   v2Pruner = null;
   v2Sender = null;
   pendingV2Hello = null;
-  seenV2Epochs.clear();
   preReadyQueue.length = 0;
   responseSender = null;
   capabilityHandler = null;

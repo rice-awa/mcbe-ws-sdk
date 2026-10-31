@@ -29,7 +29,7 @@ describe("v2 discovery", () => {
     );
     await _testingFlush();
     expect(sendV1).toHaveBeenCalledWith("old", '{"ok":true}');
-    expect(getV2Endpoint()).toBeNull();
+    expect(getV2Endpoint("old")).toBeNull();
   });
 
   it("holds at most one valid hello while the bridge starts", async () => {
@@ -43,11 +43,15 @@ describe("v2 discovery", () => {
         sent.push(frame);
       }
     );
-    expect(sent).toEqual(["MCBEWS2N|second|2|metadata/1,notifications/1,reverse/1"]);
-    expect(getV2Endpoint()?.epoch).toBe("second");
+    const parts = sent[0].split("|");
+    expect(parts.slice(0, 2)).toEqual(["MCBEWS2N", "second"]);
+    expect(parts.slice(3)).toEqual(["2", "metadata/1,notifications/1,reverse/1"]);
+    expect(getV2Endpoint(parts[2])).toBeNull();
+    enqueueOrHandle(event("mcbews:negotiate_v2", `MCBEWS2C|second|${parts[2]}`));
+    expect(getV2Endpoint(parts[2])?.epoch).toBe(parts[2]);
   });
 
-  it("selects v2 and rejects old epochs and replayed hellos", async () => {
+  it("does not activate until a fresh challenge is confirmed", async () => {
     const sent: string[] = [];
     const handler = vi.fn(async () => ({ ok: true }));
     registerCapability("test", handler);
@@ -58,18 +62,19 @@ describe("v2 discovery", () => {
       }
     );
     enqueueOrHandle(event("mcbews:negotiate_v2", "MCBEWS2H|first"));
-    expect(sent).toContain("MCBEWS2N|first|2|metadata/1,notifications/1,reverse/1");
-    enqueueOrHandle(event("mcbews:negotiate_v2", "MCBEWS2H|second"));
+    const epoch = sent[0].split("|")[2];
+    enqueueOrHandle(event("mcbews:negotiate_v2", `MCBEWS2C|first|${epoch}`));
+    const endpoint = getV2Endpoint(epoch)!;
+    enqueueOrHandle(event("mcbews:negotiate_v2", `MCBEWS2X|${epoch}`));
     enqueueOrHandle(event("mcbews:negotiate_v2", "MCBEWS2H|first"));
-    expect(getV2Endpoint()?.epoch).toBe("second");
+    const next = sent[sent.length - 1].split("|")[2];
+    expect(next).not.toBe(epoch);
+    enqueueOrHandle(event("mcbews:negotiate_v2", `MCBEWS2C|first|${epoch}`));
     const request = { v: "MCBEWS/2", kind: "notification", method: "test", params: {} };
-    for (const frame of fragment(request, "p.first.1", "down")) {
+    for (const frame of fragment(request, `p.${epoch}.1`, "down")) {
       enqueueOrHandle(event("mcbews:packet_v2", frame));
     }
-    for (const frame of fragment(request, "p.second.1", "down")) {
-      enqueueOrHandle(event("mcbews:packet_v2", frame));
-    }
-    await getV2Endpoint()?.drain();
-    expect(handler).toHaveBeenCalledTimes(1);
+    await endpoint.drain();
+    expect(handler).not.toHaveBeenCalled();
   });
 });

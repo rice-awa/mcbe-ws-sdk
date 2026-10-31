@@ -3,7 +3,7 @@
 权威来源是安装包内 profiles/mcbews_v2/manifest.json、vectors.json。
 独立 MCBEWS/2 标识；借鉴交互模型但不兼容 JSON-RPC。
 MCBEWS/1 资产、标识、导入、构造参数、默认行为不变。
-本批仅编解码和有界载体；路由/协商留 R12/R13，持续流留 R14。
+v2 为显式接入；持续流留待后续阶段。
 
 ## 逻辑消息
 
@@ -62,7 +62,7 @@ TS：bridge/v2/codec、transport 的对应函数、sendUpstream与ReassemblyPool
 创建 `V2Bridge` 并作为 `v2` 传给可靠模式的 `McbeServerFacade`。每个连接在后台
 探测一次；`await bridge.ready(state.id)` 返回选定版本、功能和 v2 endpoint。通过
 `bridge.request(state.id, ...)` 发起协商后的调用，Python 处理器注册到
-`bridge.registry`。附加包路由提供 `getV2Endpoint()` 和现有能力注册表。
+`bridge.registry`。附加包路由提供 `getV2Endpoint(epoch)` 和现有能力注册表。
 
 同一方法的顺序组正在处理时，新调用会被拒绝；业务容量耗尽时也会拒绝。不同组允许
 反向调用，不等待祖先已占用的组。通知不产生错误回复。处理器收到独立的传输归属与
@@ -75,16 +75,18 @@ Python v2 请求的 `V2Bridge(timeout_seconds=...)` 为调度器准入、分片�
 
 ## 探测与回退
 
-v2 清单定义独立 hello 事件 `mcbews:negotiate_v2`，内容为 `MCBEWS2H|epoch`；
-桥玩家回复 `MCBEWS2N|epoch|2|metadata/1,notifications/1,reverse/1`。facade 只接受
-来自可信桥玩家、匹配待处理 epoch 的回复。每个连接生成随机 epoch，只探测一次，
-等待时间不超过配置的期限；探测期间普通聊天和原生命令继续运行。新附加包返回支持的
-功能并继续处理 v1；旧附加包或无附加包时选择 v1，协商入口只回退到清单列出的已知 v1
-方法。旧 v1 客户端行为不变。必需功能、显式元数据或 trace ID 不可用时直接报错；
-`stream/1` 尚未实现。
+v2 清单定义 `mcbews:negotiate_v2` 控制事件。Python 发送 `MCBEWS2H|attempt`，
+附加包返回新路由 epoch 和功能；Python 确认挑战后，附加包准入并回复 `ready`。
+读取下一帧前，facade 原子安装匹配的 endpoint 和功能集合。完整控制帧和限制见清单。
 
-重连生成新 epoch，不重放请求。两端拒绝旧 epoch 的帧，包括主动消息和分片。附加包保留
-有界的已用 epoch 集合，满时拒绝新的 hello。桥不是授权边界：传输归属和元数据不能代替
-宿主认证授权。超时不会撤销已发送的命令。
-附加包目前只支持一个活动 epoch：新 hello 会关闭前一个 endpoint，即使其中仍有未完成
-消息。并发连接和不中断消息的 epoch 切换仍待复核。
+单次探测期限覆盖发送和等待回复。没有响应时选择 v1；版本不支持、容量繁忙或确认
+未完成时明确报错。普通聊天和原生命令不受探测阻塞。v1 回退只允许清单中的已知方法，
+必需元数据和功能不会静默丢弃；`stream/1` 尚未实现。
+
+世界共享池最多同时容纳 32 个活动连接和 32 个临时挑战。各连接的 endpoint、分片和
+等待请求独立；新连接不会替换其他连接。60 秒租约每 20 秒续期；facade 断连时有界地
+尝试发送关闭消息，失联连接等待租约过期。旧帧和确认不能重新激活旧 epoch。已开始的
+处理器可能在关闭后结束，但未发送的回复会被抑制。请求和世界修改不会自动重放。
+
+载体来源类型和路由令牌不能证明 WebSocket 身份，也不提供授权；宿主须独立完成认证
+和授权。关闭消息丢失时依赖租约清理；已经交给传输层的命令不能撤回。
