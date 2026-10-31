@@ -29,8 +29,8 @@ def dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def _tree(value: Any, depth: int = 0) -> Any:
-    if depth > LIMITS["depth"]:
+def _tree(value: Any, depth: int = 0, *, max_depth: int = LIMITS["depth"]) -> Any:
+    if depth > max_depth:
         fail("LIMIT_EXCEEDED")
     if value is None or isinstance(value, bool):
         return value
@@ -43,11 +43,13 @@ def _tree(value: Any, depth: int = 0) -> Any:
             fail()
         return int(value)
     if isinstance(value, list):
-        return [_tree(item, depth + 1) for item in value]
+        return [_tree(item, depth + 1, max_depth=max_depth) for item in value]
     if isinstance(value, dict):
         if not all(isinstance(key, str) for key in value):
             fail()
-        return {_tree(key): _tree(item, depth + 1) for key, item in value.items()}
+        return {
+            _tree(key): _tree(item, depth + 1, max_depth=max_depth) for key, item in value.items()
+        }
     fail()
 
 
@@ -55,9 +57,9 @@ def _matches(pattern: str, value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(pattern, value, flags=re.ASCII) is not None
 
 
-def validate(message: object) -> dict[str, Any]:
+def validate(message: object, *, resource_limits: dict[str, int] = LIMITS) -> dict[str, Any]:
     """Return a detached normalized message or raise a classified protocol error."""
-    obj = _tree(message)
+    obj = _tree(message, max_depth=resource_limits["depth"])
     if not isinstance(obj, dict):
         fail()
     if "v" not in obj:
@@ -113,31 +115,32 @@ def validate(message: object) -> dict[str, Any]:
                     fail()
                 if len(set(value)) != len(value):
                     fail()
-        if len(dumps(meta).encode()) > LIMITS["metadata_bytes"]:
+        if len(dumps(meta).encode()) > resource_limits["metadata_bytes"]:
             fail("LIMIT_EXCEEDED")
-    if len(dumps(obj).encode()) > LIMITS["message_bytes"]:
+    if len(dumps(obj).encode()) > resource_limits["message_bytes"]:
         fail("LIMIT_EXCEEDED")
     return obj  # type: ignore[no-any-return]
 
 
-def encode(message: object) -> str:
+def encode(message: object, *, resource_limits: dict[str, int] = LIMITS) -> str:
     """Encode a validated logical message without sending anything."""
-    return dumps(validate(message))
+    return dumps(validate(message, resource_limits=resource_limits))
 
 
-def decode(wire: str) -> dict[str, Any]:
+def decode(wire: str, *, resource_limits: dict[str, int] = LIMITS) -> dict[str, Any]:
     """Decode bounded scalar UTF-8 JSON and apply the same validation as encode."""
     try:
         size = len(wire.encode())
     except UnicodeError:
         fail()
         raise AssertionError("unreachable") from None
-    if size > LIMITS["message_bytes"]:
+    if size > resource_limits["message_bytes"]:
         fail("LIMIT_EXCEEDED")
     try:
-        value = json.loads(wire, parse_constant=lambda _: fail("MALFORMED_JSON"))
+        # Match JSON.parse's bounded IEEE-754 conversion, including huge integer tokens.
+        value = json.loads(wire, parse_int=float, parse_constant=lambda _: fail("MALFORMED_JSON"))
     except RecursionError:
         fail("LIMIT_EXCEEDED")
     except ValueError:
         fail("MALFORMED_JSON")
-    return validate(value)
+    return validate(value, resource_limits=resource_limits)

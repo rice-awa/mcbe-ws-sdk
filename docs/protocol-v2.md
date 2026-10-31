@@ -22,8 +22,11 @@ notifications, uses a fresh transport ID owned by its actual sender. A reply may
 have a different logical origin. Never replay messages or restore IDs after reconnect.
 
 Numbers must be finite safe integers in ±9007199254740991; booleans remain booleans.
-Scientific notation representing a safe integer is accepted. Strings must contain
-Unicode scalar values, never lone surrogates. Duplicate JSON object keys use the last
+Scientific notation representing a safe integer is accepted.
+Numeric tokens are checked after IEEE-754 parsing, as in JSON.parse: for example,
+1.0000000000000001 becomes 1 and 1e-4000 becomes 0. Oversized integer tokens
+are INVALID_MESSAGE, not malformed JSON; no process-wide parser limits are disabled.
+Strings must contain Unicode scalar values, never lone surrogates. Duplicate JSON object keys use the last
 value, matching both native parsers. Root depth is zero, maximum depth is 16. The full
 compact JSON message is at most 65536 UTF-8 bytes.
 
@@ -44,7 +47,8 @@ Identical duplicates are ignored without refreshing TTL. Conflicting duplicates 
 changes release the message and reject that transport ID. Each connection/source/ID
 completes once during its tombstone lifetime.
 
-Manifest limits are hard maxima and may only be lowered. Downlink measures final
+Manifest limits are hard maxima and may only be lowered. Lowered metadata_bytes and
+depth limits apply before sending and after reassembly on receive. Downlink measures final
 commandLine UTF-8 bytes, default 461, never raiseable. Uplink independently measures the
 whole FRAME: 256 Unicode code points and 1024 UTF-8 bytes; it does not inherit 461.
 Each message is at most 65536 bytes. Incomplete buffers share quotas per source
@@ -52,7 +56,11 @@ Each message is at most 65536 bytes. Incomplete buffers share quotas per source
 One pool must serve all connections in the runtime. Source is transport attribution,
 never metadata identity.
 
-Idle TTL is 30000 ms. Completion, conflict, capacity rejection, expiry and cancellation
+Idle TTL is 30000 ms. Each receive uses one millisecond clock sample; the exact
+idle TTL boundary expires.
+An over-budget or non-scalar frame with a valid prefix and sender transport ID
+also releases its active transfer and tombstones it; unattributable input allocates nothing.
+Completion, conflict, capacity rejection, expiry and cancellation
 release bytes and retain a tombstone for 30000 ms. Active IDs plus tombstones are limited
 to 2048; when full reject new IDs without evicting tombstones. Disconnect clears that
 connection's buffers and tombstones; the caller must reject old epochs. Prune on receive

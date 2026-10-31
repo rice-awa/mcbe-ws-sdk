@@ -46,7 +46,7 @@ function fits(frame: string, direction: Direction, cfg: Limits): boolean {
 export function fragment(message: unknown, tid: string, direction: Direction, overrides: Limits = {}): string[] {
   const cfg = limits(overrides);
   transportId(tid, direction);
-  const wire = encode(message);
+  const wire = encode(message, cfg);
   if (utf8ByteLength(wire) > cfg.message_bytes) fail("LIMIT_EXCEEDED");
   const header = MANIFEST.carrier.prefix + "|" + tid + "|" + cfg.chunks + "/" + cfg.chunks + "|";
   const parts: string[] = [];
@@ -97,17 +97,20 @@ export class ReassemblyPool {
   get stats(): { buffers: number; bytes: number; tombstones: number } {
     return { buffers: this.core.bufferCount, bytes: this.core.bufferedBytes, tombstones: this.done.size };
   }
-  private drop(key: string): void {
+  private drop(key: string, now = this.now()): void {
     const owner = this.owners.get(key);
     this.owners.delete(key);
     this.core.drop(key);
-    if (owner) this.done.set(key, { connection: owner.connection, expires: this.now() + this.cfg.ttl_ms });
+    if (owner) this.done.set(key, { connection: owner.connection, expires: now + this.cfg.ttl_ms });
   }
   prune(): void {
-    for (const [key, state] of this.done) if (this.now() >= state.expires) this.done.delete(key);
+    this.pruneAt(this.now());
+  }
+  private pruneAt(now: number): void {
+    for (const [key, state] of this.done) if (now >= state.expires) this.done.delete(key);
     const before = Array.from(this.core.buffers.keys());
-    this.core.pruneExpired();
-    for (const key of before) if (!this.core.buffers.has(key)) this.drop(key);
+    this.core.pruneExpired(now);
+    for (const key of before) if (!this.core.buffers.has(key)) this.drop(key, now);
   }
   cancel(connection: string, source: string, tid: string): void {
     this.drop(JSON.stringify([connection, source, tid]));
@@ -117,16 +120,11 @@ export class ReassemblyPool {
     for (const [key, state] of this.done) if (state.connection === connection) this.done.delete(key);
   }
   receive(connection: string, source: string, frame: string, direction: Direction): Message | null {
-    this.prune();
+    const now = this.now();
+    this.pruneAt(now);
     identity(connection);
     identity(source);
-    if (
-      !["up", "down"].includes(direction) ||
-      typeof frame !== "string" ||
-      !scalar(frame) ||
-      !fits(frame, direction, this.cfg)
-    )
-      fail("INVALID_FRAGMENT");
+    if (!["up", "down"].includes(direction) || typeof frame !== "string") fail("INVALID_FRAGMENT");
     const first = frame.indexOf("|"),
       second = frame.indexOf("|", first + 1),
       third = frame.indexOf("|", second + 1);
@@ -137,14 +135,18 @@ export class ReassemblyPool {
       content = frame.slice(third + 1);
     transportId(tid, direction);
     const key = JSON.stringify([connection, source, tid]);
+    if (!scalar(frame) || !fits(frame, direction, this.cfg)) {
+      this.drop(key, now);
+      fail("INVALID_FRAGMENT");
+    }
     if (this.done.has(key)) return null;
     if (!matches("[1-9][0-9]{0,3}/[1-9][0-9]{0,3}", indexes)) {
-      this.drop(key);
+      this.drop(key, now);
       fail("INVALID_FRAGMENT");
     }
     const [index, total] = indexes.split("/").map(Number);
     if (!content || index < 1 || index > total || total > this.cfg.chunks) {
-      this.drop(key);
+      this.drop(key, now);
       fail("INVALID_FRAGMENT");
     }
     if (!this.owners.has(key)) {
@@ -163,7 +165,7 @@ export class ReassemblyPool {
         entries.length + (current ? 0 : 1) > this.cfg[countLimit] ||
         entries.reduce((n, [, b]) => n + b.byteLength, 0) + extra > this.cfg[byteLimit]
       ) {
-        this.drop(key);
+        this.drop(key, now);
         fail("LIMIT_EXCEEDED");
       }
     }
@@ -173,7 +175,7 @@ export class ReassemblyPool {
       current &&
       (current.total !== total || (current.chunks.has(index) && current.chunks.get(index)!.content !== content))
     ) {
-      this.drop(key);
+      this.drop(key, now);
       fail("FRAGMENT_CONFLICT");
     }
     if (current?.chunks.has(index)) return null;
@@ -182,15 +184,15 @@ export class ReassemblyPool {
       (current?.byteLength ?? 0) + extra > this.cfg.message_bytes ||
       this.core.bufferedBytes + extra > this.cfg.global_bytes
     ) {
-      this.drop(key);
+      this.drop(key, now);
       fail("LIMIT_EXCEEDED");
     }
-    const buffer = this.core.push(key, index, total, content, content);
+    const buffer = this.core.push(key, index, total, content, content, now);
     if (!buffer) return null;
     const parts: string[] = [];
     for (let i = 1; i <= total; i++) parts.push(buffer.chunks.get(i)!.content);
-    this.drop(key);
-    return decode(parts.join(""));
+    this.drop(key, now);
+    return decode(parts.join(""), this.cfg);
   }
 }
 

@@ -44,15 +44,21 @@ export class FragmentAssembler<T> {
     this.buffers.delete(key);
   }
 
-  pruneExpired(): void {
-    const now = this.now();
+  pruneExpired(now = this.now()): void {
     for (const [key, state] of this.buffers) {
       if (now - state.lastUpdatedAt >= this.limits.ttlMs) this.drop(key);
     }
   }
 
-  push(key: string, index: number, total: number, content: string, item: T): FragmentBuffer<T> | null {
-    this.pruneExpired();
+  push(
+    key: string,
+    index: number,
+    total: number,
+    content: string,
+    item: T,
+    now = this.now()
+  ): FragmentBuffer<T> | null {
+    this.pruneExpired(now);
     if (
       !Number.isInteger(index) ||
       !Number.isInteger(total) ||
@@ -64,7 +70,7 @@ export class FragmentAssembler<T> {
     let state = this.buffers.get(key);
     if (!state) {
       if (this.bufferCount >= this.limits.maxBuffers) return null;
-      state = { lastUpdatedAt: this.now(), total, byteLength: 0, chunks: new Map() };
+      state = { lastUpdatedAt: now, total, byteLength: 0, chunks: new Map() };
       this.buffers.set(key, state);
     } else if (state.total !== total) {
       this.drop(key);
@@ -85,7 +91,7 @@ export class FragmentAssembler<T> {
     }
     state.chunks.set(index, { content, item });
     state.byteLength += bytes;
-    state.lastUpdatedAt = this.now();
+    state.lastUpdatedAt = now;
     this.totalBufferedBytes += bytes;
     if (state.chunks.size !== state.total) return null;
     this.drop(key);

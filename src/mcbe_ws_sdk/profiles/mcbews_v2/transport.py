@@ -60,7 +60,7 @@ def fragment(
     """Plan bounded frames with worst-case index overhead before any send."""
     cfg = limits(overrides)
     _transport_id(transport_id, direction)
-    wire = encode(message)
+    wire = encode(message, resource_limits=cfg)
     if len(wire.encode()) > cfg["message_bytes"]:
         fail("LIMIT_EXCEEDED")
     header = f"{PREFIX}|{transport_id}|{cfg['chunks']}/{cfg['chunks']}|"
@@ -128,7 +128,8 @@ class ReassemblyPool:
                 self.cfg["ttl_ms"] / 1000,
             ),
             content_of=lambda item: item,
-            clock=lambda: self._clock() / 1000,
+            clock=self._clock,
+            ttl_ticks=self.cfg["ttl_ms"],
         )
         self._buffers = self._core.channel("v2")
         self._owners: dict[str, tuple[str, str, str]] = {}
@@ -143,20 +144,25 @@ class ReassemblyPool:
             "tombstones": len(self._done),
         }
 
-    def _drop(self, key: str) -> None:
+    def _drop(self, key: str, now: float | None = None) -> None:
         owner = self._owners.pop(key, None)
         self._buffers.pop(key, None)
         if owner:
-            self._done[key] = (owner[0], self._clock() + self.cfg["ttl_ms"])
+            self._done[key] = (
+                owner[0],
+                (self._clock() if now is None else now) + self.cfg["ttl_ms"],
+            )
 
     def prune(self) -> None:
         """Release idle messages and elapsed tombstones using the supplied clock."""
-        now = self._clock()
+        self._prune(self._clock())
+
+    def _prune(self, now: float) -> None:
         for key, (_, expiry) in list(self._done.items()):
             if now >= expiry:
                 del self._done[key]
-        for _, key in self._core.prune_expired():
-            self._drop(key)
+        for _, key in self._core.prune_expired(now=now):
+            self._drop(key, now)
 
     def cancel(self, connection: str, source: str, transport_id: str) -> None:
         """Cancel one active transfer without affecting another source or connection."""
@@ -175,14 +181,11 @@ class ReassemblyPool:
         self, connection: str, source: str, frame: str, direction: str
     ) -> dict[str, Any] | None:
         """Accept a carrier frame without invoking any application behavior."""
-        self.prune()
+        now = self._clock()
+        self._prune(now)
         _identity(connection)
         _identity(source)
-        try:
-            valid_frame = isinstance(frame, str) and _fits(frame, direction, self.cfg)
-        except UnicodeError:
-            valid_frame = False
-        if direction not in ("up", "down") or not valid_frame:
+        if direction not in ("up", "down") or not isinstance(frame, str):
             fail("INVALID_FRAGMENT")
         pieces = frame.split("|", 3)
         if len(pieces) != 4 or pieces[0] != PREFIX:
@@ -190,14 +193,21 @@ class ReassemblyPool:
         _, tid, indexes, content = pieces
         _transport_id(tid, direction)
         key = dumps([connection, source, tid])
+        try:
+            valid_frame = _fits(frame, direction, self.cfg)
+        except UnicodeError:
+            valid_frame = False
+        if not valid_frame:
+            self._drop(key, now)
+            fail("INVALID_FRAGMENT")
         if key in self._done:
             return None
         if re.fullmatch(r"[1-9][0-9]{0,3}/[1-9][0-9]{0,3}", indexes) is None:
-            self._drop(key)
+            self._drop(key, now)
             fail("INVALID_FRAGMENT")
         index, total = map(int, indexes.split("/"))
         if not content or not 1 <= index <= total <= self.cfg["chunks"]:
-            self._drop(key)
+            self._drop(key, now)
             fail("INVALID_FRAGMENT")
         if key not in self._owners:
             if len(self._owners) + len(self._done) >= self.cfg["tombstones"]:
@@ -216,23 +226,29 @@ class ReassemblyPool:
                 count > self.cfg[count_limit]
                 or sum(b.byte_size for _, b in entries) + extra > self.cfg[byte_limit]
             ):
-                self._drop(key)
+                self._drop(key, now)
                 fail("LIMIT_EXCEEDED")
         try:
             buffer = self._core.accept(
-                "v2", buffer_id=key, index=index, total=total, content=content, item=content
+                "v2",
+                buffer_id=key,
+                index=index,
+                total=total,
+                content=content,
+                item=content,
+                now=now,
             )
         except BridgeLimitError:
-            self._drop(key)
+            self._drop(key, now)
             fail("LIMIT_EXCEEDED")
         except ProtocolError:
-            self._drop(key)
+            self._drop(key, now)
             fail("FRAGMENT_CONFLICT")
         if len(buffer.chunks) != total:
             return None
         wire = "".join(buffer.chunks[i] for i in range(1, total + 1))
-        self._drop(key)
-        return decode(wire)
+        self._drop(key, now)
+        return decode(wire, resource_limits=self.cfg)
 
 
 async def send_downstream(

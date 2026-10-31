@@ -49,9 +49,12 @@ class ReassemblyCore(Generic[T]):
         *,
         content_of: Callable[[T], str],
         clock: Callable[[], float] = time.monotonic,
+        ttl_ticks: float | None = None,
     ) -> None:
         self._settings = limits
         self._clock = clock
+        # Adapters may keep their native clock units without lossy conversions.
+        self._ttl = limits.buffer_ttl_seconds if ttl_ticks is None else ttl_ticks
         self._content_of = content_of
         self._channels: dict[str, dict[str, ChunkBuffer[T]]] = {}
 
@@ -68,9 +71,11 @@ class ReassemblyCore(Generic[T]):
         total: int,
         content: str,
         item: T,
+        now: float | None = None,
     ) -> ChunkBuffer[T]:
         """Accept a fragment, ignoring exact duplicates and dropping conflicts."""
         buffers = self.channel(channel)
+        timestamp = self._clock() if now is None else now
         if not 1 <= index <= total <= self._settings.max_chunks_per_message:
             raise BridgeLimitError("invalid chunk index or total")
         encoded_size = len(content.encode("utf-8"))
@@ -78,7 +83,7 @@ class ReassemblyCore(Generic[T]):
         if current is None:
             if self._buffer_count() >= self._settings.max_buffer_ids:
                 raise BridgeLimitError("maximum buffer ids exceeded")
-            current = ChunkBuffer(total, {}, 0, self._clock())
+            current = ChunkBuffer(total, {}, 0, timestamp)
             buffers[buffer_id] = current
         elif current.total_chunks != total:
             self._drop_buffer(buffers, buffer_id)
@@ -97,16 +102,16 @@ class ReassemblyCore(Generic[T]):
             raise BridgeLimitError("total buffer byte limit exceeded")
         current.chunks[index] = item
         current.byte_size += encoded_size
-        current.updated_at = self._clock()
+        current.updated_at = timestamp
         return current
 
-    def prune_expired(self) -> list[tuple[str, str]]:
+    def prune_expired(self, *, now: float | None = None) -> list[tuple[str, str]]:
         """Release expired fragments and return their channel/key pairs."""
-        now = self._clock()
+        now = self._clock() if now is None else now
         expired = []
         for channel, buffers in self._channels.items():
             for buffer_id, buffer in list(buffers.items()):
-                if now - buffer.updated_at >= self._settings.buffer_ttl_seconds:
+                if now - buffer.updated_at >= self._ttl:
                     buffers.pop(buffer_id)
                     expired.append((channel, buffer_id))
         return expired

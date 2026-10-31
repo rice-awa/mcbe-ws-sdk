@@ -18,8 +18,8 @@ export function matches(pattern: string, value: unknown): value is string {
   const match = new RegExp("^(?:" + pattern + ")$").exec(value);
   return match !== null && match[0].length === value.length;
 }
-function tree(value: unknown, depth = 0): unknown {
-  if (depth > MANIFEST.limits.depth) fail("LIMIT_EXCEEDED");
+function tree(value: unknown, depth = 0, maxDepth = MANIFEST.limits.depth): unknown {
+  if (depth > maxDepth) fail("LIMIT_EXCEEDED");
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "string") {
     for (const ch of value) {
@@ -32,19 +32,19 @@ function tree(value: unknown, depth = 0): unknown {
     if (!Number.isSafeInteger(value)) fail();
     return value;
   }
-  if (Array.isArray(value)) return value.map((item) => tree(item, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => tree(item, depth + 1, maxDepth));
   if (isObject(value)) {
     const obj: Message = Object.create(null);
     for (const [key, item] of Object.entries(value)) {
       tree(key);
-      obj[key] = tree(item, depth + 1);
+      obj[key] = tree(item, depth + 1, maxDepth);
     }
     return obj;
   }
   return fail();
 }
-export function validate(message: unknown): Message {
-  const obj = tree(message);
+export function validate(message: unknown, resourceLimits = MANIFEST.limits): Message {
+  const obj = tree(message, 0, resourceLimits.depth);
   if (!isObject(obj) || !("v" in obj)) fail();
   if (obj.v !== MANIFEST.protocol) fail("UNSUPPORTED_VERSION");
   if (typeof obj.kind !== "string" || !["request", "response", "notification"].includes(obj.kind)) fail();
@@ -86,21 +86,21 @@ export function validate(message: unknown): Message {
           fail();
       }
     }
-    if (utf8ByteLength(JSON.stringify(meta)) > MANIFEST.limits.metadata_bytes) fail("LIMIT_EXCEEDED");
+    if (utf8ByteLength(JSON.stringify(meta)) > resourceLimits.metadata_bytes) fail("LIMIT_EXCEEDED");
   }
-  if (utf8ByteLength(JSON.stringify(obj)) > MANIFEST.limits.message_bytes) fail("LIMIT_EXCEEDED");
+  if (utf8ByteLength(JSON.stringify(obj)) > resourceLimits.message_bytes) fail("LIMIT_EXCEEDED");
   return obj;
 }
-export function encode(message: unknown): string {
-  return JSON.stringify(validate(message));
+export function encode(message: unknown, resourceLimits = MANIFEST.limits): string {
+  return JSON.stringify(validate(message, resourceLimits));
 }
-export function decode(wire: string): Message {
-  if (utf8ByteLength(wire) > MANIFEST.limits.message_bytes) fail("LIMIT_EXCEEDED");
+export function decode(wire: string, resourceLimits = MANIFEST.limits): Message {
+  if (utf8ByteLength(wire) > resourceLimits.message_bytes) fail("LIMIT_EXCEEDED");
   let value: unknown;
   try {
     value = JSON.parse(wire);
   } catch {
     fail("MALFORMED_JSON");
   }
-  return validate(value);
+  return validate(value, resourceLimits);
 }
