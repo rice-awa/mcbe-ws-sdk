@@ -44,6 +44,7 @@ jobs:
           python -m pytest -p no:cacheprovider -q
           tests/unit/test_v2_codec.py tests/unit/test_v2_transport.py
           tests/unit/test_v2_contract.py tests/unit/test_v2_tooling.py
+          tests/unit/test_v2_review_regressions.py
   websockets:
     runs-on: ubuntu-latest
     strategy:
