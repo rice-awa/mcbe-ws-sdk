@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +19,25 @@ VECTORS = json.loads((ROOT / "src/mcbe_ws_sdk/profiles/mcbews_v2/vectors.json").
 
 
 def typescript(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    node = shutil.which("node")
+    missing = "Node.js is not on PATH" if node is None else None
+    if node is not None:
+        probe = subprocess.run(
+            [node, "-e", "require.resolve('typescript')"],
+            cwd=ROOT / "addon",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode:
+            missing = f"TypeScript is unavailable: {probe.stderr.strip()}"
+    if missing:
+        reason = f"{missing}; install Node.js 22 and run npm ci in addon/"
+        if os.environ.get("MCBE_REQUIRE_CROSS_LANGUAGE") == "1":
+            pytest.fail(reason, pytrace=False)
+        pytest.skip(reason)
     result = subprocess.run(
-        ["node", "addon/tests/v2-runner.cjs"],
+        [node, "addon/tests/v2-runner.cjs"],
         input=json.dumps(items),
         text=True,
         capture_output=True,
@@ -70,18 +90,18 @@ def test_boundaries_nested_metadata_and_parser_agreement() -> None:
 
 def test_generation_stable_and_old_assets_unchanged() -> None:
     subprocess.run(
-        [str(ROOT / ".venv/bin/python"), "tools/generate_v2_assets.py", "--check"],
+        [sys.executable, "tools/generate_v2_assets.py", "--check"],
         check=True,
         cwd=ROOT,
     )
     path = ROOT / "addon/scripts/bridge/v2/assets.ts"
     before = path.read_bytes()
     subprocess.run(
-        [str(ROOT / ".venv/bin/python"), "tools/generate_v2_assets.py"], check=True, cwd=ROOT
+        [sys.executable, "tools/generate_v2_assets.py"], check=True, cwd=ROOT
     )
     assert path.read_bytes() == before
     subprocess.run(
-        [str(ROOT / ".venv/bin/python"), "tools/generate_protocol_assets.py", "--check"],
+        [sys.executable, "tools/generate_protocol_assets.py", "--check"],
         check=True,
         cwd=ROOT,
     )

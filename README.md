@@ -137,6 +137,20 @@ python tools/format.py          # ruff format+fix (Python); prettier (Addon if N
 python tools/format.py --check  # CI-style check
 ```
 
+The v2 Python/TypeScript cross-language tests require Node.js 22 and
+`npm ci --prefix addon`. Without Node.js or TypeScript, only tests that call the
+TypeScript runner skip; Python-only tests still run. To require cross-language
+checks locally (as the mandatory `cross-language` CI job does):
+
+```bash
+MCBE_REQUIRE_CROSS_LANGUAGE=1 python -m pytest -p no:cacheprovider -q \
+  tests/unit/test_v2_codec.py tests/unit/test_v2_transport.py \
+  tests/unit/test_v2_contract.py tests/unit/test_v2_tooling.py
+```
+
+Required mode fails if either tool is missing. Runner or protocol failures
+always fail, including in ordinary development runs.
+
 ## License
 
 [MIT](./LICENSE)

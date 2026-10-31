@@ -126,6 +126,19 @@ python tools/format.py          # ruff format+fix（Python）；有 Node 时跑 
 python tools/format.py --check  # CI 风格只检查不写入
 ```
 
+v2 Python/TypeScript 跨语言测试需要 Node.js 22，以及
+`npm ci --prefix addon` 安装的依赖。缺少 Node.js 或 TypeScript 时，
+仅调用 TypeScript runner 的测试跳过，纯 Python 测试继续运行。
+本地强制验收命令（必需的 `cross-language` CI job 使用同一模式）：
+
+```bash
+MCBE_REQUIRE_CROSS_LANGUAGE=1 python -m pytest -p no:cacheprovider -q \
+  tests/unit/test_v2_codec.py tests/unit/test_v2_transport.py \
+  tests/unit/test_v2_contract.py tests/unit/test_v2_tooling.py
+```
+
+强制模式缺少任一工具均失败；runner 或协议执行错误在普通开发模式下也不会跳过。
+
 ## License
 
 [MIT](./LICENSE)
