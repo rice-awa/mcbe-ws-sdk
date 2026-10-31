@@ -16,7 +16,7 @@
 | R02 | 统一请求等待与回复配对 | R01 | 已完成 | 初版 `cdb2e27`；复核修复 `1997eed`；主代理验收基线 901d6a0；[验收记录](records/R02.zh.md) |
 | R03 | 统一发送调度与过载处理 | R02 | 已完成 | 初版 `cdb2e27`；复核修复 `26fa23a`；第二轮兼容回归 `a28000f`、实现 `3d7cead`；主代理验收基线 901d6a0；[验收记录](records/R03.zh.md) |
 | R04 | 收紧隔离、关闭与残留清理 | R03 | 已完成 | 初版 `cdb2e27`；复核修复 `062acd9`；第二轮 manager 修复 `3326374`；主代理验收基线 901d6a0；[验收记录](records/R04.zh.md) |
-| R05 | 注册式能力分发 | R04 | 待验收 | 实现、测试与公开文档 `a41818a`；[验收记录](records/R05.zh.md) |
+| R05 | 注册式能力分发 | R04 | 待验收 | 实现、测试与公开文档 `a41818a`；复核修复 `9c405ba`；[验收记录](records/R05.zh.md) |
 | R06 | 抽出共用分片与业务扩展 | R05 | 未开始 | — |
 | R07 | 通用事件订阅与处理拦截 | R05 | 未开始 | — |
 | R08 | 统一追踪、收发记录与回声分类 | R04、R07 | 未开始 | — |
@@ -330,5 +330,7 @@
 | 2026-10-31 | R01—R04 主代理独立验收通过，阶段完成后暂停 | 验收基线 901d6a0（manager 3326374、位置兼容 3d7cead 及此前修复）；独立全量 314 passed、9 条既有弃用 warnings、35.88s、89.90%（3001 statements / 303 missed），ruff／mypy（36 files）／协议资产／diff 检查通过，mkdocs strict 18.05s 通过；addon 107 tests／lint／typecheck／production build 引用 3397b3a 的独立同一 TS 快照，非本轮重跑。当前状态改为已完成，历史失败／待验收保留；自动化验收不等于发布／实机验收，Python 3.11—3.13 与完整 Python 3.11—3.14／websockets 12、14、16 矩阵、MCBE 实机／Beta APIs、性能对比、分发与安装后 contract 仍为 R18 独立门槛。暂停等待用户指令，R05 起未开始，不派发后续开发 |
 
 | 2026-10-31 | R05 待验收 | 用户恢复第二阶段后执行 R05：新增 Python 内部 `CapabilityRegistry` 与附加包 `capabilityRegistry.ts`，支持按名注册、输入校验、显式替换、旧句柄安全注销、在途调用固定语义；`setCapabilityHandler` 覆盖语义保持不变。实现、测试与公开文档 `a41818a`；全量 Python 319 passed、覆盖率 90.06%，ruff／mypy／协议资产通过；附加包 115 tests／lint／format／typecheck／production build 通过；mkdocs strict 通过。R06 未开始，等待主代理验收 |
+
+| 2026-10-31 | R05 复核修复，仍待验收 | Codex 独立复核 `a41818a`+`a631c0b`（30 Python tests、ruff、mypy 37 files、diff 检查、41 addon tests 均通过）后以静态审查问题阻塞：`registerDefaultCapabilities` 只硬编码两个内置名称、未读取导出的默认能力表，源码表追加被静默忽略；记录误把无界映射写成“有界”。先加入失败回归（导出表追加条目、分发时查表）再修复为遍历导出表并在每次分发解析已有名称；内置校验、显式替换/旧句柄注销与旧聚合入口语义不变。修复 `9c405ba`；Python 聚焦 6 passed，ruff／mypy（37 files）／协议资产／diff 检查通过，addon 50 聚焦 / 118 full tests、typecheck／lint／format 通过。R05 仍为**待验收**，等待主代理再次独立复核 |
 
 后续只追加实际发生的决定。新增阻塞项要说明影响哪些任务、谁负责以及解除条件；不要只写“待处理”。
