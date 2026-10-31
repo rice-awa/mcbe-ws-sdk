@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
+import { system } from "@minecraft/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CapabilityRegistry, type CapabilityContext } from "../scripts/bridge/capabilityRegistry";
+import { createDefaultCapabilityRegistry, defaultCapabilityRegistry } from "../scripts/bridge/capabilities";
 import {
+  _testingFlush,
   _testingReset,
   activateBridge,
   handleBridgeScriptEvent,
+  registerBridgeRouter,
   registerCapability,
   setCapabilityHandler,
   unregisterCapability,
@@ -180,5 +185,70 @@ describe("router capability registration", () => {
 
     expect(unregisterCapability(first)).toBe(false);
     expect(unregisterCapability(second)).toBe(true);
+  });
+});
+
+describe("default table registration", () => {
+  afterEach(() => {
+    delete defaultCapabilityRegistry.regression_table_entry;
+    _testingReset();
+  });
+
+  it("registers every entry exported by the default table", async () => {
+    defaultCapabilityRegistry.regression_table_entry = () => ({ ok: true, source: "table" });
+
+    const registry = createDefaultCapabilityRegistry();
+    expect(registry.has("regression_table_entry")).toBe(true);
+    await expect(registry.dispatch("regression_table_entry", {}, context)).resolves.toEqual({
+      ok: true,
+      source: "table",
+    });
+
+    _testingReset();
+    const sender = vi.fn(async (_requestId: string, _body: string) => {});
+    await activateBridge(sender);
+    await handleBridgeScriptEvent(event("regression_table_entry", {}, "r1"));
+
+    expect(JSON.parse(sender.mock.calls[0][1])).toEqual({ ok: true, source: "table" });
+  });
+
+  it("looks up existing default entries in the exported table at dispatch time", async () => {
+    const registry = createDefaultCapabilityRegistry();
+    const original = defaultCapabilityRegistry.get_player_snapshot;
+    defaultCapabilityRegistry.get_player_snapshot = () => ({ ok: true, source: "replaced" });
+    try {
+      await expect(registry.dispatch("get_player_snapshot", {}, context)).resolves.toEqual({
+        ok: true,
+        source: "replaced",
+      });
+    } finally {
+      defaultCapabilityRegistry.get_player_snapshot = original;
+    }
+  });
+});
+
+describe("router queue order with registered handlers", () => {
+  it("runs registered custom handlers serially in FIFO request order", async () => {
+    const sender = vi.fn(async (_requestId: string, _body: string) => {});
+    await activateBridge(sender);
+    const finished: string[] = [];
+    registerCapability("ordered", async (_name, payload) => {
+      await Promise.resolve();
+      finished.push(String(payload.requestId));
+      return { ok: true };
+    });
+    registerBridgeRouter();
+
+    for (const requestId of ["r1", "r2", "r3"]) {
+      system.afterEvents.scriptEventReceive.emit({
+        id: BRIDGE_REQUEST_MESSAGE_ID,
+        message: JSON.stringify({ request_id: requestId, capability: "ordered", payload: { requestId } }),
+        sourceType: "Server",
+      } as ScriptEventCommandMessageAfterEvent);
+    }
+    await _testingFlush();
+
+    expect(finished).toEqual(["r1", "r2", "r3"]);
+    expect(sender.mock.calls.map((call) => call[0])).toEqual(["r1", "r2", "r3"]);
   });
 });

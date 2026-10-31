@@ -103,7 +103,8 @@ Addon 内置一套开箱即用的能力注册表（`scripts/bridge/capabilities/
 
 开发者通过 `registerCapability(name, handler)` 添加自定义能力，
 与内置能力共存，仍由 `router.ts` 按能力名查找调用。
-源码中的 `capabilities/index.ts` 表仍可用于编译期追加。
+源码中的 `capabilities/index.ts` 表仍可用于编译期追加；运行时新增能力名需使用
+`registerCapability`。
 
 > 注意：`find_entities` 暂未内置。当前协议中的 `scriptevent` 并不携带发起玩家的
 > 来源上下文（source-player），而实体查询需要该上下文来限定范围；一旦协议支持

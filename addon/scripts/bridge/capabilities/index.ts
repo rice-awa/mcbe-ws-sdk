@@ -9,21 +9,36 @@ import { handleRunWorldCommand } from "./runWorldCommand";
 const validateTarget: CapabilityValidator = (payload) =>
   payload.target === undefined || typeof payload.target === "string" ? null : "payload.target must be a string";
 
-// 默认能力表（旧入口，形状与语义保持不变）。新的运行时注册请使用
-// `registerCapability`；该对象保留给按源码追加条目的旧用法与兼容检查。
+// 默认能力表（旧入口，形状与语义保持不变）。注册表按本表当前的键注册，
+// 并在每次分发时从本表读取处理器；新增代码请优先使用 registerCapability。
 export const defaultCapabilityRegistry: Record<string, CapabilityHandler> = {
   get_player_snapshot: (_capability, payload, _context) => handleGetPlayerSnapshot(payload),
   get_inventory_snapshot: (_capability, payload, _context) => handleGetInventorySnapshot(payload),
 };
 
-/** Add the built-in capabilities to *registry* (used for creation and test reset). */
+const defaultValidators: Partial<Record<string, CapabilityValidator>> = {
+  get_player_snapshot: validateTarget,
+  get_inventory_snapshot: validateTarget,
+};
+
+/** Register entries currently in the exported default table. */
 export function registerDefaultCapabilities(registry: CapabilityRegistry): void {
-  registry.register("get_player_snapshot", defaultCapabilityRegistry.get_player_snapshot, {
-    validate: validateTarget,
-  });
-  registry.register("get_inventory_snapshot", defaultCapabilityRegistry.get_inventory_snapshot, {
-    validate: validateTarget,
-  });
+  for (const name of Object.keys(defaultCapabilityRegistry)) {
+    registry.register(
+      name,
+      (capability, payload, handlerContext) => {
+        const handler = defaultCapabilityRegistry[capability];
+        if (!handler) {
+          return {
+            ok: false,
+            error: { code: "UNSUPPORTED_CAPABILITY", message: `unsupported capability: ${capability}` },
+          };
+        }
+        return handler(capability, payload, handlerContext);
+      },
+      { validate: defaultValidators[name] }
+    );
+  }
 }
 
 /** Build a registry containing only the built-in capabilities. */

@@ -1,20 +1,10 @@
 """Name-based capability registration.
 
-The registry maps an opaque capability name to one validator and one handler.
-It is an internal building block for R05: the SDK does not route inbound
-addon-to-Python capability frames yet (that wire path belongs to R12), and it
-does not own a Python-side starter capability table.
+Maps a capability name to one validator and one handler. Dispatch captures the
+current entry, runs the validator before the handler, and returns structured
+errors for unknown names, invalid input, and handler failures.
 
-Dispatch rules:
-
-* The registered entry is captured before validation starts. Unregistering or
-  replacing it during an in-flight call does not affect that call; later calls
-  observe the new state.
-* The validator runs before the handler. A validator returning a message turns
-  the call into a structured ``INVALID_REQUEST`` result without invoking the
-  handler.
-* Unknown names and handler failures return structured results instead of
-  raising, so one capability cannot break dispatch for the others.
+Inbound addon capability frames are not routed here yet; that wire path is R12.
 """
 
 from __future__ import annotations
@@ -97,7 +87,8 @@ class CapabilityRegistry:
         """Register *handler* under *name*.
 
         Raises:
-            ValueError: If *name* is empty or *handler* is not callable.
+            ValueError: If *name* is empty.
+            TypeError: If *handler* is not callable.
             CapabilityAlreadyRegisteredError: If *name* is taken and *replace*
                 is false.
         """

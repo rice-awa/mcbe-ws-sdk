@@ -111,7 +111,7 @@ The addon ships a ready-to-use capability registry
 Developers add custom capabilities with `registerCapability(name, handler)`.
 They coexist with the built-ins and are looked up by name by `router.ts`.
 Editing the source table in `capabilities/index.ts` remains available for
-compile-time additions.
+compile-time additions; new names added at runtime must use `registerCapability`.
 
 > Note: `find_entities` is not yet bundled. The current protocol's `scriptevent` does not carry the source-player context, while an entity query needs that context to scope the search; once the protocol supports player-sourced scriptevents, this capability will be added.
 

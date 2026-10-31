@@ -264,7 +264,6 @@ Addon 默认能力注册表当前包含：
 
 ```ts
 import { registerCapability } from "./bridge/router";
-import { handleGetPlayerSnapshot } from "./bridge/capabilities";
 
 const handle = registerCapability("echo", (_name, payload) => ({ ok: true, payload }));
 // unregisterCapability(handle) 只移除这一项精确注册。
@@ -275,6 +274,12 @@ const handle = registerCapability("echo", (_name, payload) => ({ ok: true, paylo
 - 可选的 `validate` 在处理器之前运行；返回消息即拒绝输入（`INVALID_REQUEST`）。
 - `setCapabilityHandler` 仍是旧的总处理器入口：设置后它接收所有能力，内置注册表不参与分发。
 - 调用进行中注销不影响当前调用；之后的调用不再看到该名称。
+- 注册表是按名称索引的无界映射；条目保留到被替换或注销，没有容量上限或自动淘汰。
+- `registerDefaultCapabilities` 在创建/复位注册表时读取导出的默认能力表，并在每次分发时
+  从该表解析已有名称；运行时新增的表项需改用 `registerCapability`。
+- 请求执行顺序由路由器决定：已接受的请求按 FIFO 串行执行，预就绪与活动队列分别有界
+  （`MAX_PRE_READY_REQUESTS` / `MAX_ACTIVE_REQUESTS`，各 64）。直接调用
+  `CapabilityRegistry.dispatch` 不会引入全局串行化。
 
 线上能力集合仍由 Addon 拥有。Python SDK 提供内部 `CapabilityRegistry`，注册/分发规则相同，
 但**尚未**路由附加包反向能力帧（见 R12）。未注册 capability 时，Addon 返回
