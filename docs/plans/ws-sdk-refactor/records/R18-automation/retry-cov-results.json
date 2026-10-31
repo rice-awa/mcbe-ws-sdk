@@ -1,0 +1,44 @@
+[
+  {
+    "python": "311",
+    "failed_nodes": [
+      "tests/unit/test_example_behavior.py::test_addon_example_custom_metadata_stream_completion_and_cancel",
+      "tests/unit/test_r12_python_fixes.py::test_blocked_send_terminates_and_never_sends_remaining_fragments[timeout]",
+      "tests/unit/test_r13_peer_sessions.py::test_actual_node_router_multiplexes_two_facades_and_reconnect_during_transfer",
+      "tests/unit/test_v2_runtime.py::test_node_addon_router_and_facade_exchange_nested_calls_and_notifications"
+    ],
+    "exit_code": 0,
+    "seconds": 14.61
+  },
+  {
+    "python": "312",
+    "failed_nodes": [
+      "tests/unit/test_example_behavior.py::test_addon_example_custom_metadata_stream_completion_and_cancel",
+      "tests/unit/test_r13_peer_sessions.py::test_actual_node_router_multiplexes_two_facades_and_reconnect_during_transfer",
+      "tests/unit/test_v2_negotiation.py::test_real_node_addon_negotiates_and_exchanges_v2",
+      "tests/unit/test_v2_runtime.py::test_node_addon_router_and_facade_exchange_nested_calls_and_notifications"
+    ],
+    "exit_code": 0,
+    "seconds": 16.31
+  },
+  {
+    "python": "313",
+    "failed_nodes": [
+      "tests/unit/test_example_behavior.py::test_addon_example_custom_metadata_stream_completion_and_cancel",
+      "tests/unit/test_r13_peer_sessions.py::test_actual_node_router_multiplexes_two_facades_and_reconnect_during_transfer",
+      "tests/unit/test_v2_negotiation.py::test_new_peers_negotiate_and_reconnect_with_fresh_epoch",
+      "tests/unit/test_v2_negotiation.py::test_real_node_addon_negotiates_and_exchanges_v2"
+    ],
+    "exit_code": 0,
+    "seconds": 12.64
+  },
+  {
+    "python": "314",
+    "failed_nodes": [
+      "tests/unit/test_example_behavior.py::test_addon_example_custom_metadata_stream_completion_and_cancel",
+      "tests/unit/test_r13_peer_sessions.py::test_actual_node_router_multiplexes_two_facades_and_reconnect_during_transfer"
+    ],
+    "exit_code": 0,
+    "seconds": 10.11
+  }
+]

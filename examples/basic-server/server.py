@@ -23,24 +23,24 @@ from contextlib import suppress
 import structlog
 
 from mcbe_ws_sdk import (
+    ConnectionState,
     DefaultResponseSink,
     FlowControlSettings,
     GatewaySettings,
     McbeOutboundDelivery,
-    McbeServerFacade,
+    McbeServer,
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    NativeEvent,
     NoOpHook,
     OutboundText,
+    ParsedCommand,
+    PlayerMessageEvent,
     SystemNotification,
     WebsocketTransportConfig,
     configure_logging,
-)
-from mcbe_ws_sdk.command.registry import ParsedCommand
-from mcbe_ws_sdk.diagnostics import is_external_echo
-from mcbe_ws_sdk.gateway.connection import ConnectionState, enqueue_response
-from mcbe_ws_sdk.protocol.minecraft import (
-    MinecraftCommandResponse,
-    MinecraftErrorFrame,
-    PlayerMessageEvent,
+    enqueue_response,
+    is_external_echo,
 )
 
 logger = structlog.get_logger("example")
@@ -58,6 +58,7 @@ class MinecraftSink(DefaultResponseSink):
         return McbeOutboundDelivery(
             connection_id=state.id,
             send_payload=state.send_payload,
+            send_bulk=state.send_bulk,
             settings=self._flow,
         )
 
@@ -84,6 +85,7 @@ class ExampleHook(NoOpHook):
         enqueue_response(state, message)
 
     async def on_connected(self, state: ConnectionState) -> None:
+        await state.native_events.subscribe("PlayerMessage", self._observe_chat)
         logger.info(
             "connected",
             connection_id=str(state.id),
@@ -93,9 +95,13 @@ class ExampleHook(NoOpHook):
             state,
             SystemNotification(
                 level="info",
-                message="SDK 示例服务器已连接。发送任意聊天消息即可收到回复。",
+                message="SDK 示例服务器已连接。聊天可收到回复；!help 查看命令。",
             ),
         )
+
+    @staticmethod
+    def _observe_chat(event: NativeEvent) -> None:
+        logger.debug("native_event", event_name=event.name)
 
     async def on_disconnected(self, state: ConnectionState) -> None:
         logger.info("disconnected", connection_id=str(state.id))
@@ -129,8 +135,15 @@ class ExampleHook(NoOpHook):
             message_type=player_event.type,
             parsed_type=parsed.type if parsed is not None else None,
         )
-        if message.lower() in {"!help", "帮助"}:
-            reply = "可用示例：直接发送聊天消息，服务器会把消息回复给你。"
+        if message.startswith("!wscmd "):
+            assert state.command_client is not None
+            try:
+                response = await state.command_client.run(message.partition(" ")[2])
+                reply = str(response.body)
+            except Exception as exc:
+                reply = f"命令失败：{exc}"
+        elif message.lower() in {"!help", "帮助"}:
+            reply = "直接聊天可收到回复；!wscmd <command> 等待游戏命令结果。"
         else:
             reply = f"收到 {player_event.sender} 的消息：{message}"
 
@@ -194,7 +207,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
     settings = GatewaySettings(
         websocket=WebsocketTransportConfig(host=args.host, port=args.port),
     )
-    facade = McbeServerFacade(
+    facade = McbeServer(
         settings=settings,
         hook=ExampleHook(),
         sink=MinecraftSink(settings.flow),

@@ -1,0 +1,5 @@
+[
+  "tests/release/test_workflows.py",
+  ".github/workflows/ci.yml",
+  "README.zh.md"
+]

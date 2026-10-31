@@ -1,5 +1,7 @@
 # 桥接扩展
 
+本文描述尚未发布的当前源码；PyPI `0.2.1` 不包含本轮新增接口。安装与兼容说明见[迁移指南](migration.md)。
+
 通用分片与可选 MCBEWS/1 业务适配保留在同一个包中。
 `ReassemblyCore` 只处理顺序、重复、UTF-8 大小和过期。
 同一连接的桥接与 UI 通道共享缓冲数量、总字节配额；相同重复分片不续期。
@@ -12,10 +14,10 @@
 关闭可选业务处理：
 
 ```python
-from mcbe_ws_sdk import AddonBridgeService, AddonBridgeSettings, McbeServerFacade
+from mcbe_ws_sdk import AddonBridgeService, AddonBridgeSettings, McbeServer
 
 addon = AddonBridgeService(AddonBridgeSettings(), extensions=False)
-facade = McbeServerFacade(addon=addon)
+server = McbeServer(addon=addon)
 ```
 
 连接生命周期、原生命令、自定义能力仍可运行。

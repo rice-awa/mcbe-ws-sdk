@@ -6,50 +6,31 @@
 
 Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
 
-It owns the WS transport, packet protocol, and byte-safe command chunking
-(461-byte empirically measured default ceiling; deployments may lower it).
-Your host injects behaviour through typed `ConnectionHook` and `ResponseSink`
-interfaces, with optional typed session/approval control callbacks, and drives
-the stack with `McbeServerFacade`.
+It owns WebSocket transport, request correlation, the addon bridge and byte-safe
+command chunking. New hosts use `McbeServer` and await commands and capabilities
+inside managed hooks. `McbeServerFacade` retains its serial default behavior.
+Model services, message brokers, authentication and business history stay in the host.
 
-There is **no** message broker and **no** LLM worker inside the SDK — those stay
-in the host application.
-
-```text
-Minecraft client  ←── /wsserver IP:port ──→  Your Python host (this SDK)
-```
-
-## In-game addon capability bridge
-
-Use the companion TypeScript addon when your host needs structured information
-or Script API actions from inside the world—not just player chat. A capability
-call follows one correlated, chunk-safe round trip:
+> **Version scope:** the current PyPI release is `0.2.1`. The new entry point,
+> v2, metadata and continuous streams described here belong to the unreleased
+> checkout. Use the editable install below; installing PyPI `0.2.1` does not
+> provide these APIs.
 
 ```text
-Python host
-  → AddonBridgeService request(capability, payload)
-  → scriptevent mcbews:bridge_req
-  → addon capability handler in the Bedrock world
-  → MCBEWS_BRIDGE simulated-player chat chunks
-  → WebSocket PlayerMessage stream
-  → AddonBridgeSession reassembles by request_id and resolves the request
-  → your host renders the result (tellraw or mcbews:text_resp)
+Minecraft client  ←── /wsserver IP:port ──→  Python host
 ```
 
-- **Bidirectional by design.** Python calls addon capabilities; the addon can
-  also send UI-originated player messages back through the same bridge. Python
-  can send framed text responses to the addon UI with `mcbews:text_resp`.
-- **Safe on the actual transport.** Requests and responses carry a
-  `request_id`; large payloads are chunked and reassembled rather than relying
-  on a direct addon-to-WebSocket connection.
-- **Clear ownership.** The addon owns its capability registry; the Python host
-  owns authentication and authorization. The bridge itself is not a security
-  boundary.
+## Addon and bidirectional capabilities
 
-Start with the runnable [`addon-server`](./examples/addon-server/) example and
-the [bridge protocol](./docs/addon-bridge-protocol.md). To load the companion
-addon, the target world must enable **Experiments → Beta APIs**; otherwise its
-scripts do not load and capability calls time out.
+The new server negotiates v2 for bidirectional capabilities, notifications,
+metadata and continuous streams. Old addons fall back only to known v1 methods;
+required metadata and streams never silently downgrade. The SDK owns waiters
+and fragments; extension authors register handlers.
+
+The target world must enable **Experiments → Beta APIs** to load the addon.
+The bridge is not a security boundary; hosts own authentication and authorization.
+New APIs have automated coverage; live-game acceptance and the full compatibility
+matrix remain pending. No new platform or game-version support is claimed.
 
 ## Install
 
@@ -67,9 +48,11 @@ Requires **Python 3.11+**.
 
 ## 30-second taste
 
+Install this checkout before running this code.
+
 ```python
 import asyncio
-from mcbe_ws_sdk import McbeServerFacade, NoOpHook
+from mcbe_ws_sdk import McbeServer, NoOpHook
 
 
 class MyHook(NoOpHook):
@@ -81,9 +64,9 @@ class MyHook(NoOpHook):
 
 
 async def main() -> None:
-    facade = McbeServerFacade(hook=MyHook())
-    print(f"ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
-    await facade.run_lifetime()
+    server = McbeServer(hook=MyHook())
+    print(f"ws://{server.settings.websocket.host}:{server.settings.websocket.port}")
+    await server.run_lifetime()
 
 
 if __name__ == "__main__":
@@ -111,6 +94,8 @@ docs site (English + 中文):
 | Page | Content |
 |------|---------|
 | [Getting Started](./docs/getting-started.md) | Install, 5-minute walkthrough, minimal echo bot, FAQ |
+| [Migration](./docs/migration.md) | Entry points, ordering, returns, fallback and cancellation |
+| [Extension authors](./docs/extension-authors.md) | Custom capabilities, metadata, events and streams |
 | [Architecture](./docs/architecture.md) | Layer stack and dependency inversion |
 | [Protocol](./docs/addon-bridge-protocol.md) | mcbews v1 bridge wire format |
 | [API Reference](./docs/reference.md) | Generated from source |

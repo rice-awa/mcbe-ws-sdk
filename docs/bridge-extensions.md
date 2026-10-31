@@ -1,5 +1,7 @@
 # Bridge extensions
 
+This page describes the unreleased checkout, not PyPI `0.2.1`. See the [migration guide](migration.md) for installation and compatibility.
+
 Fragment storage and optional MCBEWS/1 business adapters live in the same package.
 `ReassemblyCore` handles ordering, duplicate detection, UTF-8 size limits and expiry.
 Each connection shares its buffer-count and total-byte budgets across bridge and UI
@@ -14,10 +16,10 @@ usage and atomic `SESSION_RESPONSE_TOO_LARGE` replies remain unchanged.
 To use the capability bridge without its optional business handlers:
 
 ```python
-from mcbe_ws_sdk import AddonBridgeService, AddonBridgeSettings, McbeServerFacade
+from mcbe_ws_sdk import AddonBridgeService, AddonBridgeSettings, McbeServer
 
 addon = AddonBridgeService(AddonBridgeSettings(), extensions=False)
-facade = McbeServerFacade(addon=addon)
+server = McbeServer(addon=addon)
 ```
 
 Connection lifecycle, native commands and custom capabilities still work.

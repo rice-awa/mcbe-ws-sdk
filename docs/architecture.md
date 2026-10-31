@@ -1,114 +1,82 @@
 # Architecture
 
-The SDK layers stack bottom-up. Every layer above transport is injectable so
-the host can override any default without the SDK importing host code:
+This describes the unreleased checkout. See [migration](migration.md) for the
+PyPI `0.2.1` boundary and unchanged legacy defaults.
 
 ```text
-McbeServerFacade          ← host entry point; owns the full WS lifetime
-├── ConnectionManager     ← active connections + one response-sender per connection
-│   ├── ConnectionState   ← transport-agnostic identity (id, send_payload, queue)
-│   └── ResponseSink      ← host routes OutboundText / SystemNotification
-├── MinecraftProtocolHandler  ← parse PlayerMessage, resolve commands, status lines
-│   └── CommandRegistry
-├── EventBus              ← typed in-process pub/sub keyed by WsEventType
-├── ConnectionHook        ← six typed lifecycle hooks the host implements
-├── AddonBridgeService    ← ScriptEvent bridge + chunk reassembly
-│   └── AddonBridgeSession
-├── FlowControlMiddleware ← byte-safe tellraw/scriptevent chunking (461 B empirical default ceiling)
-└── McbeOutboundDelivery  ← unified outbound adapter
+McbeServer               new entry: reliable dispatch + V2Bridge
+└── McbeServerFacade      transport lifetime and injected collaborators
+    ├── ConnectionManager / ConnectionState
+    ├── ConnectionRuntime: bounded business/observation lanes and sender
+    ├── NativeCommandClient / RequestTable: reply correlation and deadlines
+    ├── MinecraftProtocolHandler / CommandRegistry
+    ├── ConnectionHook / ResponseSink: host behavior and rendering
+    ├── AddonBridgeService: v1 capabilities and optional business extensions
+    ├── V2Bridge: discovery, bidirectional capabilities, metadata and streams
+    └── McbeOutboundDelivery / FlowControlMiddleware: byte-safe delivery
 ```
 
-There is **no** SDK-owned `PlayerSession`. Multiplayer isolation is a **host**
-concern: the gateway only forwards `PlayerMessageEvent.sender`; the host buckets
-history / locks / context by `(connection_id, sender)`.
+## Entry points and ownership
 
-## Dependency inversion
+`McbeServer` preserves the facade's keyword-only injection and lifecycle APIs,
+selects reliable dispatch and supplies a v2 bridge. `McbeServerFacade()` retains
+its legacy defaults; reliable mode and v2 can also be injected explicitly there.
+The default response sink is neutral, so hosts supply rendering when they want
+to turn `OutboundText` / `SystemNotification` into Minecraft commands.
 
-`McbeServerFacade.__init__` is keyword-only; every collaborator collapses to a
-gateway default when `None`. The host subclasses only what it needs:
+The SDK owns transport, request waiters, task lifetimes, ordering and fragment
+state. The host owns authorization, history and business state. There is no
+SDK-owned `PlayerSession`; isolate application state by `(connection_id, sender)`
+using the current `PlayerMessageEvent.sender`.
 
-- `NoOpHook` / `ConnectionHook`
-- `DefaultResponseSink` / `ResponseSink`
+## Managed dispatch
 
-`ConnectionHook` has six side-effecting hooks (all `-> None`). The chat hook
-signature is:
+Setup sends handshake and subscribes to `PlayerMessage` before delivering the
+connected notification. The welcome banner remains host-owned.
+The reader classifies and correlates command replies, negotiation and reserved
+addon traffic before queuing business callbacks. Awaiting a command/capability
+inside a managed callback leaves the reader free to receive its reply.
 
-```python
-async def on_player_message(
-    self,
-    state: ConnectionState,
-    player_event: PlayerMessageEvent,
-    parsed: ParsedCommand | None = None,
-) -> None: ...
-```
+Same-player chat stays FIFO across interceptors and the hook; different players
+can progress concurrently. Other native business events share a FIFO lane.
+Observers use a separate bounded lane. Business/observation overload rejects
+work explicitly. Callback exceptions are isolated; disconnect cancels and joins
+managed work, fails waiters and releases buffers. This differs from the legacy
+reader's inline callback ordering; see [migration](migration.md).
 
-`parsed` is the registry match when one exists; it is **not** a consumed-bool
-return value — the host decides what to do with free-form chat and commands.
+Hooks return `None`. `on_player_message(state, event, parsed=None)` receives an
+optional registry match, not a consumed flag. UI chat uses
+`on_ui_chat_reassembled(state, UiChatMessage)`; optional `AddonControlHook`
+receives session/approval DTOs. The old three-argument UI callback requires the
+explicit `LegacyUiChatHookAdapter`.
 
-The typed UI callback is `on_ui_chat_reassembled(state, UiChatMessage)` and the
-DTO carries `cid`/`conversation_id`. Authenticated session and approval frames
-use the optional `AddonControlHook.on_addon_control_message` callback. The old
-three-argument UI callback is supported only through the explicit
-`LegacyUiChatHookAdapter`.
+## Delivery and protocols
 
-## Per-connection message routing
+The response sender wraps queued messages with `RouteEnvelope.from_message()`
+and calls the sink's two `on_*` methods. Hosts can use `McbeOutboundDelivery`
+with `state.send_bulk` to classify long output separately from requests.
+The bounded sender reserves control capacity and schedules bulk fairly.
 
-1. `McbeServerFacade._on_connection` creates connection state, starts a
-   `_response_sender` coroutine, and sends handshake + subscribe. After those
-   succeed it emits `WsEventType.CONNECTED` then calls `hook.on_connected`
-   (welcome is the host's responsibility in that hook — the facade never sends
-   a welcome banner itself).
-2. `_handle_raw` classifies each inbound frame:
-   - **error** → `WsEventType.ERROR` + `hook.on_error`
-   - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
-   - **addon prefix match** → `AddonBridgeService` (bridge / UI chat reassembly)
-   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` +
-     `hook.on_player_message(state, event, parsed=...)`
-3. The response-sender drains `state.response_queue`, wrapping each message via
-   `RouteEnvelope.from_message()` and routing inline to the sink's two `on_*`
-   methods (no `dispatch` on the protocol).
-4. The host sink turns queued messages into MC WebSocket payloads with
-   `McbeOutboundDelivery`.
+The final commandLine budget defaults to 461 UTF-8 bytes and may only be
+lowered. Tellraw and framed ScriptEvents can be split; native commands remain
+atomic and reject overflow. V2 uplink uses its own carrier bounds.
 
-## Flow control — 461 B empirical configurable ceiling
+`McbewsV1Profile` / `MCBEWS_V1` define the legacy profile, not a replaceable
+runtime seam. Installed manifests and vectors define v1 and v2 separately.
+`V2Bridge` negotiates per connection; it falls back only to known v1 methods.
+Required metadata and streams fail when unsupported. Reconnect creates a fresh
+session without replaying requests. See [v1](addon-bridge-protocol.md) and
+[v2](protocol-v2.md) for authoritative formats and resource limits.
 
-`FlowControlMiddleware` enforces the configured MCBE `commandLine` byte budget
-(default 461 bytes, empirically determined; deployments may lower it):
+## Addon requirements and trust
 
-- `chunk_tellraw()` / `chunk_scriptevent()` — sentence-aware splitting with a
-  byte-safety guard
-- `chunk_raw_command()` — no semantic splitting; raises `FrameTooLargeError` on
-  overflow
-- `chunk_framed_scriptevent()` — two-pass split then re-encode with `i/n` metadata
+The companion addon needs **Experiments → Beta APIs** in the target world.
+Without it scripts do not load and capability requests time out. See the
+[addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md).
+The bridge and metadata identity are not authentication boundaries. Hosts must
+authenticate and authorize callers. Automated protocol coverage does not expand
+live-game platform/version support.
 
-## Protocol profiles
-
-`McbewsV1Profile` is the sole concrete runtime profile (module-level singleton
-`MCBEWS_V1`). Installed `manifest.json`/`vectors.json` are authoritative and
-generate the reference Addon `protocol.ts` plus the Python fixture. Wire IDs,
-schema axes and safety bounds are fixed by the manifest; only lowering the
-empirical command budget and response delays are operational settings.
-`AddonBridgeProfile` is a deprecated type alias, not a runtime replacement
-seam. See [Protocol](addon-bridge-protocol.md) for the wire format.
-
-## Addon bridge runtime requirement
-
-The companion Script addon only loads when the world has **Experiments →
-Beta APIs** enabled. Without it, `scriptEventReceive` never fires and
-capability requests time out. See
-[addon/README.md — Enable in a world](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#enable-in-a-world).
-
-## Addon bridge trust boundary
-
-The bridge is **not** a security boundary. The host must authenticate and
-authorize who can invoke capabilities; the addon only applies a defensive
-command allow/denylist on the world-command path. See
-[addon/README.md — Trust boundary](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#trust-boundary).
-
-## No host imports
-
-The SDK never imports from its parent host application.
-`ConnectionState.send_payload` is an opaque
-`Callable[[str], Awaitable[None]]` — the facade wires it to `websocket.send`.
-Host-specific framing (`connection_id`, timestamps, LLM message ids) stays in
-the host.
+The SDK imports no host application modules. `ConnectionState.send_payload`
+is an opaque async callable wired to transport by the facade; host-specific
+message IDs, timestamps and business framing stay outside the SDK.

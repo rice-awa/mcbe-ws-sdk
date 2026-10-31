@@ -1,200 +1,85 @@
-# Addon 能力演示服务器
+# 附加包能力演示服务器
 
-基于 `mcbe-ws-sdk` 的可运行 Minecraft Bedrock WebSocket 示例，通过聊天命令调用
-bridge addon 的内置能力。
-
-它会：
-
-1. 监听 `0.0.0.0:8080`；
-2. 接受 Minecraft Bedrock 的 `/wsserver` 连接；
-3. 订阅 `PlayerMessage`；
-4. 通过 `AddonBridgeService` 发起能力请求；
-5. 用 `McbeOutboundDelivery` 把格式化结果以 `tellraw` 回给玩家。
-
-## 前置条件
-
-1. 在仓库根目录安装 SDK（推荐开发模式）：
-
-   ```bash
-   pip install -e ".[dev]"
-   ```
-
-2. 构建并在目标世界中启用 bridge addon：
-
-   ```bash
-   cd addon
-   npm install
-   npm run build
-   npm run mcaddon
-   ```
-
-   把生成的 `.mcaddon`（或行为包）导入世界，并确保该包处于启用状态。
-
-   **必开：** 在世界设置的 **实验** 中启用 **测试版 API**（Beta APIs）。
-   未开启时 Script API 模块不会加载，桥接能力请求会超时且游戏内无任何效果。
-   建议使用专用测试世界（实验性玩法可能影响成就 / 功能）。
-
-3. 启动本示例后，在游戏中执行：
-
-   ```text
-   /wsserver <运行 Python 服务端的机器 IP>:8080
-   ```
+本示例使用**尚未发布的当前源码**中的 `McbeServer`，不是 PyPI `0.2.1`。
+SDK 管理回调、请求等待、超时与分片；钩子直接等待命令或能力调用。
 
 ## 运行
 
+从仓库根目录执行：
+
+```bash
+pip install -e ".[dev]"
+cd addon
+npm install
+npm run build
+npm run mcaddon
+```
+
+导入生成的 `.mcaddon`。在目标世界设置中开启
+**实验 → 测试版 API（Beta APIs）**，并启用行为包。
+未开启时脚本不会加载，能力请求会超时。详见[附加包设置](../../addon/README.zh.md)。
+
+回到仓库根目录启动 Python：
+
 ```bash
 python examples/addon-server/server.py
-python examples/addon-server/server.py --host 0.0.0.0 --port 8080
-python examples/addon-server/server.py --log-level DEBUG
+python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DEBUG
 ```
 
-## 聊天命令
+游戏里执行 `/wsserver <Python 宿主 IP>:8080`。跨设备使用局域网 IP，
+在防火墙放行监听端口；按 `Ctrl+C` 停止 Python。
 
-| 命令 | 能力 | 说明 |
-| --- | --- | --- |
-| `!player [target]` / `!玩家 [target]` | `get_player_snapshot` | 默认目标为发送者本人 |
-| `!inv [target]` / `!背包 [target]` | `get_inventory_snapshot` | 默认目标为发送者本人 |
-| `!cmd <command>` / `!命令 <command>` | `run_world_command` | **默认未注册**，见下文 |
-| `!wscmd <command>` / `!ws命令 <command>` | WS `commandRequest` | 不依赖 addon；由 host 跟踪 `commandResponse` |
-| `!help` / `帮助` | — | 显示帮助 |
+| 聊天命令 | 行为 |
+| --- | --- |
+| `!player [target]` | 调用 `get_player_snapshot`，默认查询当前玩家 |
+| `!inv [target]` | 调用 `get_inventory_snapshot` |
+| `!wscmd <command>` | 使用原生 `state.command_client.run`，不依赖附加包 |
+| `!cmd <command>` | 调用附加包 `run_world_command`，需要另外启用处理器 |
+| `!echo <text>` | 调用自定义 `demo.echo`，附带自定义元数据 |
+| `!stream [count]` | 消费有限的 `demo.ticks`，直到正常结束，默认 5 项 |
+| `!stream-cancel [count]` | 从无限生产者读取指定项数后取消，默认读取 3 项 |
+| `!help` | 查看命令帮助 |
 
-示例：
+## 安装可选的演示处理器
 
-```text
-!player
-!player Steve
-!inv
-!cmd time query daytime
-!wscmd time query daytime
-!help
-```
+背包与玩家快照使用内置能力。自定义回声和流需要把示例注册模块接入附加包：
 
-## 启用 `run_world_command`
+1. 将 `examples/addon-server/capabilities.ts` 复制到 `addon/scripts/demoCapabilities.ts`。
+2. 在 `addon/scripts/main.ts` 初始化时导入并调用一次：
 
-handler 位于 `addon/scripts/bridge/capabilities/runWorldCommand.ts`，并已导出，
-但**故意不在**默认注册表中（默认只有 `get_player_snapshot` /
-`get_inventory_snapshot`）。要让本示例的 `!cmd` 可用，任选其一：
-
-1. 在 `capabilities/index.ts` 的默认注册表中追加：
-
-   ```ts
-   import { handleRunWorldCommand } from "./runWorldCommand";
-
-   export const defaultCapabilityRegistry: Record<string, CapabilityHandler> = {
-     get_player_snapshot: (_c, payload) => handleGetPlayerSnapshot(payload),
-     get_inventory_snapshot: (_c, payload) => handleGetInventorySnapshot(payload),
-     run_world_command: (_c, payload) => handleRunWorldCommand(payload),
-   };
+   ```typescript
+   import { registerDemoCapabilities } from "./demoCapabilities";
+   registerDemoCapabilities();
    ```
 
-2. 或在 TypeScript 宿主侧覆盖 handler：
+3. 在 `addon/` 中重新执行 `npm run build`、`npm run mcaddon`，重新导入生成的包，
+   在开启 **实验 → 测试版 API（Beta APIs）** 的目标世界启用它，重新连接并协商新会话。
 
-   ```ts
-   import { setCapabilityHandler } from "./bridge/router";
-   import { handleRunWorldCommand } from "./bridge/capabilities";
+这会注册 `demo.echo` 和 `demo.ticks`，无需修改 SDK 协议或分片逻辑。
+不要重复注册，同名会被拒绝。`!echo` 发送 `example.label`、`example.player` 元数据；
+这些值只是应用上下文，不证明玩家身份，也不授予权限。
 
-   setCapabilityHandler((capability, payload, context) => {
-     if (capability === "run_world_command") {
-       return handleRunWorldCommand(payload);
-     }
-     // 其余能力按需回退到默认表或其他 handler
-     ...
-   });
-   ```
+`run_world_command` 默认关闭。如有需要，通过附加包路由器显式注册现有处理器。
+默认允许列表只有 `say`，禁止列表仍生效。详见[信任边界](../../addon/README.zh.md)。
 
-改完后重新构建 addon。`commandSafety.ts` 中的黑名单仍会拦截
-`stop` / `reload` / `kick` / `op` / `deop`。
+## 顺序、失败与取消
 
-## 桥接调用链路
+`McbeServer` 启用可靠调度，并创建负责协商的 `V2Bridge`。
+同一玩家的回调保持先进先出，其他玩家可独立推进。
+钩子等待业务时，读取循环仍接收回复。示例不维护请求等待表、分片状态或后台请求任务。
 
-```text
-玩家聊天
-  → AddonDemoHook
-  → AddonBridgeService.create_client(...).request(capability, payload)
-  → McbeOutboundDelivery.send_raw_command("scriptevent mcbews:bridge_req ...")
-  → addon router 处理能力
-  → bridge tool player 以聊天分片回传
-  → facade 把分片交给 AddonBridgeService
-  → 挂起的 future 完成
-  → tellraw 摘要回给玩家
-```
+协商请求返回响应信封，成功数据在 `result` 中；v2 远端错误抛出 `RemoteCallError`。
+v1 回退在 `result` 中保留能力级 `ok: false`。原生响应包含 `statusCode`。
+超时、不支持的能力和传输故障都会明确结束调用。
 
-## WS 侧 `!wscmd` 调用链路
+自定义元数据和流式要求 v2 能力；旧附加包只支持已知 v1 方法，不能静默丢弃元数据，
+也不会把完整响应包装成假流。流通过 `async with stream` 消费，提前退出会取消生产者。
+取消不撤销已经执行的世界修改。慢消费者会在有界缓存下终止，当前没有接收额度机制。
 
-`ConnectionState.command_client` 是 SDK 持有的 `NativeCommandClient`：发送前
-先登记请求，再用共享请求表配对匹配的 `commandResponse`，宿主不再维护等待表：
+旧 `McbeServerFacade` 的串行默认值保持不变；其内联钩子不能等待由同一读取循环接收的回复，
+详见[迁移表](../../docs/migration.zh.md)。新宿主无需为这一旧限制自行创建任务。
 
-```text
-!wscmd time query daytime
-  → on_player_message await state.command_client.run(command)
-  → send_raw_command(...) 先按 requestId 登记，再发送
-  → Bedrock 返回 commandResponse
-  → facade 先完成挂起请求，再调用 on_command_response
-  → run() 返回类型化响应 → tellraw statusCode / statusMessage
-```
-
-每一条响应仍会交给 `on_command_response`（SDK 已先完成自己的请求），宿主可以继续
-观察确认帧。
-
-### reliable 与 legacy 的回调行为
-
-本示例显式启用可靠路径：
-
-```python
-GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-```
-
-- **reliable**（`mode="reliable"`）：宿主回调运行时读取循环继续收帧，回调可以直接
-  `await state.command_client.run(...)` 或 `await addon_client.request(...)`。
-  工作按玩家（`player:<sender>`）串行：同一玩家保持 FIFO，不同玩家可并发。
-- **legacy**（SDK 默认，`DispatchSettings()`）：回调仍由唯一读取循环内联 await，
-  与旧行为一致。此时在回调里等待只有读取循环才能送达的回复仍会死锁；应使用
-  `asyncio.create_task(...)`，或启用 reliable 模式。
-
-示例用 `state.runtime is not None` 区分两条路径，二者都能运行。
-
-### 长文本发送
-
-给 `McbeOutboundDelivery` 传入 `send_bulk=state.send_bulk`，tellraw / scriptevent
-分片就会标记为 bulk，原生命令仍是 request 类帧。可靠路径上调度器为控制帧保留受限
-容量、让请求帧先于 bulk，并用公平配额避免持续请求／控制流量饿死 bulk。
-`state.send_payload` 仍保持旧的单参数合同，现有宿主代码无需修改。
-
-只需要普通 Minecraft 命令、不想依赖 bridge addon 时用 `!wscmd`；
-需要 addon 的 `run_world_command` 路径（黑名单、Script API 副作用等）时用 `!cmd`。
-
-## 推荐的生产配置
-
-SDK 默认仍是 `dispatch.mode="legacy"`，保证现有宿主顺序不变。新部署时本示例只改
-一项：
-
-| 配置 | 值 | 依据 |
-| --- | --- | --- |
-| `dispatch.mode` | `"reliable"` | 读取循环不再等待宿主回调 |
-| `dispatch.business_queue_maxsize` | `256`（默认） | 有界过载，超出显式拒绝 |
-| `dispatch.max_concurrent_business_tasks` | `64`（默认） | 限制每连接并发 |
-| `send.queue_maxsize` / `send.queue_max_bytes` | `256` / `4 MiB`（默认） | 限制出站内存 |
-| `send.control_reserve_slots` / `send.control_reserve_bytes` | `1` / `4096`（默认） | bulk 在途时仍给控制帧留出容量 |
-| `send.fairness_quota` | `8`（默认） | 高优先级连续 8 帧后给低优先级一次机会 |
-| `send.capacity_timeout_seconds` | `5.0`（默认） | 单次总等待截止时间，通知不会重置 |
-
-以上均为 `GatewaySettings()` 默认值；本示例只改 reliable 模式。这些值尚未有 MCBE
-实机验证记录。
-
-要点：
-
-- hook（出站请求）与 facade（入站重组）共享同一个 `AddonBridgeService` 实例，
-  这样 pending future 在同一 session map 上。
-- 用 `player_event.sender` 作为回复目标。不要使用已弃用的连接级
-  `ConnectionState.player_name` 作为会话身份——一条 `/wsserver` 连接可能承载多名玩家。
-- Bedrock 会把 tellraw 回显成 `sender=外部` / `External`；示例会忽略这些回显。
-- 未跟踪的 `commandResponse`（我们自己的 tellraw/scriptevent 确认）会被忽略，
-  除非 `statusCode` 非 0。
-
-## 注意事项
-
-- Minecraft 跑在另一台机器时，使用服务端局域网 IP，不要用 `127.0.0.1`。
-- 防火墙需放行 TCP `8080` 入站。
-- 示例没有认证，只建议在可信本机/局域网环境使用。
-- 若请求超时，按顺序检查：(1) 本世界已启用 bridge 行为包；(2) **实验 → 测试版 API**
-  已打开（否则脚本不会加载）；(3) `/wsserver` 连接仍然有效。
+使用 `event.sender`，不要使用连接上已弃用的最近玩家指针。示例会过滤外部 tellraw 回声。
+示例没有鉴权，适合可信的本机或局域网环境；生产环境需要宿主授权。
+自动化示例不扩大 Minecraft 平台或版本支持承诺，实机验收仍待完成。
+注册、事件订阅和协议限制见[扩展作者指南](../../docs/extension-authors.zh.md)。

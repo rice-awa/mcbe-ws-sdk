@@ -13,18 +13,14 @@ and the :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink` outbound routes — the
 same dependency-inversion the gateway already applies internally (see
 :class:`NoOpHook`, :class:`DefaultResponseSink`).
 
-It mirrors the current main-repo ``WebSocketServer`` orchestration
-(``services/websocket/server.py``) — accept → handshake → subscribe →
-welcome → message loop → disconnect → shutdown — but inverted: the server
-*receives* its collaborators; it does not build the host-only ones.
+The facade accepts connections, sends the handshake and subscriptions, routes
+messages, and releases connection resources. Welcome messages belong to the host.
 
 Lifetime::
 
     facade = McbeServerFacade(hook=my_hook, sink=my_sink)
     await facade.run_lifetime()            # blocks until ``stop()`` / cancelled
     # ... or drive it on an explicit host asyncio.Task and cancel it.
-
-See ``docs/batch-d-scope.md`` section B for the authoritative spec.
 """
 
 from __future__ import annotations

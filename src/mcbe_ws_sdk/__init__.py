@@ -8,7 +8,9 @@ The gateway SDK exposes a dual-layer interface:
     keyed by :class:`~mcbe_ws_sdk.gateway.events.WsEventType`.
   * High-level: implement :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook`
     and :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink`, then drive the stack
-    through :class:`~mcbe_ws_sdk.gateway.server_facade.McbeServerFacade`.
+    through :class:`~mcbe_ws_sdk.server.McbeServer`. The compatibility entry
+    point :class:`~mcbe_ws_sdk.gateway.server_facade.McbeServerFacade` retains
+    serial callbacks by default.
 
 The full connection lifetime, packet request abstraction and byte-safe command
 chunking are provided; the agent's LLM / message-broker concerns are the host's.
@@ -34,6 +36,7 @@ from mcbe_ws_sdk.capability import (
     CapabilityValidator,
 )
 from mcbe_ws_sdk.command import CommandRegistry
+from mcbe_ws_sdk.command.registry import ParsedCommand
 from mcbe_ws_sdk.config import DispatchSettings, SendSchedulerSettings
 from mcbe_ws_sdk.delivery import McbeOutboundDelivery
 from mcbe_ws_sdk.diagnostics import DiagnosticObserver, DiagnosticSettings, is_external_echo
@@ -136,6 +139,19 @@ from mcbe_ws_sdk.profiles.mcbews_v1.models import (
     TokenUsage,
     UiChatMessage,
 )
+from mcbe_ws_sdk.profiles.mcbews_v2.runtime import (
+    NegotiatedConnection,
+    NegotiationError,
+    V2Bridge,
+    V2Endpoint,
+)
+from mcbe_ws_sdk.profiles.mcbews_v2.streams import (
+    IncomingStream,
+    StreamError,
+    StreamHandler,
+    StreamRegistration,
+    StreamRegistry,
+)
 from mcbe_ws_sdk.protocol import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
@@ -148,6 +164,7 @@ from mcbe_ws_sdk.requests import (
     PendingRequest,
     RequestTable,
 )
+from mcbe_ws_sdk.server import McbeServer
 from mcbe_ws_sdk.tracing import TraceContext, current_trace, trace_scope
 
 try:
@@ -157,6 +174,17 @@ except importlib.metadata.PackageNotFoundError:
 
 __all__ = (
     "__version__",
+    "McbeServer",
+    "ParsedCommand",
+    "V2Bridge",
+    "V2Endpoint",
+    "NegotiatedConnection",
+    "NegotiationError",
+    "IncomingStream",
+    "StreamError",
+    "StreamRegistry",
+    "StreamRegistration",
+    "StreamHandler",
     "AddonBridgeClient",
     "AddonBridgeProfile",
     "AddonBridgeService",

@@ -1,85 +1,28 @@
-# Basic MCBE WebSocket Server
+# 基础 WebSocket 服务
 
-这是一个基于 `mcbe-ws-sdk` 的最小可运行服务端示例。它会：
-
-1. 监听 `0.0.0.0:8080`；
-2. 接受 Minecraft Bedrock 的 `/wsserver` 连接；
-3. 订阅 `PlayerMessage`；
-4. 在控制台打印玩家聊天；
-5. 使用 SDK 的 `McbeOutboundDelivery` 通过 `tellraw` 回复玩家。
+本示例使用尚未发布的当前源码中的 `McbeServer`；PyPI `0.2.1` 不包含这个新入口。
+SDK 管理可靠调度、命令请求等待与分片。示例打印聊天，用 tellraw 回复，并过滤外部消息回声。
 
 ## 运行
 
-先在仓库根目录安装 SDK（推荐开发模式）：
+在仓库根目录执行：
 
 ```bash
 pip install -e ".[dev]"
-```
-
-启动服务端：
-
-```bash
-python examples/basic-server/server.py
-```
-
-也可以指定绑定地址和端口：
-
-```bash
 python examples/basic-server/server.py --host 0.0.0.0 --port 8080
 ```
 
-需要查看分片发送、response sender 等细节时，打开 DEBUG：
+游戏里执行 `/wsserver <Python 宿主 IP>:8080`，然后发送聊天。
+同机可用 `127.0.0.1`，跨设备使用局域网 IP，并在防火墙放行端口。
+`!wscmd time query daytime` 演示直接等待原生命令响应，不需要附加包。
+通过 `--log-level DEBUG` 查看诊断，按 `Ctrl+C` 停止。
 
-```bash
-python examples/basic-server/server.py --log-level DEBUG
-```
+同一玩家的回调按顺序执行，不同玩家可并发推进；钩子内等待命令时读取循环继续接收回复。
+命令返回 `MinecraftCommandResponse`，需要检查 `statusCode`。
+SDK 管理超时、断连和取消，宿主不维护等待表或后台请求任务。
+取消不能撤销已经执行的命令。旧入口顺序不变，详见[迁移指南](../../docs/migration.zh.md)。
 
-控制台默认使用紧凑日志（无 `[info     ]` 填充空格），所有输出统一为：
-
-```text
-2026-07-20 16:40:16 [info] listening host=0.0.0.0 port=8081 url=ws://0.0.0.0:8081
-```
-
-成功的命令响应不会刷屏，只有失败的 `statusCode` 才会打印。
-Bedrock 会把 tellraw 回显成 `sender=外部` 的 PlayerMessage；示例会过滤这些回显，
-避免把服务器自己的消息当成玩家聊天。
-
-然后在 Minecraft Bedrock 世界中执行：
-
-```text
-/wsserver <运行 Python 服务端的机器 IP>:8080
-```
-
-连接成功后，在游戏聊天框发送任意消息，例如：
-
-```text
-你好
-```
-
-服务端会在游戏内回复：
-
-```text
-收到 Steve 的消息：你好
-```
-
-其中 `Steve` 会替换为真实的玩家名。
-
-## 网络注意事项
-
-- 如果 Python 服务端运行在另一台机器上，使用该机器在局域网中的 IP，不要使用
-  `127.0.0.1`。
-- 确认防火墙允许 TCP `8080` 入站连接。
-- Minecraft 与服务端之间通常不需要额外的路径；直接使用 `/wsserver IP:PORT`。
-- 示例没有实现认证，建议只在可信的本机或局域网环境中使用。生产环境应在宿主的
-  `ConnectionHook` 中增加认证和权限检查。
-
-## SDK 结构
-
-- `ExampleHook`：处理连接、玩家消息和命令响应。
-- `MinecraftSink`：将 SDK 的 `OutboundText` / `SystemNotification` 转换为 MCBE
-  `commandRequest`。
-- `McbeServerFacade`：负责 WebSocket 监听、握手、`PlayerMessage` 订阅、解析和连接
-  生命周期。
-
-示例使用 `player_event.sender` 作为目标玩家。一个 `/wsserver` 连接可能承载多个玩家，
-不要把连接级的 `ConnectionState.player_name` 当作玩家身份。
+本示例不需要附加包。需要查询背包、自定义能力、元数据、事件与持续流时，
+参考[附加包示例](../addon-server/README.zh.md)与[扩展作者指南](../../docs/extension-authors.zh.md)。
+启用附加包的世界必须打开 **实验 → 测试版 API（Beta APIs）**。
+示例没有鉴权，应在可信本机或局域网运行；实机与完整兼容矩阵仍待验收，不扩大平台或版本支持承诺。

@@ -65,6 +65,10 @@ def test_ci_cross_language_gate_requires_tools_and_regressions() -> None:
         "tests/unit/test_v2_contract.py",
         "tests/unit/test_v2_tooling.py",
         "tests/unit/test_v2_review_regressions.py",
+        "tests/unit/test_v2_runtime.py",
+        "tests/unit/test_v2_negotiation.py",
+        "tests/unit/test_v2_streams.py",
+        "tests/unit/test_example_behavior.py",
     } <= set(test_args)
 
 
@@ -83,3 +87,26 @@ def test_release_publishes_the_verified_artifact_only() -> None:
     steps = jobs["publish"]["steps"]
     assert any(step.get("uses") == "actions/download-artifact@v4" for step in steps)
     assert all("python -m build" not in step.get("run", "") for step in steps)
+
+
+def test_both_pipelines_check_generated_v2_and_installed_contract() -> None:
+    for name in ("ci.yml", "release.yml"):
+        jobs = load_workflow(name)["jobs"]
+        commands = [step.get("run", "") for job in jobs.values() for step in job["steps"]]
+        assert "python tools/generate_v2_assets.py --check" in commands
+        probes = [command for command in commands if "tools/probe_installed_contract.py" in command]
+        assert len(probes) == 1
+        assert "cd /tmp" in probes[0]
+        assert any('"twine>=7"' in command for command in commands)
+    verify = load_workflow("release.yml")["jobs"]["verify"]
+    assert verify["env"]["MCBE_REQUIRE_CROSS_LANGUAGE"] == "1"
+    commands = [step.get("run", "") for step in verify["steps"]]
+    assert commands.index("npm ci") < next(
+        index for index, command in enumerate(commands) if command.startswith("pytest ")
+    )
+
+
+def test_websockets_gate_includes_public_server_entries() -> None:
+    steps = load_workflow("ci.yml")["jobs"]["websockets"]["steps"]
+    commands = [step.get("run", "") for step in steps]
+    assert any("tests/unit/test_server_entry.py" in command for command in commands)

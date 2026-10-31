@@ -1,5 +1,7 @@
 # Tracing and packet diagnostics
 
+This page describes the unreleased checkout, not PyPI `0.2.1`. See the [migration guide](migration.md) for installation and compatibility.
+
 The facade creates one bounded diagnostic lane per connection in both dispatch
 modes. Defaults record metadata at DEBUG: identifiers, stages, sizes and frame
 classification. Business text, commands and packet bodies are omitted.
@@ -7,12 +9,12 @@ No logging configuration changes occur on construction; hosts choose their own
 configuration or explicitly call configure_logging().
 
 ~~~python
-from mcbe_ws_sdk import DiagnosticSettings, McbeServerFacade, trace_scope
+from mcbe_ws_sdk import DiagnosticSettings, McbeServer, trace_scope
 
 async def inspect_record(record):
     pass  # Forward to your diagnostic collector; keep synchronous work brief.
 
-facade = McbeServerFacade(
+server = McbeServer(
     diagnostics=DiagnosticSettings(
         full_packets=True,
         connection_ids=frozenset({"connection-uuid"}),

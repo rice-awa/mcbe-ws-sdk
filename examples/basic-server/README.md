@@ -1,68 +1,34 @@
-# Basic MCBE WebSocket Server
+# Basic WebSocket server
 
-A minimal runnable server built on `mcbe-ws-sdk`. It:
-
-1. listens on `0.0.0.0:8080`;
-2. accepts Minecraft Bedrock `/wsserver` connections;
-3. subscribes to `PlayerMessage`;
-4. prints player chat to the terminal; and
-5. sends a `tellraw` reply through the SDK's `McbeOutboundDelivery`.
+This example uses `McbeServer` from the unreleased checkout; PyPI `0.2.1` does
+not contain this entry point. The SDK manages reliable dispatch, command
+waiters and fragments. The example prints chat, replies with tellraw and
+filters external-message echoes.
 
 ## Run
 
-From the repository root, install the SDK in editable mode:
+From the repository root:
 
 ```bash
 pip install -e ".[dev]"
-```
-
-Start the server:
-
-```bash
-python examples/basic-server/server.py
-```
-
-You can override the bind address and port:
-
-```bash
 python examples/basic-server/server.py --host 0.0.0.0 --port 8080
 ```
 
-For frame-level send details and response-sender lifecycle events, raise the log
-level:
+In game: `/wsserver <python-host-ip>:8080`, then send chat. Use `127.0.0.1` on
+the same machine, a LAN IP from another device, and allow the port through the
+firewall. `!wscmd time query daytime` awaits a native command response without
+an addon. Use `--log-level DEBUG` for diagnostics and `Ctrl+C` to stop.
 
-```bash
-python examples/basic-server/server.py --log-level DEBUG
-```
+Same-player callbacks remain ordered; different players may progress
+concurrently. The reader continues receiving replies while hooks await commands.
+Commands return `MinecraftCommandResponse`; inspect `statusCode`. The SDK owns
+timeouts, disconnect and cancellation without host wait tables or request tasks.
+Cancellation cannot undo executed commands. The legacy entry keeps its ordering;
+see [migration](../../docs/migration.md).
 
-The example configures compact console logging (no `[info     ]` padding).
-Every line uses the same timestamped format:
-
-```text
-2026-07-20 16:40:16 [info] listening host=0.0.0.0 port=8081 url=ws://0.0.0.0:8081
-```
-
-Successful command responses are quiet; only non-zero `statusCode` values are
-logged. Bedrock echoes tellraw output as `sender=外部` PlayerMessage events;
-the example filters those echoes so they are not treated as player chat.
-
-In the Minecraft Bedrock world, run:
-
-```text
-/wsserver <machine-running-the-server>:8080
-```
-
-Then send a chat message such as `hello`. The server replies in-game with the
-sender's name and message.
-
-## Notes
-
-- Use the server machine's LAN IP when Minecraft runs on another machine; do
-  not use `127.0.0.1` in that case.
-- Allow TCP port `8080` through the host firewall.
-- This example has no authentication. Use it only on a trusted local/LAN
-  network; add authentication and authorization in `ConnectionHook` before
-  using a public deployment.
-- `player_event.sender` is used as the target because one `/wsserver` connection
-  can carry messages from multiple players. Do not use the deprecated
-  connection-level `ConnectionState.player_name` as the session identity.
+This example needs no addon. For inventory, custom capabilities, metadata,
+events and streams, see the [addon example](../addon-server/README.md) and
+[extension authors](../../docs/extension-authors.md). Addon worlds must enable
+**Experiments → Beta APIs**. This example has no authentication; run on a trusted
+local/LAN network. Live-game acceptance and the full compatibility matrix remain
+pending; no platform/version support is expanded.

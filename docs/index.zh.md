@@ -1,49 +1,30 @@
 # mcbe-ws-sdk
 
-面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
+面向 Minecraft 基岩版的 WebSocket 通信 SDK。新宿主从 `McbeServer` 开始，
+直接等待命令与能力调用；SDK 管理关联请求、任务和分片。
+模型服务、消息代理、认证与业务历史由宿主负责。
 
-本包拥有 **WS 传输**、**数据包协议**与**字节安全的命令分片**（461 字节实测默认可配置上限）。
-宿主通过两个协议注入行为——`ConnectionHook` 与 `ResponseSink`——并由
-`McbeServerFacade` 驱动整条链路。
+> **版本范围：** 当前 PyPI 发布版为 `0.2.1`。本站的新入口、v2、元数据和持续流描述
+> 尚未发布的当前源码，需要可编辑安装。安装 PyPI `0.2.1` 不包含这些新增接口。
 
-SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属于宿主应用。
+## 选择入口
 
-```text
-Minecraft 客户端  ←── /wsserver IP:端口 ──→  你的 Python 宿主（本 SDK）
-```
+| 需求 | 入口 |
+| --- | --- |
+| 新宿主、可在回调中等待回复 | `McbeServer`，默认可靠调度并探测 v2 |
+| 保持现有串行回调顺序 | `McbeServerFacade`，默认值不变 |
+| 自定义能力与元数据 | 双向能力注册表及协商后的 v2 请求 |
+| 持续数据 | 协商 `stream/1` 后使用异步流 |
+| 原生事件 | `state.native_events` 订阅与拦截 |
 
-## 你能用它做什么
+旧附加包只回退到已知 v1 方法；元数据与流式不丢字段降级。
+附加包世界必须开启 **实验 → 测试版 API（Beta APIs）**。
+当前自动化证据不代表实机、完整版本矩阵或新平台支持已验收。
 
-| 你想做… | 用不用这个 SDK |
-|---------|----------------|
-| 监听玩家聊天并自动回复 | ✅ |
-| 从 Python 执行 `time set day` 这类命令 | ✅ |
-| 通过 addon 读玩家背包 / 坐标 | ✅ |
-| 做一个带 AI 对话的机器人（LLM 部分自己写） | ✅ |
-| 直接当现成的 AI 服务器用 | ❌ 由宿主应用负责 |
-| 写 Java 版 Minecraft 插件 | ❌ 只面向基岩版 WebSocket |
+## 开始使用
 
-## 单向能力模型
-
-SDK 从 Python 宿主向 Minecraft addon 发送桥接请求并接收响应。**不包含入站能力注册表分发**——
-所有能力处理逻辑由 addon 端拥有。
-
-唯一内置协议 profile 是 `McbewsV1Profile`（`MCBEWS_V1`）。
-
-`ConnectionHook` 提供六个 typed 生命周期钩子；UI Chat 使用
-`on_ui_chat_reassembled(state, UiChatMessage)`。经过可信 sender 校验的
-session/approval frame 使用可选 `AddonControlHook` 回调。
-
-## 双层接口
-
-| 层级 | 用法 |
-|------|------|
-| 高层 | 实现 `ConnectionHook` + `ResponseSink`，运行 `McbeServerFacade` |
-| 低层 | 订阅按 `WsEventType` 分键的 `EventBus` |
-
-## 下一步
-
-- **[快速开始](getting-started.md)** — 安装、5 分钟上手、最小回声机器人、FAQ
-- [架构](architecture.md) — 分层栈与依赖倒置
-- [协议](addon-bridge-protocol.md) — mcbews v1 桥接线格式
-- [API 参考](reference.md) — 自动生成正文见英文站；本站含导读
+- [快速开始](getting-started.md)：安装源码、连接游戏、命令与背包查询。
+- [迁移指南](migration.md)：旧接口、回调顺序、默认值与失败行为。
+- [扩展作者](extension-authors.md)：自定义能力、元数据、事件订阅与流式。
+- [架构](architecture.md)、[v1 协议](addon-bridge-protocol.md)、[v2 合同](protocol-v2.md)。
+- [API 参考](reference.md)：英文源码生成的参考正文。

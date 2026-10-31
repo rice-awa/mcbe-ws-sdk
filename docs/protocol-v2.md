@@ -1,9 +1,12 @@
 # MCBEWS/2 contract (opt-in)
 
+This page describes the unreleased checkout, not PyPI `0.2.1`. See the [migration guide](migration.md) for installation and compatibility.
+
 Installed profiles/mcbews_v2/manifest.json and vectors.json are authoritative.
 A separate interaction protocol inspired by JSON-RPC, this is not JSON-RPC compatible.
 MCBEWS/1 assets, identifiers, imports, constructors and default routing stay unchanged.
-The v2 runtime is opt-in; request streams require negotiated `stream/1`.
+`McbeServer` enables v2 discovery by default; legacy facades opt in explicitly.
+Request streams require negotiated `stream/1`.
 
 ## Logical messages
 
@@ -89,7 +92,8 @@ downstream_payloads, send_downstream(existing_scheduler, ...), ReassemblyPool.
 TypeScript: bridge/v2/codec and bridge/v2/transport export the matching codec,
 fragment, sendUpstream and ReassemblyPool. Send loops await one scheduled frame at a
 time, preserve ordering and stop on failure/cancellation; no unbounded task chain.
-Create `V2Bridge` and pass it as `v2` to a reliable `McbeServerFacade`. Discovery
+New hosts use `McbeServer.v2`; alternatively create `V2Bridge` and pass it as
+`v2` to a reliable `McbeServerFacade`. Discovery
 starts once per connection in the background; `await bridge.ready(state.id)` returns
 the selected version, features and v2 endpoint. Use `bridge.request(state.id, ...)`
 for negotiated calls, and register Python handlers on `bridge.registry`. The addon

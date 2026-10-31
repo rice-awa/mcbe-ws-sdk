@@ -70,6 +70,8 @@ plugins:
           nav:
             - 首页: index.md
             - 快速开始: getting-started.md
+            - 迁移指南: migration.md
+            - 扩展作者: extension-authors.md
             - 架构: architecture.md
             - 协议: addon-bridge-protocol.md
             - v2 协议: protocol-v2.md
@@ -127,6 +129,8 @@ watch:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Migration: migration.md
+  - Extension Authors: extension-authors.md
   - Architecture: architecture.md
   - Protocol: addon-bridge-protocol.md
   - v2 Protocol: protocol-v2.md

@@ -16,6 +16,7 @@ jobs:
       - run: mypy --no-incremental src
       - run: python tools/generate_protocol_assets.py --check
       - run: python tools/check_protocol_names.py
+      - run: python tools/generate_v2_assets.py --check
   python:
     runs-on: ubuntu-latest
     strategy:
@@ -45,6 +46,8 @@ jobs:
           tests/unit/test_v2_codec.py tests/unit/test_v2_transport.py
           tests/unit/test_v2_contract.py tests/unit/test_v2_tooling.py
           tests/unit/test_v2_review_regressions.py
+          tests/unit/test_v2_runtime.py tests/unit/test_v2_negotiation.py
+          tests/unit/test_v2_streams.py tests/unit/test_example_behavior.py
   websockets:
     runs-on: ubuntu-latest
     strategy:
@@ -55,7 +58,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: pip}
       - run: python -m pip install -e ".[dev]" "websockets${{ matrix.websockets }}"
-      - run: pytest -p no:cacheprovider tests/unit/test_server_facade.py tests/unit/test_delivery.py -q
+      - run: pytest -p no:cacheprovider tests/unit/test_server_facade.py tests/unit/test_delivery.py tests/unit/test_server_entry.py -q
   addon:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: addon}}
@@ -86,7 +89,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: pip}
-      - run: python -m pip install -e ".[dev,release]"
+      - run: python -m pip install -e ".[dev,release]" "twine>=7"
       - run: python -m build --sdist --wheel
       - run: twine check dist/*
       - run: python tools/check_dist.py dist
@@ -105,8 +108,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {name: python-dist, path: /tmp/mcbe-ws-sdk-dist}
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install twine
-      - run: python -m pip install "$(find /tmp/mcbe-ws-sdk-dist -name '*.whl' -print -quit)"
+      - run: python -m pip install "twine>=7"
+      - run: python -m venv /tmp/mcbe-ws-sdk-contract-venv
+      - run: /tmp/mcbe-ws-sdk-contract-venv/bin/pip install /tmp/mcbe-ws-sdk-dist/*.whl
       - run: python -m twine check /tmp/mcbe-ws-sdk-dist/*
       - run: python tools/check_dist.py /tmp/mcbe-ws-sdk-dist
       - name: Probe the installed wheel outside the checkout
@@ -115,41 +119,4 @@ jobs:
         run: |
           mkdir -p /tmp/mcbe-ws-sdk-contract-cwd
           cd /tmp/mcbe-ws-sdk-contract-cwd
-          python - <<'PY'
-          import json
-          import mcbe_ws_sdk
-          from mcbe_ws_sdk.config import FlowControlSettings
-          from mcbe_ws_sdk.flow import FlowControlMiddleware
-          from mcbe_ws_sdk.profiles.mcbews_v1 import (
-              MCBEWS_V1_MANIFEST,
-              MCBEWS_V1_WIRE_VECTORS,
-              decode_text_response_frame,
-              encode_session_request_chat,
-          )
-          from mcbe_ws_sdk.profiles.mcbews_v1.models import SessionRequest
-
-          assert mcbe_ws_sdk.__version__ == "0.2.1"
-          assert MCBEWS_V1_MANIFEST["protocol_line"] == "MCBEWS/1"
-          assert set(MCBEWS_V1_WIRE_VECTORS["behavior"]) == {"chunking", "text_response"}
-          request = SessionRequest(request_id="wheel-1", action="list", player_name="Steve")
-          assert '"request_id":"wheel-1"' in encode_session_request_chat(request)
-          flow = FlowControlMiddleware(FlowControlSettings(command_line_byte_budget=180))
-
-          def encode_frame(content: str, index: int, total: int) -> str:
-              return json.dumps(
-                  {"id": "wheel-1", "i": index, "n": total, "p": "Steve", "r": "assistant", "c": content},
-                  ensure_ascii=False,
-                  separators=(",", ":"),
-              )
-
-          frame_payload = flow.chunk_framed_scriptevent(
-              "你好 😀",
-              message_id="mcbews:text_resp",
-              encode_frame=encode_frame,
-              emit_empty=True,
-          )
-          command_line = json.loads(frame_payload[0])["body"]["commandLine"]
-          frame = json.loads(command_line.split(" ", 2)[2])
-          assert decode_text_response_frame(frame).content == "你好 😀"
-          print("clean wheel contract: ok")
-          PY
+          /tmp/mcbe-ws-sdk-contract-venv/bin/python "$GITHUB_WORKSPACE/tools/probe_installed_contract.py"

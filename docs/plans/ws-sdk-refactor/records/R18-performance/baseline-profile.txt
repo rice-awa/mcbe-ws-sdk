@@ -1,0 +1,120 @@
+             connection_id=aac2ddf7-fdce-4ef0-920d-74ef2ca7dd95
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=aac2ddf7-fdce-4ef0-920d-74ef2ca7dd95
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=0fe58008-00e5-4c9e-b2e3-2b7081ad98be
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=0fe58008-00e5-4c9e-b2e3-2b7081ad98be
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=0fe58008-00e5-4c9e-b2e3-2b7081ad98be
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=0fe58008-00e5-4c9e-b2e3-2b7081ad98be
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=062c125a-ba41-4711-892b-49e9d5a5c86c
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=062c125a-ba41-4711-892b-49e9d5a5c86c
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=f13ba0c3-4dc0-44dc-b5c8-9ea4aecdaf1d
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=f13ba0c3-4dc0-44dc-b5c8-9ea4aecdaf1d
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=f13ba0c3-4dc0-44dc-b5c8-9ea4aecdaf1d
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=f13ba0c3-4dc0-44dc-b5c8-9ea4aecdaf1d
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=41166e57-2674-4723-87f5-6e4c9702148a
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=41166e57-2674-4723-87f5-6e4c9702148a
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=651d7269-2e91-49b7-a398-f9d22d49f485
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=651d7269-2e91-49b7-a398-f9d22d49f485
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=651d7269-2e91-49b7-a398-f9d22d49f485
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=651d7269-2e91-49b7-a398-f9d22d49f485
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=0d3cd52c-b678-478f-80f0-ce3bcf625750
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=0d3cd52c-b678-478f-80f0-ce3bcf625750
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=9cb0fa79-a0ea-4067-a419-360a475a1914
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=9cb0fa79-a0ea-4067-a419-360a475a1914
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=9cb0fa79-a0ea-4067-a419-360a475a1914
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=9cb0fa79-a0ea-4067-a419-360a475a1914
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=5a6c7c7d-1a97-457d-83c6-8ee369f55e3f
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=5a6c7c7d-1a97-457d-83c6-8ee369f55e3f
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=f8aeff22-92e0-4c06-baf3-3c9a444ab23a
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=f8aeff22-92e0-4c06-baf3-3c9a444ab23a
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=f8aeff22-92e0-4c06-baf3-3c9a444ab23a
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=f8aeff22-92e0-4c06-baf3-3c9a444ab23a
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=3826923d-574f-479a-a22c-8bc64f87ac45
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=3826923d-574f-479a-a22c-8bc64f87ac45
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=c06e4ffa-c812-44e1-90d6-a4e06783955e
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=c06e4ffa-c812-44e1-90d6-a4e06783955e
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=c06e4ffa-c812-44e1-90d6-a4e06783955e
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=c06e4ffa-c812-44e1-90d6-a4e06783955e
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=a9d9e313-9fa9-4753-9548-9f5c4d4a22c2
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=a9d9e313-9fa9-4753-9548-9f5c4d4a22c2
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=847c3bd1-4c5c-469e-96b3-a566ea8f6bef
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=847c3bd1-4c5c-469e-96b3-a566ea8f6bef
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=847c3bd1-4c5c-469e-96b3-a566ea8f6bef
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=847c3bd1-4c5c-469e-96b3-a566ea8f6bef
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=b14a1575-7361-426d-bb31-4ad3480e5d8c
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=b14a1575-7361-426d-bb31-4ad3480e5d8c
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=d0bd0ed1-5e20-4948-9c65-809c97cba901
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=d0bd0ed1-5e20-4948-9c65-809c97cba901
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=d0bd0ed1-5e20-4948-9c65-809c97cba901
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=d0bd0ed1-5e20-4948-9c65-809c97cba901
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=fa65c444-1820-4570-af43-a7dad33b99ae
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=fa65c444-1820-4570-af43-a7dad33b99ae
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=1b137194-0672-4c2c-952a-84db85f0d1b8
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=1b137194-0672-4c2c-952a-84db85f0d1b8
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=1b137194-0672-4c2c-952a-84db85f0d1b8
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=1b137194-0672-4c2c-952a-84db85f0d1b8
+2026-10-31 21:36:28 [debug    ] command_registry_loaded        alias_count=0 command_count=0
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=a9b1b2b9-1183-493d-9769-80052af327df
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=a9b1b2b9-1183-493d-9769-80052af327df
+2026-10-31 21:36:28 [info     ] connection_created             connection_id=bd53776b-9bfe-4345-8f82-9628077f1169
+2026-10-31 21:36:28 [debug    ] response_sender_started        connection_id=bd53776b-9bfe-4345-8f82-9628077f1169
+2026-10-31 21:36:28 [debug    ] response_sender_cancelled      connection_id=bd53776b-9bfe-4345-8f82-9628077f1169
+2026-10-31 21:36:28 [info     ] connection_dropped             connection_id=bd53776b-9bfe-4345-8f82-9628077f1169
+         205178 function calls (205177 primitive calls) in 0.488 seconds
+
+   Ordered by: cumulative time
+   List reduced from 321 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.505    0.505 runners.py:169(run)
+        3    0.000    0.000    0.504    0.168 base_events.py:683(run_until_complete)
+        1    0.000    0.000    0.504    0.504 runners.py:87(run)
+        3    0.000    0.000    0.504    0.168 base_events.py:672(run_forever)
+       66    0.003    0.000    0.504    0.008 base_events.py:1977(_run_once)
+       66    0.000    0.000    0.499    0.008 events.py:92(_run)
+       66    0.001    0.000    0.499    0.008 {method 'run' of '_contextvars.Context' objects}
+       31    0.000    0.000    0.432    0.014 <string>:7(run)
+       20    0.012    0.001    0.355    0.018 r18-baseline-harness.py:216(measure_inbound)
+     2000    0.049    0.000    0.326    0.000 server_facade.py:231(_handle_raw)
+     2000    0.005    0.000    0.145    0.000 __init__.py:304(loads)
+     2000    0.013    0.000    0.138    0.000 decoder.py:340(decode)
+     2000    0.114    0.000    0.114    0.000 decoder.py:351(raw_decode)
+       30    0.016    0.001    0.077    0.003 r18-baseline-harness.py:246(measure_outbound)
+       30    0.009    0.000    0.054    0.002 connection.py:198(_response_sender)
+     2000    0.009    0.000    0.044    0.000 handler.py:109(parse_player_message)
+     2000    0.012    0.000    0.033    0.000 minecraft.py:197(from_event_body)
+     2000    0.004    0.000    0.028    0.000 service.py:191(is_tool_player_channel_message)
+       70    0.000    0.000    0.028    0.000 _native.py:171(meth)
+       70    0.000    0.000    0.027    0.000 _base.py:193(_proxy_to_logger)
+     2000    0.012    0.000    0.024    0.000 classifier.py:29(is_tool_player_channel_message)
+     2020    0.007    0.000    0.020    0.000 uuid.py:774(uuid4)
+     2000    0.003    0.000    0.019    0.000 connection.py:47(enqueue_response)
+     2000    0.004    0.000    0.019    0.000 main.py:253(__init__)
+     4020    0.011    0.000    0.018    0.000 events.py:101(emit)
+       70    0.001    0.000    0.017    0.000 _base.py:123(_process_event)
+     2000    0.015    0.000    0.015    0.000 {method 'validate_python' of 'pydantic_core._pydantic_core.SchemaValidator' objects}
+     2000    0.013    0.000    0.015    0.000 server_facade.py:502(_is_error_frame)
+     2000    0.006    0.000    0.015    0.000 connection.py:231(_route_envelope)
+     2020    0.004    0.000    0.012    0.000 queues.py:172(get)
+    12000    0.008    0.000    0.012    0.000 classifier.py:35(<genexpr>)
+    14000    0.012    0.000    0.012    0.000 {method 'startswith' of 'str' objects}
+     2000    0.005    0.000    0.011    0.000 queues.py:156(put_nowait)
+       40    0.000    0.000    0.011    0.000 connection.py:159(drop_connection)
+       70    0.000    0.000    0.009    0.000 _output.py:107(msg)
+       70    0.009    0.000    0.009    0.000 {built-in method builtins.print}
+       70    0.003    0.000    0.009    0.000 dev.py:930(__call__)
+     4000    0.009    0.000    0.009    0.000 {method 'match' of 're.Pattern' objects}
+       20    0.001    0.000    0.008    0.000 connection.py:136(create_connection)
+     2000    0.002    0.000    0.008    0.000 handler.py:130(parse_typed_command)
+     2000    0.004    0.000    0.008    0.000 r18-baseline-harness.py:120(on_outbound_text)
+     2000    0.005    0.000    0.008    0.000 sink.py:43(from_message)
+    22362    0.008    0.000    0.008    0.000 {method 'get' of 'dict' objects}
+     4220    0.003    0.000    0.008    0.000 enum.py:1299(__hash__)
+     4000    0.004    0.000    0.008    0.000 queues.py:114(full)

@@ -6,40 +6,26 @@
 
 面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
 
-本包拥有 WS 传输、数据包协议与字节安全的命令分片（461 字节实测默认上限，部署可以
-进一步降低）。宿主通过 typed `ConnectionHook`、`ResponseSink` 以及可选的 typed
-session/approval 控制回调注入行为，并由 `McbeServerFacade` 驱动整条链路。
+本包负责 WebSocket 传输、请求关联、附加包桥接与字节安全的命令分片。
+新宿主使用 `McbeServer`，在受管理钩子中直接等待命令与能力调用。
+旧入口 `McbeServerFacade` 保持原串行默认行为。模型服务、消息代理、认证与业务历史由宿主负责。
 
-SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属于宿主应用。
-
-```text
-Minecraft 客户端  ←── /wsserver IP:端口 ──→  你的 Python 宿主（本 SDK）
-```
-
-## 游戏内 addon 能力桥接
-
-当宿主需要从世界内取得结构化信息或调用 Script API，而不只是接收玩家聊天时，使用配套的
-TypeScript addon。一条能力调用会走完这条带关联 ID、支持分片的往返链路：
+> **版本范围：** 当前 PyPI 发布版为 `0.2.1`。本文的新入口、v2、元数据与持续流属于尚未发布的当前源码；
+> 请使用下面的可编辑安装，不能通过安装 PyPI `0.2.1` 获得这些能力。
 
 ```text
-Python 宿主
-  → AddonBridgeService.request(capability, payload)
-  → scriptevent mcbews:bridge_req
-  → 基岩版世界内的 addon 能力处理器
-  → MCBEWS_BRIDGE 模拟玩家聊天分片
-  → WebSocket PlayerMessage 流
-  → AddonBridgeSession 按 request_id 重组并完成请求
-  → 宿主渲染结果（tellraw 或 mcbews:text_resp）
+Minecraft 客户端  ←── /wsserver IP:端口 ──→  Python 宿主
 ```
 
-- **为双向通信而设计。** Python 可调用 addon 能力；addon UI 也可经同一桥接将玩家消息传回
-  Python。Python 还可通过 `mcbews:text_resp` 向 addon UI 发送带帧的文本回复。
-- **适配真实传输限制。** 请求和响应携带 `request_id`；大载荷会被分片、再重组，而非假设
-  addon 能直接连接 WebSocket。
-- **职责清晰。** addon 拥有能力注册表；Python 宿主负责认证与授权。桥接本身不是安全边界。
+## 附加包与双向能力
 
-从可运行的 [`addon-server`](./examples/addon-server/) 示例和[桥接协议](./docs/addon-bridge-protocol.zh.md)开始。
-加载配套 addon 的目标世界必须开启 **实验 → 测试版 API**；否则脚本不会加载，能力调用会超时。
+新服务可协商 v2，双向注册能力、发送通知、携带元数据，并持续生产与消费流。
+旧附加包仅回退到已知 v1 方法；必需元数据与流式不会静默降级。
+SDK 管理请求等待与分片，扩展作者只注册处理函数。
+
+附加包加载要求目标世界开启 **实验 → 测试版 API（Beta APIs）**。
+桥接不是安全边界，宿主负责认证与授权。新增接口已经自动化验证，实机与完整兼容矩阵仍待验收，
+不扩大平台或游戏版本支持承诺。
 
 ## 安装
 
@@ -57,9 +43,11 @@ pip install -e ".[dev,docs]"
 
 ## 30 秒体验
 
+以下代码需要安装当前源码。
+
 ```python
 import asyncio
-from mcbe_ws_sdk import McbeServerFacade, NoOpHook
+from mcbe_ws_sdk import McbeServer, NoOpHook
 
 
 class MyHook(NoOpHook):
@@ -71,9 +59,9 @@ class MyHook(NoOpHook):
 
 
 async def main() -> None:
-    facade = McbeServerFacade(hook=MyHook())
-    print(f"ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
-    await facade.run_lifetime()
+    server = McbeServer(hook=MyHook())
+    print(f"ws://{server.settings.websocket.host}:{server.settings.websocket.port}")
+    await server.run_lifetime()
 
 
 if __name__ == "__main__":
@@ -100,6 +88,8 @@ python examples/basic-server/server.py
 | 页面 | 内容 |
 |------|------|
 | [快速开始](./docs/getting-started.zh.md) | 安装、5 分钟上手、最小回声机器人、FAQ |
+| [迁移指南](./docs/migration.zh.md) | 新旧入口、顺序、返回值、回退与取消 |
+| [扩展作者](./docs/extension-authors.zh.md) | 自定义能力、元数据、事件与流式 |
 | [架构](./docs/architecture.zh.md) | 分层栈与依赖倒置 |
 | [协议](./docs/addon-bridge-protocol.zh.md) | mcbews v1 桥接线格式 |
 | [API 参考](./docs/reference.zh.md) | 从源码生成（导读见中文站） |
@@ -123,13 +113,13 @@ ruff check --no-cache src tests examples
 mypy --no-incremental src
 pytest -p no:cacheprovider -q
 python tools/format.py          # ruff format+fix（Python）；有 Node 时跑 prettier（Addon）
-python tools/format.py --check  # CI 风格只检查不写入
+python tools/format.py --check  # 持续集成方式，只检查不写入
 ```
 
 v2 Python/TypeScript 跨语言测试需要 Node.js 22，以及
 `npm ci --prefix addon` 安装的依赖。缺少 Node.js 或 TypeScript 时，
-仅调用 TypeScript runner 的测试跳过，纯 Python 测试继续运行。
-本地强制验收命令（必需的 `cross-language` CI job 使用同一模式）：
+仅调用 TypeScript 测试程序 的测试跳过，纯 Python 测试继续运行。
+本地强制验收命令（必需的 `cross-language` 持续集成任务 使用同一模式）：
 
 ```bash
 MCBE_REQUIRE_CROSS_LANGUAGE=1 python -m pytest -p no:cacheprovider -q \
@@ -137,7 +127,7 @@ MCBE_REQUIRE_CROSS_LANGUAGE=1 python -m pytest -p no:cacheprovider -q \
   tests/unit/test_v2_contract.py tests/unit/test_v2_tooling.py
 ```
 
-强制模式缺少任一工具均失败；runner 或协议执行错误在普通开发模式下也不会跳过。
+强制模式缺少任一工具均失败；测试程序或协议执行错误在普通开发模式下也不会跳过。
 
 ## License
 

@@ -2,9 +2,13 @@
 
 # MCBE WS Bridge Addon
 
-This reference Addon is released with `mcbe-ws-sdk` `0.2.1`. Its
-`scripts/bridge/protocol.ts` projection is checked against the installed
-Python manifest and wire vectors; update both sides through the SDK contract.
+This checkout includes unreleased v2, metadata and stream support; it is not
+a claim that PyPI `0.2.1` contains those changes. `scripts/bridge/protocol.ts`
+is checked against the Python manifest and vectors; v1 and v2 have separate contracts.
+New hosts use `McbeServer`; `McbeServerFacade` retains its defaults. See
+[extension authors](../docs/extension-authors.md) and [migration](../docs/migration.md).
+Live-game acceptance and the full compatibility matrix remain pending; no new
+platform or game-version support is claimed.
 
 Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart of the
 `mcbe-ws-sdk` Python package. This addon handles the protocol layer:
@@ -106,14 +110,16 @@ The addon ships a ready-to-use capability registry
 | ------------------------ | ------------------------- | ----------------------------------------------------------------------------- |
 | `get_player_snapshot`    | `getPlayerSnapshot.ts`    | Get a player snapshot (name, health, tags, coordinates, dimension, game mode) |
 | `get_inventory_snapshot` | `getInventorySnapshot.ts` | Get a player inventory snapshot (slots, item ID, count, custom name)          |
-| `run_world_command`      | `runWorldCommand.ts`      | Run an MC command in the world (guarded by the `commandSafety.ts` blacklist)  |
+| `run_world_command`      | `runWorldCommand.ts`      | Optional world-command handler; register explicitly, guarded by `commandSafety.ts`  |
 
 Developers add custom capabilities with `registerCapability(name, handler)`.
 They coexist with the built-ins and are looked up by name by `router.ts`.
 Editing the source table in `capabilities/index.ts` remains available for
 compile-time additions; new names added at runtime must use `registerCapability`.
 
-> Note: `find_entities` is not yet bundled. The current protocol's `scriptevent` does not carry the source-player context, while an entity query needs that context to scope the search; once the protocol supports player-sourced scriptevents, this capability will be added.
+> Note: `find_entities` is not bundled. Transport attribution and metadata
+> identity do not replace player authorization; hosts must define and validate
+> the scope of custom entity queries.
 
 ## Trust boundary
 

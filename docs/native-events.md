@@ -1,7 +1,9 @@
 # Native events and business interception
 
-Native extensions require explicit reliable dispatch; legacy callback ordering
-and default construction remain unchanged. Existing PlayerMessage hooks continue
+This page describes the unreleased checkout, not PyPI `0.2.1`. See the [migration guide](migration.md) for installation and compatibility.
+
+Native extensions require reliable dispatch, enabled by default in `McbeServer`.
+Legacy `McbeServerFacade` callback ordering and defaults remain unchanged. Existing PlayerMessage hooks continue
 working. Generic events use their wire names without adding WsEventType members.
 
 ## Subscribe per connection
@@ -9,10 +11,9 @@ working. Generic events use their wire names without adding WsEventType members.
 Use these APIs inside on_connected or another managed host callback:
 
 ~~~python
-from mcbe_ws_sdk.config import DispatchSettings, GatewaySettings
+from mcbe_ws_sdk import McbeServer
 from mcbe_ws_sdk.gateway.hook import NoOpHook
 from mcbe_ws_sdk.gateway.native_events import InterceptResult, NativeEvent
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 
 class HostHook(NoOpHook):
     async def on_connected(self, state):
@@ -25,10 +26,7 @@ class HostHook(NoOpHook):
     def filter_message(self, event: NativeEvent):
         return InterceptResult("allow")
 
-facade = McbeServerFacade(
-    settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable")),
-    hook=HostHook(),
-)
+server = McbeServer(hook=HostHook())
 ~~~
 
 For another game event, pass its exact wire name and optionally implement

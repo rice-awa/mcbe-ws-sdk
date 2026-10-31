@@ -1,0 +1,319 @@
+[
+  {
+    "name": "environment-py311",
+    "command": "/tmp/r18-envs/py311/bin/python -c 'import sys,platform; from importlib.metadata import distributions; print(sys.version); print(platform.platform()); print(\"\\n\".join(sorted(f\"{d.metadata[\"Name\"]}=={d.version}\" for d in distributions())))'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 1,
+    "seconds": 0.03
+  },
+  {
+    "name": "environment-py312",
+    "command": "/tmp/r18-envs/py312/bin/python -c 'import sys,platform; from importlib.metadata import distributions; print(sys.version); print(platform.platform()); print(\"\\n\".join(sorted(f\"{d.metadata[\"Name\"]}=={d.version}\" for d in distributions())))'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.57
+  },
+  {
+    "name": "environment-py313",
+    "command": "/tmp/r18-envs/py313/bin/python -c 'import sys,platform; from importlib.metadata import distributions; print(sys.version); print(platform.platform()); print(\"\\n\".join(sorted(f\"{d.metadata[\"Name\"]}=={d.version}\" for d in distributions())))'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.37
+  },
+  {
+    "name": "environment-py314",
+    "command": "/tmp/r18-envs/py314/bin/python -c 'import sys,platform; from importlib.metadata import distributions; print(sys.version); print(platform.platform()); print(\"\\n\".join(sorted(f\"{d.metadata[\"Name\"]}=={d.version}\" for d in distributions())))'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.28
+  },
+  {
+    "name": "v1-generated",
+    "command": "/tmp/r18-envs/py311/bin/python tools/generate_protocol_assets.py --check",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.13
+  },
+  {
+    "name": "protocol-names",
+    "command": "/tmp/r18-envs/py311/bin/python tools/check_protocol_names.py",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 1.59
+  },
+  {
+    "name": "v2-generated",
+    "command": "/tmp/r18-envs/py311/bin/python tools/generate_v2_assets.py --check",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.08
+  },
+  {
+    "name": "ruff",
+    "command": "/tmp/r18-envs/py311/bin/python -m ruff check --no-cache src tests examples tools/check_dist.py tools/probe_installed_contract.py",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.12
+  },
+  {
+    "name": "mypy",
+    "command": "/tmp/r18-envs/py311/bin/python -m mypy --no-incremental src",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 8.81
+  },
+  {
+    "name": "build",
+    "command": "/tmp/r18-envs/py311/bin/python -m build --sdist --wheel --outdir /tmp/r18-candidate/dist",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 31.68
+  },
+  {
+    "name": "twine",
+    "command": "/tmp/r18-envs/py311/bin/python -m twine check /tmp/r18-candidate/dist/mcbe_ws_sdk-0.2.1-py3-none-any.whl /tmp/r18-candidate/dist/mcbe_ws_sdk-0.2.1.tar.gz",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 1.64
+  },
+  {
+    "name": "check-dist",
+    "command": "/tmp/r18-envs/py311/bin/python tools/check_dist.py /tmp/r18-candidate/dist",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.24
+  },
+  {
+    "name": "rebuild-sdist",
+    "command": "/tmp/r18-envs/py311/bin/python -m build --wheel --outdir /tmp/r18-candidate/rebuilt /tmp/r18-candidate/unpacked/mcbe_ws_sdk-0.2.1",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 16.59
+  },
+  {
+    "name": "venv-dist",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/installed-dist",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.05
+  },
+  {
+    "name": "install-dist",
+    "command": "uv pip install --python /tmp/r18-envs/installed-dist/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple --constraint /tmp/r18-dependencies.txt /tmp/r18-candidate/dist/mcbe_ws_sdk-0.2.1-py3-none-any.whl",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.55
+  },
+  {
+    "name": "installed-contract-dist",
+    "command": "/tmp/r18-envs/installed-dist/bin/python /tmp/r18-candidate/tools/probe_installed_contract.py",
+    "cwd": "/tmp/r18-installed-cwd",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 1.74
+  },
+  {
+    "name": "installed-environment-dist",
+    "command": "uv pip freeze --python /tmp/r18-envs/installed-dist/bin/python",
+    "cwd": "/tmp/r18-installed-cwd",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.05
+  },
+  {
+    "name": "venv-rebuilt",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/installed-rebuilt",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.03
+  },
+  {
+    "name": "install-rebuilt",
+    "command": "uv pip install --python /tmp/r18-envs/installed-rebuilt/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple --constraint /tmp/r18-dependencies.txt /tmp/r18-candidate/rebuilt/mcbe_ws_sdk-0.2.1-py3-none-any.whl",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.19
+  },
+  {
+    "name": "installed-contract-rebuilt",
+    "command": "/tmp/r18-envs/installed-rebuilt/bin/python /tmp/r18-candidate/tools/probe_installed_contract.py",
+    "cwd": "/tmp/r18-installed-cwd",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 1.34
+  },
+  {
+    "name": "installed-environment-rebuilt",
+    "command": "uv pip freeze --python /tmp/r18-envs/installed-rebuilt/bin/python",
+    "cwd": "/tmp/r18-installed-cwd",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.03
+  },
+  {
+    "name": "pytest-py314",
+    "command": "/tmp/r18-envs/py314/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/tmp/r18-matrix/py314",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-py314"
+    },
+    "exit_code": 1,
+    "seconds": 548.31
+  },
+  {
+    "name": "pytest-py313",
+    "command": "/tmp/r18-envs/py313/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/tmp/r18-matrix/py313",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-py313"
+    },
+    "exit_code": 1,
+    "seconds": 554.07
+  },
+  {
+    "name": "pytest-py312",
+    "command": "/tmp/r18-envs/py312/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/tmp/r18-matrix/py312",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-py312"
+    },
+    "exit_code": 1,
+    "seconds": 556.29
+  },
+  {
+    "name": "pytest-py311",
+    "command": "/tmp/r18-envs/py311/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/tmp/r18-matrix/py311",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-py311"
+    },
+    "exit_code": 1,
+    "seconds": 564.13
+  },
+  {
+    "name": "venv-ws12",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/ws12",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.02
+  },
+  {
+    "name": "install-ws12",
+    "command": "uv pip install --python /tmp/r18-envs/ws12/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/r18-dependencies-ws.txt 'websockets~=12.0'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 15.03
+  },
+  {
+    "name": "environment-ws12",
+    "command": "uv pip freeze --python /tmp/r18-envs/ws12/bin/python",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.02
+  },
+  {
+    "name": "pytest-ws12",
+    "command": "/tmp/r18-envs/ws12/bin/python -m pytest -p no:cacheprovider tests/unit/test_server_facade.py tests/unit/test_delivery.py tests/unit/test_server_entry.py -q",
+    "cwd": "/tmp/r18-candidate",
+    "env": {
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-ws12",
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1"
+    },
+    "exit_code": 0,
+    "seconds": 2.83
+  },
+  {
+    "name": "venv-ws14",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/ws14",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.02
+  },
+  {
+    "name": "install-ws14",
+    "command": "uv pip install --python /tmp/r18-envs/ws14/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/r18-dependencies-ws.txt 'websockets~=14.0'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 2.06
+  },
+  {
+    "name": "environment-ws14",
+    "command": "uv pip freeze --python /tmp/r18-envs/ws14/bin/python",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.02
+  },
+  {
+    "name": "pytest-ws14",
+    "command": "/tmp/r18-envs/ws14/bin/python -m pytest -p no:cacheprovider tests/unit/test_server_facade.py tests/unit/test_delivery.py tests/unit/test_server_entry.py -q",
+    "cwd": "/tmp/r18-candidate",
+    "env": {
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-ws14",
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1"
+    },
+    "exit_code": 0,
+    "seconds": 2.4
+  },
+  {
+    "name": "venv-ws16",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/ws16",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.02
+  },
+  {
+    "name": "install-ws16",
+    "command": "uv pip install --python /tmp/r18-envs/ws16/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/r18-dependencies-ws.txt 'websockets~=16.0'",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 8.06
+  },
+  {
+    "name": "environment-ws16",
+    "command": "uv pip freeze --python /tmp/r18-envs/ws16/bin/python",
+    "cwd": "/tmp/r18-candidate",
+    "env": {},
+    "exit_code": 0,
+    "seconds": 0.02
+  },
+  {
+    "name": "pytest-ws16",
+    "command": "/tmp/r18-envs/ws16/bin/python -m pytest -p no:cacheprovider tests/unit/test_server_facade.py tests/unit/test_delivery.py tests/unit/test_server_entry.py -q",
+    "cwd": "/tmp/r18-candidate",
+    "env": {
+      "COVERAGE_FILE": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/docs/plans/ws-sdk-refactor/records/R18-automation/.coverage-ws16",
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1"
+    },
+    "exit_code": 0,
+    "seconds": 2.36
+  }
+]

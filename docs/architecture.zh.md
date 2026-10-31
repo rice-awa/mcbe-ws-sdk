@@ -1,102 +1,69 @@
 # 架构
 
-SDK 自底向上分层。传输层之上的每一层都可注入，宿主可以覆盖任意默认实现，且 SDK
-不会导入宿主代码：
+本文描述尚未发布的当前源码。PyPI `0.2.1` 的范围及不变的旧默认值见[迁移指南](migration.md)。
 
 ```text
-McbeServerFacade          ← 宿主入口；拥有完整 WS 生命周期
-├── ConnectionManager     ← 活跃连接 + 每连接一条 response-sender 协程
-│   ├── ConnectionState   ← 与传输无关的身份（id、send_payload、队列）
-│   └── ResponseSink      ← 宿主路由 OutboundText / SystemNotification
-├── MinecraftProtocolHandler  ← 解析 PlayerMessage、解析命令、渲染状态行
-│   └── CommandRegistry
-├── EventBus              ← 按 WsEventType 分键的进程内 pub/sub
-├── ConnectionHook        ← 宿主实现的六个 typed 生命周期钩子
-├── AddonBridgeService    ← ScriptEvent 桥 + 分片重组
-│   └── AddonBridgeSession
-├── FlowControlMiddleware ← 字节安全的 tellraw/scriptevent 分片（461 B 实测默认上限）
-└── McbeOutboundDelivery  ← 统一出站适配器
+McbeServer               新入口：可靠调度与 V2Bridge
+└── McbeServerFacade      传输生命周期与依赖注入
+    ├── ConnectionManager / ConnectionState
+    ├── ConnectionRuntime：有界业务、观察与发送调度
+    ├── NativeCommandClient / RequestTable：回复关联与截止时间
+    ├── MinecraftProtocolHandler / CommandRegistry
+    ├── ConnectionHook / ResponseSink：宿主行为与渲染
+    ├── AddonBridgeService：v1 能力与可选业务扩展
+    ├── V2Bridge：协商、双向能力、元数据与流式
+    └── McbeOutboundDelivery / FlowControlMiddleware：字节安全的发送
 ```
 
-SDK **没有**自带 `PlayerSession`。多人会话隔离是**宿主**职责：网关只透传
-`PlayerMessageEvent.sender`；宿主按 `(connection_id, sender)` 分桶历史 / 锁 /
-上下文。
+## 入口与职责
 
-## 依赖倒置
+`McbeServer` 沿用原入口的仅限关键字参数注入与生命周期接口，选择可靠调度并提供 v2 桥接。
+`McbeServerFacade()` 保持旧默认值；也可在旧入口显式注入可靠调度与 v2。
+默认响应接收器保持中性，需要将 `OutboundText`、`SystemNotification` 渲染成游戏命令时，
+由宿主提供接收器。
 
-`McbeServerFacade.__init__` 是 keyword-only 的；每个协作者在 `None` 时折叠为网关默认值。
-宿主只需子类化自己关心的部分：
+SDK 管理传输、请求等待、任务生命周期、顺序和分片状态。
+宿主管理授权、历史与业务状态。SDK 没有自带 `PlayerSession`；
+应用状态使用本次 `PlayerMessageEvent.sender`，按 `(connection_id, sender)` 隔离。
 
-- `NoOpHook` / `ConnectionHook`
-- `DefaultResponseSink` / `ResponseSink`
+## 受管理调度
 
-`ConnectionHook` 共六个纯副作用钩子（全部 `-> None`）。聊天钩子签名为：
+初始化先发送握手并订阅 `PlayerMessage`，成功后才投递连接通知。欢迎语仍由宿主发送。
+读取循环先分类并关联命令回复、协商与保留附加包消息，再将业务回调加入队列。
+受管理回调内等待命令或能力时，读取循环仍可接收对应回复。
 
-```python
-async def on_player_message(
-    self,
-    state: ConnectionState,
-    player_event: PlayerMessageEvent,
-    parsed: ParsedCommand | None = None,
-) -> None: ...
-```
+同一玩家的聊天经过拦截器与钩子时保持先进先出，不同玩家可并发推进。
+其他原生业务事件共用一个先进先出队列；观察者使用独立的有界队列。
+业务或观察超载会明确拒绝。回调异常被隔离；断连会取消并等待受管理任务，
+使等待项失败并释放缓存。这与旧读取循环逐个等待回调的顺序不同，详见[迁移指南](migration.md)。
 
-`parsed` 是 registry 的预解析匹配结果（若有）；**不是**"已消费"布尔返回值 ——
-宿主自行决定如何处理自由聊天与命令。
+钩子返回 `None`。`on_player_message(state, event, parsed=None)` 的 `parsed`
+是可选注册表匹配结果，不是“已消费”标记。
+UI 聊天使用 `on_ui_chat_reassembled(state, UiChatMessage)`；
+可选 `AddonControlHook` 接收会话与审批数据对象。
+旧三参数 UI 回调需要显式使用 `LegacyUiChatHookAdapter`。
 
-typed UI 回调签名是 `on_ui_chat_reassembled(state, UiChatMessage)`，DTO 显式携带
-`cid`/`conversation_id`。认证后的 session/approval 帧通过可选的
-`AddonControlHook.on_addon_control_message` 回调交给宿主。旧三参数 UI 回调只能通过
-显式的 `LegacyUiChatHookAdapter` 接入。
+## 发送与协议
 
-## 每连接消息路由
+响应发送器用 `RouteEnvelope.from_message()` 包装队列消息，再调用接收器的两个 `on_*` 方法。
+宿主可为 `McbeOutboundDelivery` 传入 `state.send_bulk`，将长文本与请求分开调度。
+有界发送器保留控制容量，并保证大批量发送得到公平调度。
 
-1. `McbeServerFacade._on_connection` 创建连接状态，启动 `_response_sender` 协程，
-   并发送 handshake + subscribe。二者成功后先 emit `WsEventType.CONNECTED`，
-   再调用 `hook.on_connected`（welcome 由宿主在该 hook 中负责发送，facade 本身
-   不发欢迎语）。
-2. `_handle_raw` 对每帧入站数据分类：
-   - **error** → `WsEventType.ERROR` + `hook.on_error`
-   - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
-   - **addon 前缀匹配** → `AddonBridgeService`（桥接 / UI 聊天重组）
-   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` +
-     `hook.on_player_message(state, event, parsed=...)`
-3. response-sender 排空 `state.response_queue`，经 `RouteEnvelope.from_message()` 包装后
-   内联路由到 sink 的两个 `on_*` 方法（协议上不含 `dispatch`）。
-4. 宿主 sink 使用 `McbeOutboundDelivery` 把排队消息变成 MC WebSocket 负载。
+最终命令行默认预算为 461 个 UTF-8 字节，只能降低。
+tellraw 和带帧的 ScriptEvent 可以拆分；原生命令保持原子，超限拒绝。
+v2 上行使用自身载体的限制。
 
-## 流控 — 461 B 实测可配置上限
+`McbewsV1Profile` / `MCBEWS_V1` 定义旧协议，不是可替换运行时接口。
+安装包内的清单和测试向量分别定义 v1、v2。
+`V2Bridge` 按连接协商，只为已知方法回退到 v1；必需元数据和流式不支持时明确失败。
+重连建立新会话，不重放请求。具体格式和资源上限见[v1](addon-bridge-protocol.md)与[v2](protocol-v2.md)。
 
-`FlowControlMiddleware` 强制执行配置的 MCBE `commandLine` 字节预算（默认 461 字节，
-实测得出；部署可以进一步降低）：
+## 附加包要求与信任边界
 
-- `chunk_tellraw()` / `chunk_scriptevent()` — 带字节安全保护的语义分句
-- `chunk_raw_command()` — 不做语义切分；超限抛出 `FrameTooLargeError`
-- `chunk_framed_scriptevent()` — 两遍：先切分再带 `i/n` 元数据重编码
+配套附加包需要目标世界开启 **实验 → 测试版 API（Beta APIs）**。
+否则脚本不加载，能力请求会超时。详见[附加包说明](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md)。
+桥接与元数据身份都不是认证边界；宿主必须认证并授权调用方。
+协议自动化验证不扩大实机平台或版本支持承诺。
 
-## 协议 profile
-
-`McbewsV1Profile` 是唯一具体运行时 profile（模块级单例 `MCBEWS_V1`）。安装包内的
-`manifest.json`/`vectors.json` 是权威来源，并生成 reference Addon 的 `protocol.ts`
-和 Python fixture。wire ID、schema 轴及安全上限由 manifest 固定；只有降低实测 command
-预算和响应延迟属于运行配置。`AddonBridgeProfile` 只是 deprecated type alias，不是可替换
-运行时 seam。线格式详见[协议](addon-bridge-protocol.md)。
-
-## Addon 桥运行要求
-
-配套 Script addon 仅在世界开启 **实验 → 测试版 API**（Beta APIs）时加载。
-未开启时 `scriptEventReceive` 不会触发，能力请求会超时。详见
-[addon/README.zh.md — 在世界中启用](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md#%E5%9C%A8%E4%B8%96%E7%95%8C%E4%B8%AD%E5%90%AF%E7%94%A8)。
-
-## Addon 桥信任边界
-
-桥接层**不是**安全边界。宿主必须自行认证 / 授权谁可以调用能力；addon 仅在
-世界命令路径上提供防御性 allow/denylist。详见
-[addon/README.md — Trust boundary](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#trust-boundary)
-（中文见 [addon/README.zh.md — 信任边界](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md#%E4%BF%A1%E4%BB%BB%E8%BE%B9%E7%95%8C)）。
-
-## 不导入宿主
-
-SDK 从不导入父级宿主应用。`ConnectionState.send_payload` 是不透明的
-`Callable[[str], Awaitable[None]]`——facade 把它接到 `websocket.send`。
-宿主专有的装帧（`connection_id`、时间戳、LLM 消息 id）留在宿主侧。
+SDK 不导入宿主应用模块。`ConnectionState.send_payload` 是由入口连接到传输层的异步可调用对象；
+宿主消息编号、时间戳与业务封装留在 SDK 之外。

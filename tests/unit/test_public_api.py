@@ -10,6 +10,17 @@ import mcbe_ws_sdk
 def test_public_api_snapshot() -> None:
     assert set(mcbe_ws_sdk.__all__) == {
         "__version__",
+        "McbeServer",
+        "ParsedCommand",
+        "V2Bridge",
+        "V2Endpoint",
+        "NegotiatedConnection",
+        "NegotiationError",
+        "IncomingStream",
+        "StreamError",
+        "StreamRegistry",
+        "StreamRegistration",
+        "StreamHandler",
         "AddonBridgeClient",
         "AddonBridgeProfile",
         "AddonBridgeService",

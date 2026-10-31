@@ -1,53 +1,33 @@
 # mcbe-ws-sdk
 
-Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
+A WebSocket communication SDK for Minecraft Bedrock. Start new hosts with
+`McbeServer` and await commands or capabilities directly; the SDK owns request
+correlation, tasks and fragments. Model services, brokers, authentication and
+business history stay in the host.
 
-It owns the **WS transport**, **packet protocol**, and **byte-safe command
-chunking** (461-byte empirically measured default ceiling; deployments may lower
-it). Your host injects behaviour through two
-protocols — `ConnectionHook` and `ResponseSink` — and drives the stack with
-`McbeServerFacade`.
+> **Version scope:** the current PyPI release is `0.2.1`. The new entry point,
+> v2, metadata and continuous streams on this site describe the unreleased
+> checkout and require an editable install. PyPI `0.2.1` does not contain them.
 
-There is **no** message broker and **no** LLM worker inside the SDK. Those stay
-in the host application.
+## Choose an entry
 
-```text
-Minecraft client  ←── /wsserver IP:port ──→  Your Python host (this SDK)
-```
+| Need | Entry |
+| --- | --- |
+| New host, await replies in callbacks | `McbeServer`, reliable dispatch and v2 discovery by default |
+| Preserve serial callback ordering | `McbeServerFacade`, defaults unchanged |
+| Custom capabilities and metadata | Bidirectional registry and negotiated v2 requests |
+| Continuous data | Async streams after negotiating `stream/1` |
+| Native events | `state.native_events` subscriptions and interception |
 
-## What you can build
+Old addons fall back only to known v1 methods; metadata and streams never
+silently downgrade. Addon worlds must enable **Experiments → Beta APIs**.
+Automated coverage does not imply completed live-game acceptance, the full
+version matrix, or new platform support.
 
-| You want to… | This SDK? |
-|--------------|-----------|
-| Listen to player chat and auto-reply | ✅ |
-| Run commands like `time set day` from Python | ✅ |
-| Read player inventory / position via the addon | ✅ |
-| Build an AI chat bot (you own the LLM part) | ✅ |
-| Use it as a ready-made AI server | ❌ Host app owns that |
-| Write a Java Edition plugin | ❌ Bedrock WebSocket only |
+## Start here
 
-## One-way capability model
-
-The SDK sends bridge requests from the Python host to the Minecraft addon and
-receives responses. There is **no inbound capability-registry dispatch** — the
-addon side owns all capability handling.
-
-The sole built-in protocol profile is `McbewsV1Profile` (`MCBEWS_V1`).
-
-`ConnectionHook` exposes six typed lifecycle hooks; UI chat uses
-`on_ui_chat_reassembled(state, UiChatMessage)`. Authenticated session/approval
-frames use the optional `AddonControlHook` callback.
-
-## Dual interface
-
-| Layer | How you use it |
-|-------|----------------|
-| High-level | Implement `ConnectionHook` + `ResponseSink`, run `McbeServerFacade` |
-| Low-level | Subscribe to `EventBus` keyed by `WsEventType` |
-
-## Next steps
-
-- **[Getting Started](getting-started.md)** — install, 5-minute walkthrough, minimal echo bot, FAQ
-- [Architecture](architecture.md) — layer stack and dependency inversion
-- [Protocol](addon-bridge-protocol.md) — mcbews v1 bridge wire format
-- [API Reference](reference.md) — auto-generated from source
+- [Getting started](getting-started.md): install the checkout, connect, run commands and query inventory.
+- [Migration](migration.md): old interfaces, callback ordering, defaults and failures.
+- [Extension authors](extension-authors.md): capabilities, metadata, subscriptions and streams.
+- [Architecture](architecture.md), [v1 protocol](addon-bridge-protocol.md), [v2 contract](protocol-v2.md).
+- [API reference](reference.md): generated from the English source documentation.

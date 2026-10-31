@@ -1,0 +1,183 @@
+{
+  "environment": {
+    "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "mcbe_ws_sdk": "0.1.0",
+    "pydantic": "2.13.4",
+    "websockets": "16.1.1",
+    "structlog": "26.1.0"
+  },
+  "parameters": {
+    "runs": 5,
+    "messages_per_run": 30,
+    "payload_bytes": 4096,
+    "command_line_byte_budget": 461,
+    "memory_method": "tracemalloc peak of one extra identical run per scenario"
+  },
+  "scenarios": {
+    "chunking": {
+      "summary": {
+        "runs": 5,
+        "throughput_per_s_median": 10.351547050128424,
+        "throughput_per_s_min": 7.163340034897525,
+        "throughput_per_s_max": 13.267009806043228,
+        "throughput_run_to_run_variation_pct": 58.9638412653496,
+        "latency_ms_median": 84.77890150243184,
+        "latency_ms_p95": 210.44248864891398,
+        "latency_samples": 150
+      },
+      "memory_peak_bytes": 60837,
+      "extra": {
+        "input_utf8_bytes": 4096,
+        "commands_total": 360,
+        "commands_per_message": 12.0,
+        "output_utf8_bytes": 239970,
+        "bytes_per_message": 7999.0,
+        "command_line_byte_budget": 461
+      },
+      "runs": [
+        {
+          "count": 30,
+          "elapsed_s": 4.1879904979869025,
+          "throughput_per_s": 7.163340034897525,
+          "latency_ms_median": 103.58512549646548,
+          "latency_ms_p95": 233.38793310213075
+        },
+        {
+          "count": 30,
+          "elapsed_s": 3.5748936329982826,
+          "throughput_per_s": 8.391858074624402,
+          "latency_ms_median": 101.92220750104752,
+          "latency_ms_p95": 223.23248530119582
+        },
+        {
+          "count": 30,
+          "elapsed_s": 2.3549568520029425,
+          "throughput_per_s": 12.7390869070422,
+          "latency_ms_median": 78.12293199822307,
+          "latency_ms_p95": 100.39955045176609
+        },
+        {
+          "count": 30,
+          "elapsed_s": 2.8981175330336555,
+          "throughput_per_s": 10.351547050128424,
+          "latency_ms_median": 84.9763320038619,
+          "latency_ms_p95": 160.9408340496884
+        },
+        {
+          "count": 30,
+          "elapsed_s": 2.2612480459865765,
+          "throughput_per_s": 13.267009806043228,
+          "latency_ms_median": 73.42893999884836,
+          "latency_ms_p95": 101.50338714956888
+        }
+      ]
+    },
+    "inbound": {
+      "summary": {
+        "runs": 5,
+        "throughput_per_s_median": 9492.811737728229,
+        "throughput_per_s_min": 6873.088422995859,
+        "throughput_per_s_max": 10068.999507315648,
+        "throughput_run_to_run_variation_pct": 33.66664348369999,
+        "latency_ms_median": 0.08481300028506666,
+        "latency_ms_p95": 0.15542569963145048,
+        "latency_samples": 150
+      },
+      "memory_peak_bytes": 39329,
+      "extra": {
+        "payload_utf8_bytes": 9326
+      },
+      "runs": [
+        {
+          "count": 30,
+          "elapsed_s": 0.0037510449983528815,
+          "throughput_per_s": 7997.771291246379,
+          "latency_ms_median": 0.0856474980537314,
+          "latency_ms_p95": 0.17053449773811732
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.00316028599627316,
+          "throughput_per_s": 9492.811737728229,
+          "latency_ms_median": 0.08444949708064087,
+          "latency_ms_p95": 0.12791575063602056
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.0031177060009213164,
+          "throughput_per_s": 9622.459587637408,
+          "latency_ms_median": 0.08416999480687082,
+          "latency_ms_p95": 0.09823495165619531
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.002979441997013055,
+          "throughput_per_s": 10068.999507315648,
+          "latency_ms_median": 0.08538199836038984,
+          "latency_ms_p95": 0.10584199990262275
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.004364849999547005,
+          "throughput_per_s": 6873.088422995859,
+          "latency_ms_median": 0.08437149881501682,
+          "latency_ms_p95": 0.2567382984125283
+        }
+      ]
+    },
+    "outbound": {
+      "summary": {
+        "runs": 5,
+        "throughput_per_s_median": 29431.010227760795,
+        "throughput_per_s_min": 24778.56232366992,
+        "throughput_per_s_max": 41936.516854662834,
+        "throughput_run_to_run_variation_pct": 58.298897653226575,
+        "latency_ms_median": 0.5721894995076582,
+        "latency_ms_p95": 0.9607458992832106,
+        "latency_samples": 150
+      },
+      "memory_peak_bytes": 22897,
+      "extra": {
+        "response_queue_maxsize": 31
+      },
+      "runs": [
+        {
+          "count": 30,
+          "elapsed_s": 0.0009240949948434718,
+          "throughput_per_s": 32464.194879749957,
+          "latency_ms_median": 0.5671229992003646,
+          "latency_ms_p95": 0.6770829480956309
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.0010193330017500557,
+          "throughput_per_s": 29431.010227760795,
+          "latency_ms_median": 0.4887965005764272,
+          "latency_ms_p95": 0.5554957988351816
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.000715366993972566,
+          "throughput_per_s": 41936.516854662834,
+          "latency_ms_median": 0.4422860001795925,
+          "latency_ms_p95": 0.5171216969756642
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.0012107239963370375,
+          "throughput_per_s": 24778.56232366992,
+          "latency_ms_median": 0.9190495002258103,
+          "latency_ms_p95": 0.9973526019166457
+        },
+        {
+          "count": 30,
+          "elapsed_s": 0.001117703999625519,
+          "throughput_per_s": 26840.73780719345,
+          "latency_ms_median": 0.8382734995393548,
+          "latency_ms_p95": 0.9182067005895078
+        }
+      ]
+    }
+  }
+}

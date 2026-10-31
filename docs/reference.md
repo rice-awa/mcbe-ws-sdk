@@ -4,6 +4,10 @@ Auto-generated from source via [mkdocstrings](https://mkdocstrings.github.io/).
 Private names (`_*`) are filtered out. Prefer the public re-exports on
 [`mcbe_ws_sdk`][mcbe_ws_sdk] when writing host code.
 
+Start new checkout hosts with `McbeServer`; retain `McbeServerFacade` for its
+legacy defaults. These new exports are unreleased and are not in PyPI `0.2.1`.
+See [migration](migration.md) and [extension authors](extension-authors.md).
+
 ## Public package
 
 ::: mcbe_ws_sdk
@@ -23,6 +27,12 @@ See [native events](native-events.md) for observer, interceptor and subscription
 ::: mcbe_ws_sdk.addon
     options:
       show_submodules: true
+
+## Negotiated v2 and streams
+
+::: mcbe_ws_sdk.profiles.mcbews_v2.runtime
+
+::: mcbe_ws_sdk.profiles.mcbews_v2.streams
 
 ## Flow control
 

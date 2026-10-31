@@ -44,6 +44,8 @@ WHEEL_MAX_BYTES: int = 1 * 1024 * 1024
 REQUIRED_WHEEL_ASSETS: tuple[str, ...] = (
     "mcbe_ws_sdk/profiles/mcbews_v1/manifest.json",
     "mcbe_ws_sdk/profiles/mcbews_v1/vectors.json",
+    "mcbe_ws_sdk/profiles/mcbews_v2/manifest.json",
+    "mcbe_ws_sdk/profiles/mcbews_v2/vectors.json",
 )
 
 
@@ -72,13 +74,19 @@ def check_wheel(path: Path) -> None:
         if asset not in names:
             raise DistributionError(f"wheel is missing canonical protocol asset: {asset}")
     with zipfile.ZipFile(path) as archive:
-        try:
-            manifest = json.loads(archive.read(REQUIRED_WHEEL_ASSETS[0]))
-            vectors = json.loads(archive.read(REQUIRED_WHEEL_ASSETS[1]))
-        except (KeyError, json.JSONDecodeError) as exc:
-            raise DistributionError("wheel canonical protocol assets are not valid JSON") from exc
+        validate_authorities({asset: archive.read(asset) for asset in REQUIRED_WHEEL_ASSETS})
+
+
+def validate_authorities(assets: dict[str, bytes]) -> None:
+    """Validate both installed protocol authorities without importing the SDK."""
+    try:
+        manifest, vectors, v2_manifest, v2_vectors = (
+            json.loads(assets[asset]) for asset in REQUIRED_WHEEL_ASSETS
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DistributionError("canonical protocol assets are not valid JSON") from exc
     if not isinstance(manifest, dict) or manifest.get("protocol_line") != "MCBEWS/1":
-        raise DistributionError("wheel manifest is not the MCBEWS/1 authority")
+        raise DistributionError("manifest is not the MCBEWS/1 authority")
     if not isinstance(vectors, dict) or not {
         "bridge_requests",
         "ui_chat",
@@ -87,7 +95,24 @@ def check_wheel(path: Path) -> None:
         "approval",
         "behavior",
     }.issubset(vectors):
-        raise DistributionError("wheel vectors are incomplete")
+        raise DistributionError("v1 vectors are incomplete")
+    stream_kinds = {"stream_open", "stream_item", "stream_end", "stream_error", "stream_cancel"}
+    if (
+        not isinstance(v2_manifest, dict)
+        or v2_manifest.get("protocol") != "MCBEWS/2"
+        or not isinstance(v2_manifest.get("fields"), dict)
+        or not stream_kinds.issubset(v2_manifest["fields"])
+        or "stream/1" not in v2_manifest.get("negotiation", {}).get("features", [])
+    ):
+        raise DistributionError("manifest is not the streaming MCBEWS/2 authority")
+    if not isinstance(v2_vectors, dict) or not all(
+        isinstance(v2_vectors.get(key), list) and v2_vectors[key]
+        for key in ("valid", "invalid", "raw_invalid")
+    ):
+        raise DistributionError("v2 vectors are incomplete")
+    kinds = {vector.get("message", {}).get("kind") for vector in v2_vectors["valid"]}
+    if not (stream_kinds | {"request", "response", "notification"}).issubset(kinds):
+        raise DistributionError("v2 vectors are missing message kinds")
 
 
 def check_sdist(path: Path) -> None:
@@ -98,9 +123,16 @@ def check_sdist(path: Path) -> None:
     validate_members(names)
     if len(names) >= SDIST_MAX_FILES:
         raise DistributionError(f"sdist has too many files: {len(names)}")
-    for asset in REQUIRED_WHEEL_ASSETS:
-        if not any(name.endswith(f"/src/{asset}") for name in names):
-            raise DistributionError(f"sdist is missing canonical protocol asset: {asset}")
+    assets = {}
+    with tarfile.open(path, "r:gz") as archive:
+        for asset in REQUIRED_WHEEL_ASSETS:
+            member = next((name for name in names if name.endswith(f"/src/{asset}")), None)
+            if member is None:
+                raise DistributionError(f"sdist is missing canonical protocol asset: {asset}")
+            handle = archive.extractfile(member)
+            assert handle is not None
+            assets[asset] = handle.read()
+    validate_authorities(assets)
 
 
 def main() -> None:
