@@ -41,7 +41,12 @@ import websockets
 from mcbe_ws_sdk.addon import AddonBridgeService
 from mcbe_ws_sdk.command import CommandRegistry
 from mcbe_ws_sdk.config import GatewaySettings
-from mcbe_ws_sdk.errors import FacadeLifecycleError, ProtocolError, RemoteCallError
+from mcbe_ws_sdk.errors import (
+    FacadeLifecycleError,
+    ProtocolError,
+    RemoteCallError,
+    SendClosedError,
+)
 from mcbe_ws_sdk.gateway.commands import NativeCommandClient
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
@@ -635,7 +640,13 @@ class McbeServerFacade:
         async def send_payload(payload: str) -> None:
             current_state = self._manager.get_connection(connection_id)
             if current_state is None:
-                # Connection already dropped — do not touch the websocket.
+                # The manager removes the active connection before the runtime
+                # marks itself closed. In reliable mode a silent return would be
+                # counted as a successful transport call by the scheduler, so
+                # surface the drop instead. The legacy path keeps its original
+                # best-effort behaviour.
+                if self.reliable_dispatch:
+                    raise SendClosedError("connection dropped")
                 logger.debug(
                     "send_payload_after_drop",
                     connection_id=str(connection_id),

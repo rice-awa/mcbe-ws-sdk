@@ -384,6 +384,60 @@ async def test_disconnect_reaps_business_tasks_and_rejects_late_sends() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# R04-3: send during the manager-pop / runtime-close window
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_send_during_drop_window_fails_instead_of_reporting_success() -> None:
+    """The reliable transport must not silently succeed after the state is popped."""
+    hook = RecordingHook()
+    facade, websocket, task = await _start(hook)
+    state = _require_state(hook)
+    runtime = state.runtime
+    assert runtime is not None
+    assert state.send_payload is not None
+
+    # ``drop_connection`` pops the active connection before closing the runtime;
+    # reproduce exactly that window. Handshake/subscribe were already sent.
+    sent_before = runtime.scheduler.sent_count
+    facade.manager._connections.pop(state.id)
+    with pytest.raises(SendClosedError):
+        await state.send_payload("late")
+    assert "late" not in websocket.sent
+    assert runtime.scheduler.sent_count == sent_before
+
+    # Restore so normal teardown can still find and drop the connection.
+    facade.manager._connections[state.id] = state
+    await _stop(websocket, task)
+
+
+@pytest.mark.asyncio
+async def test_legacy_send_during_drop_window_keeps_best_effort_behavior() -> None:
+    """The legacy path keeps its original silent no-op after a drop."""
+    hook = RecordingHook()
+    facade = McbeServerFacade(
+        settings=GatewaySettings(),
+        hook=hook,
+        sink=DefaultResponseSink(),
+    )
+    websocket = QueueWebSocket()
+    task = asyncio.create_task(facade._on_connection(websocket))
+    await asyncio.wait_for(hook.connected.wait(), timeout=2)
+    state = hook.state
+    assert state is not None
+    assert state.send_payload is not None
+    assert state.runtime is None
+
+    facade.manager._connections.pop(state.id)
+    assert await state.send_payload("late") is None
+    assert "late" not in websocket.sent
+
+    facade.manager._connections[state.id] = state
+    await _stop(websocket, task)
+
+
+# --------------------------------------------------------------------------- #
 # R04-1: same-player ordering; control messages keep their own lane
 # --------------------------------------------------------------------------- #
 
@@ -571,6 +625,95 @@ async def test_inventory_chain_awaits_inside_callback_without_host_task() -> Non
     assert result_holder["result"]["inventories"][0]["player"] == "Alice"
 
     await _stop(websocket, task)
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    ["on_connected", "on_player_message", "on_ui_chat_reassembled"],
+)
+@pytest.mark.asyncio
+async def test_each_hook_can_await_addon_reply_directly(trigger: str) -> None:
+    """R01-1: all three hook kinds may await an addon reply without blocking reads."""
+    hook = RecordingHook()
+    addon = AddonBridgeService(AddonBridgeSettings(timeout_seconds=1.0))
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    result_holder: dict[str, Any] = {}
+
+    async def handler(state: ConnectionState) -> None:
+        started.set()
+        # Let the test install the transport responder before the frame is sent.
+        await release.wait()
+        client = addon.create_client(state.id, _require_send(state))
+        try:
+            result_holder["result"] = await client.request(
+                "get_inventory_snapshot",
+                {"target": "Alice"},
+            )
+        finally:
+            finished.set()
+
+    if trigger == "on_connected":
+
+        async def on_connected(state: ConnectionState) -> None:
+            hook.state = state
+            hook.connected.set()
+            await handler(state)
+
+        hook.on_connected = on_connected  # type: ignore[method-assign]
+    elif trigger == "on_player_message":
+
+        async def on_player(state: ConnectionState, event: PlayerMessageEvent) -> None:
+            await handler(state)
+
+        hook.on_player = on_player
+    else:
+
+        async def on_ui(state: ConnectionState, message: Any) -> None:
+            await handler(state)
+
+        hook.on_ui_chat_reassembled = on_ui  # type: ignore[method-assign]
+
+    facade, websocket, task = await _start(hook, addon=addon)
+
+    async def answer_bridge(payload: str) -> None:
+        if not payload.startswith(_BRIDGE_REQUEST_PREFIX):
+            return
+        body = json.loads(payload[len(_BRIDGE_REQUEST_PREFIX) :])
+        request_id = body["request_id"]
+        content = json.dumps(
+            {"ok": True, "inventories": [{"player": "Alice", "items": []}]},
+            separators=(",", ":"),
+        )
+        await websocket.push(
+            _player_frame(
+                MCBEWS_V1.trusted_bridge_player_name,
+                f"{MCBEWS_V1.capability_response_chat_prefix}|{request_id}|1/1|{content}",
+            )
+        )
+
+    websocket.on_send = answer_bridge
+
+    try:
+        if trigger == "on_player_message":
+            await websocket.push(_player_frame("Alice", "!inv"))
+        elif trigger == "on_ui_chat_reassembled":
+            await websocket.push(
+                _player_frame(
+                    MCBEWS_V1.trusted_bridge_player_name,
+                    'MCBEWS|UI_CHAT|m1|1/1|{"player":"Alice","message":"hello"}',
+                )
+            )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=2)
+    finally:
+        release.set()
+        await _stop(websocket, task)
+
+    assert result_holder["result"]["ok"] is True
+    assert result_holder["result"]["inventories"][0]["player"] == "Alice"
 
 
 def _require_send(state: ConnectionState) -> Any:
