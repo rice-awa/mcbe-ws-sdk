@@ -136,6 +136,8 @@ def decode(wire: str) -> dict[str, Any]:
         fail("LIMIT_EXCEEDED")
     try:
         value = json.loads(wire, parse_constant=lambda _: fail("MALFORMED_JSON"))
-    except (ValueError, RecursionError):
+    except RecursionError:
+        fail("LIMIT_EXCEEDED")
+    except ValueError:
         fail("MALFORMED_JSON")
     return validate(value)

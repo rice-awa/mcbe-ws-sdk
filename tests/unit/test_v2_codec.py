@@ -98,3 +98,16 @@ def test_exact_tokens_reject_trailing_newline_and_huge_integer() -> None:
         assert result["code"] == "INVALID_MESSAGE"
     with pytest.raises(V2ProtocolError):
         encode({"v": "MCBEWS/2", "kind": "notification", "method": "m", "params": 10**1000})
+
+
+def test_raw_deep_json_has_same_limit_error() -> None:
+    wire = (
+        '{"v":"MCBEWS/2","kind":"notification","method":"m","params":'
+        + "[" * 1500
+        + "0"
+        + "]" * 1500
+        + "}"
+    )
+    with pytest.raises(V2ProtocolError, match="LIMIT_EXCEEDED"):
+        decode(wire)
+    assert typescript([{"wire": wire}])[0]["code"] == "LIMIT_EXCEEDED"

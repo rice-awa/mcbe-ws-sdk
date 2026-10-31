@@ -47,7 +47,7 @@
       ]
     }
   },
-  "id_pattern": "[pa].[A-Za-z0-9_-]{1,24}.[1-9][0-9]{0,9}",
+  "id_pattern": "[pa][.][A-Za-z0-9_-]{1,24}[.][1-9][0-9]{0,9}",
   "method_pattern": "[A-Za-z][A-Za-z0-9_.:-]{0,63}",
   "token_pattern": "[A-Za-z0-9_/-]{1,64}",
   "metadata": {

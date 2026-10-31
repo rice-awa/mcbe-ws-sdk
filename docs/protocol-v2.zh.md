@@ -47,3 +47,12 @@ FRAME=MCBEWS2|发送方.session.sequence|index/total|content。只在Unicode标�
 其余均1命令。选择对象JSON：数组未减少命令数，还需存在位掩码区分缺失/null，验证扩展更复杂。
 这是确定性字节实验，不是时延或实机结论；真实分片器可用更短头部。
 旧入口继续v1；双端显式v2模块可编解码重组；对旧端明确不支持，不静默丢元数据降级。
+
+## 独立接入点
+
+Python：profiles.mcbews_v2.codec 的 encode/decode；transport 的 fragment、
+downstream_payloads、send_downstream（使用现有连接scheduler）和ReassemblyPool。
+TS：bridge/v2/codec、transport 的对应函数、sendUpstream与ReassemblyPool。
+发送循环每次等待一片、失败/取消停止余片，不建立无界任务链。
+R12负责可信归属、共享pool、tick prune、取消/断连清理；R13负责新epoch协商和旧帧拒绝。
+pool本身不协商、不分发业务、不验证身份。

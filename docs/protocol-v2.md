@@ -75,3 +75,14 @@ latency or game measurements. Actual planners may use shorter headers.
 Existing caller/facade remains v1. Explicit standalone v2 modules support codec/carrier
 building blocks on both ends. V2 to v1 is unsupported with no automatic metadata loss.
 Routing, negotiation and streaming remain future tasks.
+
+## Standalone integration points
+
+Python: profiles.mcbews_v2.codec.encode/decode, transport.fragment,
+downstream_payloads, send_downstream(existing_scheduler, ...), ReassemblyPool.
+TypeScript: bridge/v2/codec and bridge/v2/transport export the matching codec,
+fragment, sendUpstream and ReassemblyPool. Send loops await one scheduled frame at a
+time, preserve ordering and stop on failure/cancellation; no unbounded task chain.
+R12 must pass trusted attribution, share the pool, tick prune, cancel transfers and
+close on disconnect; R13 must enforce fresh negotiated epochs and reject old frames.
+The pool itself performs no negotiation, application dispatch or identity verification.
