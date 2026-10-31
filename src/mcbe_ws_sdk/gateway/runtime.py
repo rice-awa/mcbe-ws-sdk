@@ -28,6 +28,7 @@ from mcbe_ws_sdk.errors import RequestClosedError, SendClosedError
 from mcbe_ws_sdk.gateway.commands import NativeCommandClient
 from mcbe_ws_sdk.gateway.connection import SendPayload
 from mcbe_ws_sdk.gateway.dispatch import BusinessDispatcher
+from mcbe_ws_sdk.gateway.native_events import NativeEventSubscriptions
 from mcbe_ws_sdk.gateway.sender import OutboundScheduler, SendPriority
 from mcbe_ws_sdk.requests import RequestTable
 
@@ -85,6 +86,11 @@ class ConnectionRuntime:
             requests=self.requests,
             flow=flow,
             send_payload=self.send_from_host,
+            timeout_seconds=dispatch.command_timeout_seconds,
+        )
+        self.native_events = NativeEventSubscriptions(
+            self._send_subscription,
+            max_listeners=dispatch.event_queue_maxsize,
             timeout_seconds=dispatch.command_timeout_seconds,
         )
         self._lanes: dict[str, asyncio.Lock] = {}
@@ -146,6 +152,9 @@ class ConnectionRuntime:
         self._raise_if_closed()
         await self.scheduler.send(payload, priority=priority, source=source)
 
+    async def _send_subscription(self, payload: str) -> None:
+        await self.send_raw(payload, priority=SendPriority.CONTROL, source="native_subscription")
+
     def _raise_if_closed(self) -> None:
         if self._closed:
             raise SendClosedError(self._close_reason)
@@ -165,6 +174,7 @@ class ConnectionRuntime:
             task = self._close_task
             if task is None:
                 self._closed = True
+                self.native_events.close()
                 self._close_reason = reason
                 task = asyncio.create_task(
                     self._close_impl(reason),

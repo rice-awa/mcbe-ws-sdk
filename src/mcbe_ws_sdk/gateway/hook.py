@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from mcbe_ws_sdk.command.registry import ParsedCommand
 from mcbe_ws_sdk.gateway.connection import ConnectionState
+from mcbe_ws_sdk.gateway.native_events import NativeEvent
 from mcbe_ws_sdk.profiles.mcbews_v1.classifier import ToolPlayerMessage
 from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
 from mcbe_ws_sdk.protocol.minecraft import (
@@ -52,8 +53,7 @@ class ConnectionHook(Protocol):
         ...
 
     async def on_ui_chat_reassembled(self, state: ConnectionState, message: UiChatMessage) -> None:
-        """Fired when a fragmented UI_CHAT message is fully reassembled.
-        """
+        """Fired when a fragmented UI_CHAT message is fully reassembled."""
         ...
 
     async def on_command_response(
@@ -115,8 +115,7 @@ class LegacyUiChatHook(Protocol):
         state: ConnectionState,
         player_name: str,
         message: str,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class LegacyUiChatHookAdapter:
@@ -140,5 +139,12 @@ class AddonControlHook(Protocol):
         self,
         state: ConnectionState,
         message: ToolPlayerMessage,
-    ) -> None:
+    ) -> None: ...
+
+
+class NativeEventHook(Protocol):
+    """Optional business hook for native events other than PlayerMessage."""
+
+    async def on_native_event(self, state: ConnectionState, event: NativeEvent) -> None:
+        """Receive an event after explicit business interceptors allow it."""
         ...

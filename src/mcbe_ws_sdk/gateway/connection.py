@@ -39,6 +39,7 @@ from mcbe_ws_sdk.gateway.sink import (
 
 if TYPE_CHECKING:
     from mcbe_ws_sdk.gateway.commands import NativeCommandClient
+    from mcbe_ws_sdk.gateway.native_events import NativeEventSubscriptions
     from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
     from mcbe_ws_sdk.requests import RequestTable
 
@@ -100,6 +101,13 @@ class ConnectionState:
     runtime: ConnectionRuntime | None = field(default=None, repr=False)
     requests: RequestTable | None = field(default=None, repr=False)
     command_client: NativeCommandClient | None = field(default=None, repr=False)
+
+    @property
+    def native_events(self) -> NativeEventSubscriptions:
+        """Connection-local native subscriptions; requires reliable dispatch mode."""
+        if self.runtime is None:
+            raise RuntimeError("native events require reliable dispatch mode")
+        return self.runtime.native_events
 
     @property
     def player_name(self) -> str | None:

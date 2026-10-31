@@ -57,6 +57,7 @@ from mcbe_ws_sdk.gateway.hook import (
     LegacyUiChatHookAdapter,
     NoOpHook,
 )
+from mcbe_ws_sdk.gateway.native_events import NativeEvent
 from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
 from mcbe_ws_sdk.gateway.sender import SendPriority
 from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink
@@ -435,6 +436,7 @@ class McbeServerFacade:
         # Parse a PlayerMessage event (returns None for any other event kind).
         event = self._handler.parse_player_message(data)
         if event is None:
+            await self._dispatch_native_event(state, data)
             return
 
         # Branch A — addon bridge response / UI chat (both arrive from the
@@ -505,6 +507,9 @@ class McbeServerFacade:
         # the host does not re-run the registry (D1). In reliable mode each player
         # gets their own lane: one player's slow handler cannot block another,
         # while consecutive messages from the same player stay ordered.
+        if state.runtime is not None:
+            await self._dispatch_native_event(state, data, player=event.sender)
+            return
         parsed = self._handler.parse_typed_command(event.message)
         await self._emit_event(state, WsEventType.PLAYER_MESSAGE, state, event)
         await self._invoke_hook(
@@ -516,6 +521,54 @@ class McbeServerFacade:
             lane=f"player:{event.sender}",
             label="on_player_message",
             log_event="hook_on_player_message_failed",
+        )
+
+    async def _dispatch_native_event(
+        self, state: ConnectionState, packet: dict[str, Any], *, player: str | None = None
+    ) -> None:
+        runtime = state.runtime
+        header = packet.get("header")
+        if (
+            runtime is None
+            or not isinstance(header, dict)
+            or header.get("messagePurpose", "event") != "event"
+            or not isinstance(header.get("eventName"), str)
+            or not header["eventName"]
+            or not isinstance(packet.get("body"), dict)
+        ):
+            return
+        event = NativeEvent(header["eventName"], packet)
+
+        async def observe() -> None:
+            await runtime.native_events.notify(event)
+
+        runtime.events.submit(observe, lane="events", label=event.name)
+
+        async def deliver() -> None:
+            transformed = await runtime.native_events.apply(event)
+            if transformed is None:
+                return
+            if transformed.name == "PlayerMessage":
+                message = self._handler.parse_player_message(transformed.packet)
+                if message is None:
+                    return
+                # Transforms cannot manufacture reserved bridge/control input.
+                if self._addon.is_tool_player_channel_message(message.message):
+                    logger.warning("native_transform_reserved_channel", connection_id=str(state.id))
+                    return
+                await self._emit_event(state, WsEventType.PLAYER_MESSAGE, state, message)
+                await self._hook.on_player_message(
+                    state, message, parsed=self._handler.parse_typed_command(message.message)
+                )
+            else:
+                callback = getattr(self._hook, "on_native_event", None)
+                if callback is not None:
+                    await callback(state, transformed)
+
+        runtime.business.submit(
+            deliver,
+            lane=f"player:{player}" if player is not None else "native_events",
+            label=event.name,
         )
 
     def _resolve_tracked_command_response(
