@@ -19,9 +19,9 @@ Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart 
 - `bootstrap.ts` — safe init lifecycle (early init → after-world-load)
 
 The addon owns the full capability-handling lifecycle. Capabilities dispatch by
-name through the registry in `capabilities/index.ts`. The Python SDK ships an
-internal `CapabilityRegistry` with the same registration rules, but it does not
-route inbound addon → Python capability frames yet.
+name through the registry in `capabilities/index.ts`. An opt-in v2 bridge also
+routes addon → Python requests and notifications through the Python registry.
+See the [v2 contract](../docs/protocol-v2.md) for discovery and fallback.
 
 ## Usage
 

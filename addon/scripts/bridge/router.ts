@@ -13,6 +13,7 @@ import { utf8ByteLength } from "./chunking";
 import { MANIFEST as V2_MANIFEST } from "./v2/assets";
 import { V2Endpoint } from "./v2/runtime";
 import { ReassemblyPool } from "./v2/transport";
+import { matches } from "./v2/codec";
 
 export type {
   CapabilityContext,
@@ -78,6 +79,9 @@ let droppedActiveRequests = 0;
 const v2Pool = new ReassemblyPool();
 let v2Endpoint: V2Endpoint | null = null;
 let v2Pruner: number | null = null;
+let v2Sender: ((frame: string) => Promise<void>) | null = null;
+let pendingV2Hello: string | null = null;
+const seenV2Epochs = new Set<string>();
 
 export const MAX_PRE_READY_REQUESTS = 64;
 export const MAX_ACTIVE_REQUESTS = 64;
@@ -211,6 +215,15 @@ function schedule(event: RouterEvent): void {
 }
 
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
+  if (event.id === V2_MANIFEST.negotiation.event) {
+    const prefix = V2_MANIFEST.negotiation.hello_prefix + "|";
+    if (!event.message.startsWith(prefix)) return;
+    const epoch = event.message.slice(prefix.length);
+    if (!matches("[A-Za-z0-9_-]{1,24}", epoch)) return;
+    if (!bridgeActive) pendingV2Hello = epoch;
+    else void acceptV2Hello(epoch).catch(logUnexpectedRouterFailure);
+    return;
+  }
   if (event.id === V2_MANIFEST.carrier.event) {
     if (bridgeActive && v2Endpoint) {
       void v2Endpoint.receive(event.message, event.sourceType).catch(logUnexpectedRouterFailure);
@@ -259,15 +272,38 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
   schedule(snapshot);
 }
 
-export async function activateBridge(sender: ResponseSender): Promise<void> {
+export async function activateBridge(sender: ResponseSender, sendV2?: (frame: string) => Promise<void>): Promise<void> {
   if (bridgeActive) return;
   responseSender = sender;
+  v2Sender = sendV2 ?? null;
   bridgeActive = true;
+  if (pendingV2Hello) {
+    const epoch = pendingV2Hello;
+    pendingV2Hello = null;
+    await acceptV2Hello(epoch);
+  }
   while (preReadyQueue.length > 0) {
     const event = preReadyQueue.shift();
     if (event) schedule(event);
   }
   await processingTail;
+}
+
+async function acceptV2Hello(epoch: string): Promise<void> {
+  const send = v2Sender;
+  if (!send || seenV2Epochs.has(epoch) || seenV2Epochs.size >= V2_MANIFEST.limits.tombstones) return;
+  if (v2Endpoint) {
+    v2Endpoint.close();
+    v2Endpoint = null;
+  }
+  activateV2Bridge(epoch, send);
+  seenV2Epochs.add(epoch);
+  await send(`${V2_MANIFEST.negotiation.response_prefix}|${epoch}|2|${V2_MANIFEST.negotiation.features.join(",")}`);
+}
+
+/** Return the endpoint selected by discovery, or null before discovery succeeds. */
+export function getV2Endpoint(): V2Endpoint | null {
+  return v2Endpoint;
 }
 
 /** Activate an explicitly agreed v2 epoch without changing the legacy router. */
@@ -445,6 +481,9 @@ export function _testingReset(): void {
   v2Endpoint = null;
   if (v2Pruner !== null) system.clearRun(v2Pruner);
   v2Pruner = null;
+  v2Sender = null;
+  pendingV2Hello = null;
+  seenV2Epochs.clear();
   preReadyQueue.length = 0;
   responseSender = null;
   capabilityHandler = null;

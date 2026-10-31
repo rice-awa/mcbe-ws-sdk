@@ -3,7 +3,7 @@
 Installed profiles/mcbews_v2/manifest.json and vectors.json are authoritative.
 A separate interaction protocol inspired by JSON-RPC, this is not JSON-RPC compatible.
 MCBEWS/1 assets, identifiers, imports, constructors and default routing stay unchanged.
-The v2 runtime is opt-in; negotiation and continuous streams are separate stages.
+The v2 runtime is opt-in; continuous streams await a later stage.
 
 ## Logical messages
 
@@ -80,8 +80,8 @@ arrays save no commands here, require a presence mask to distinguish absent fiel
 null, and complicate validation/extensions. These are deterministic byte costs, not
 latency or game measurements. Actual planners may use shorter headers.
 
-Existing caller/facade defaults remain v1. The explicit v2 bridge requires reliable
-dispatch and an agreed epoch. It never silently drops metadata into a v1 request.
+Existing caller/facade defaults remain v1. A v2 bridge requires reliable dispatch.
+It never silently drops required metadata into a v1 request.
 
 ## Standalone integration points
 
@@ -90,10 +90,11 @@ downstream_payloads, send_downstream(existing_scheduler, ...), ReassemblyPool.
 TypeScript: bridge/v2/codec and bridge/v2/transport export the matching codec,
 fragment, sendUpstream and ReassemblyPool. Send loops await one scheduled frame at a
 time, preserve ordering and stop on failure/cancellation; no unbounded task chain.
-Create `V2Bridge`, pass it as `v2` to a reliable `McbeServerFacade`, and explicitly
-activate an agreed epoch with `bridge.activate(state, epoch=...)`. Register Python
-handlers on `bridge.registry`; use the returned endpoint's `request` and `notify`.
-The addon router exposes `activateV2Bridge` and the existing capability registry.
+Create `V2Bridge` and pass it as `v2` to a reliable `McbeServerFacade`. Discovery
+starts once per connection in the background; `await bridge.ready(state.id)` returns
+the selected version, features and v2 endpoint. Use `bridge.request(state.id, ...)`
+for negotiated calls, and register Python handlers on `bridge.registry`. The addon
+router exposes `getV2Endpoint()` and its existing capability registry.
 The endpoint rejects a new call while its method's ordering group is active, or when
 business capacity is exhausted. This allows reverse calls to other groups without
 waiting on a group already held by an ancestor. Notifications receive no error reply.
@@ -102,3 +103,25 @@ Handlers receive transport attribution separately from metadata. Metadata identi
 is untrusted; callers cannot set reserved `sdk.*` keys and may supply a trace ID
 through the dedicated argument. Responses retain metadata. Disconnect fails waiters
 and releases the connection's fragments; idle partial messages expire by TTL.
+
+## Discovery and fallback
+
+The v2 manifest defines the `mcbews:negotiate_v2` hello event. Its payload is
+`MCBEWS2H|epoch`; the bridge player replies
+`MCBEWS2N|epoch|2|metadata/1,notifications/1,reverse/1`. The facade accepts only a
+matching pending epoch from the trusted bridge player. It sends one random epoch per
+connection and waits at most the configured discovery timeout;
+normal chat and native commands continue while discovery runs. A new addon responds
+with its supported features and keeps serving v1. A missing or old addon causes a v1
+selection; negotiated fallback permits only the manifest's known v1 methods. Existing
+v1 clients retain their previous behavior. A required feature, explicit metadata or
+trace ID fails if unavailable; `stream/1` is not implemented.
+
+Reconnect generates a fresh epoch and does not replay requests. Both ends reject
+frames from earlier epochs, including unsolicited messages and fragments. The addon
+keeps a bounded set of used epochs and rejects new hellos if it is full. The bridge
+is not an authorization boundary: transport attribution and metadata do not replace
+host authentication or authorization. Timeout does not retract a command already sent.
+The addon currently supports one active epoch: a new hello closes the previous
+endpoint even if it has unfinished messages. Concurrent connections and uninterrupted
+epoch changes remain pending review.

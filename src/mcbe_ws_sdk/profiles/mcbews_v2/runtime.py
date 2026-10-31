@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
+from collections.abc import Awaitable, Callable, Collection
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from mcbe_ws_sdk.capability import CapabilityContext, CapabilityRegistry
 from mcbe_ws_sdk.errors import RemoteCallError, RequestClosedError, RequestTimeoutError
 from mcbe_ws_sdk.gateway.sender import SendPriority
-from mcbe_ws_sdk.profiles.mcbews_v2.codec import V2ProtocolError
+from mcbe_ws_sdk.profiles.mcbews_v2.codec import MANIFEST, V2ProtocolError
 from mcbe_ws_sdk.profiles.mcbews_v2.transport import ReassemblyPool, limits, send_downstream
 from mcbe_ws_sdk.tracing import current_trace, trace_scope
 
@@ -18,20 +21,167 @@ if TYPE_CHECKING:
     from mcbe_ws_sdk.gateway.connection import ConnectionState
 
 _CATEGORY = "addon.v2"
+_NEGOTIATION_CATEGORY = "addon.v2.negotiation"
 _VERSION = "MCBEWS/2"
+_NEGOTIATION = MANIFEST["negotiation"]
+
+
+class NegotiationError(RuntimeError):
+    """A requested protocol or feature is not available on this connection."""
+
+
+@dataclass(frozen=True, slots=True)
+class NegotiatedConnection:
+    """Selected wire version, negotiated features and optional v2 endpoint."""
+
+    version: str
+    features: frozenset[str]
+    endpoint: V2Endpoint | None = None
 
 
 class V2Bridge:
     """Own a shared reassembly pool and registered capabilities for a facade."""
 
-    def __init__(self, *, timeout_seconds: float = 5.0) -> None:
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+    negotiation_event = _NEGOTIATION["event"]
+    negotiation_prefix = _NEGOTIATION["response_prefix"]
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 5.0,
+        negotiation_timeout_seconds: float = 1.0,
+        negotiate: bool = True,
+    ) -> None:
+        if (
+            not math.isfinite(timeout_seconds)
+            or not math.isfinite(negotiation_timeout_seconds)
+            or timeout_seconds <= 0
+            or negotiation_timeout_seconds <= 0
+        ):
+            raise ValueError("timeouts must be positive")
         self.registry = CapabilityRegistry()
         self.pool = ReassemblyPool()
         self.timeout_seconds = timeout_seconds
+        self.negotiation_timeout_seconds = negotiation_timeout_seconds
+        self.negotiate = negotiate
         self._connections: dict[UUID, V2Endpoint] = {}
         self._pruner: asyncio.Task[None] | None = None
+        self._negotiations: dict[UUID, asyncio.Task[NegotiatedConnection]] = {}
+        self._legacy: dict[UUID, Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]] = {}
+
+    def start(
+        self,
+        state: ConnectionState,
+        send_hello: Callable[[str], Awaitable[None]],
+        legacy_request: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]],
+    ) -> None:
+        """Start one bounded discovery attempt without blocking the reader."""
+        if not self.negotiate:
+            return
+        if state.runtime is None or state.requests is None:
+            raise ValueError("MCBEWS/2 requires reliable dispatch")
+        if state.id in self._negotiations:
+            raise ValueError("negotiation already started")
+        epoch = uuid4().hex[:24]
+        pending = state.requests.reserve(_NEGOTIATION_CATEGORY, request_id=epoch)
+        self._legacy[state.id] = legacy_request
+
+        async def discover() -> NegotiatedConnection:
+            assert state.requests is not None
+            try:
+                try:
+                    async with asyncio.timeout(self.negotiation_timeout_seconds):
+                        await send_hello(f"{_NEGOTIATION['hello_prefix']}|{epoch}")
+                        features: frozenset[str] = await pending.future
+                except TimeoutError:
+                    return NegotiatedConnection("MCBEWS/1", frozenset())
+                endpoint = self.activate(state, epoch=epoch)
+                return NegotiatedConnection(_VERSION, features, endpoint)
+            except asyncio.CancelledError as exc:
+                raise RequestClosedError(epoch) from exc
+            finally:
+                state.requests.cancel(pending)
+
+        self._negotiations[state.id] = asyncio.create_task(
+            discover(), name=f"v2-negotiation:{state.id}"
+        )
+
+    def receive_negotiation(self, state: ConnectionState, sender: str, frame: str) -> None:
+        """Pair one trusted discovery response with its pending epoch."""
+        if sender != "MCBEWS_BRIDGE" or state.requests is None:
+            return
+        try:
+            oversized = len(frame) > 256 or len(frame.encode("utf-8")) > 1024
+        except UnicodeError:
+            return
+        if oversized:
+            return
+        parts = frame.split("|")
+        if len(parts) != 4 or parts[0] != _NEGOTIATION["response_prefix"]:
+            return
+        _, epoch, version, tokens = parts
+        pending = state.requests.get(_NEGOTIATION_CATEGORY, epoch)
+        if pending is None:
+            return
+        features = tokens.split(",") if tokens else []
+        if version != "2":
+            state.requests.fail(
+                _NEGOTIATION_CATEGORY, epoch, NegotiationError("unsupported protocol version")
+            )
+        elif (
+            len(features) > 16
+            or len(set(features)) != len(features)
+            or any(re.fullmatch(MANIFEST["token_pattern"], item) is None for item in features)
+        ):
+            state.requests.fail(
+                _NEGOTIATION_CATEGORY, epoch, NegotiationError("invalid negotiated features")
+            )
+        else:
+            state.requests.resolve(
+                _NEGOTIATION_CATEGORY,
+                epoch,
+                frozenset(features) & frozenset(_NEGOTIATION["features"]),
+            )
+
+    async def ready(self, connection_id: UUID) -> NegotiatedConnection:
+        """Wait for this connection's discovery, independently of chat processing."""
+        task = self._negotiations.get(connection_id)
+        if task is None:
+            endpoint = self._connections.get(connection_id)
+            if endpoint is None:
+                raise RequestClosedError(reason="no v2 negotiation for this connection")
+            return NegotiatedConnection(_VERSION, frozenset(_NEGOTIATION["features"]), endpoint)
+        return await asyncio.shield(task)
+
+    async def request(
+        self,
+        connection_id: UUID,
+        method: str,
+        params: dict[str, Any],
+        *,
+        metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        require: Collection[str] = (),
+    ) -> dict[str, Any]:
+        """Call a negotiated capability; required features never silently downgrade."""
+        selection = await self.ready(connection_id)
+        required = set(require)
+        if metadata is not None or trace_id is not None:
+            required.add("metadata/1")
+        missing = required - selection.features
+        if missing:
+            raise NegotiationError(f"unsupported required features: {', '.join(sorted(missing))}")
+        if selection.endpoint is not None:
+            return await selection.endpoint.request(
+                method, params, metadata=metadata, trace_id=trace_id
+            )
+        if method not in _NEGOTIATION["v1_methods"]:
+            raise NegotiationError(f"unsupported v1 capability: {method}")
+        legacy = self._legacy.get(connection_id)
+        if legacy is None:
+            raise RequestClosedError(reason="connection closed")
+        result = await legacy(method, params)
+        return {"v": "MCBEWS/1", "kind": "response", "result": result}
 
     def activate(
         self, state: ConnectionState, *, epoch: str, command_bytes: int | None = None
@@ -71,6 +221,14 @@ class V2Bridge:
     def close(self, connection_id: UUID) -> None:
         """Release one connection without disturbing other connections."""
         endpoint = self._connections.pop(connection_id, None)
+        task = self._negotiations.pop(connection_id, None)
+        self._legacy.pop(connection_id, None)
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(
+                lambda completed: completed.exception() if not completed.cancelled() else None
+            )
         if endpoint is not None:
             endpoint.close()
         self.pool.close(str(connection_id))
@@ -292,4 +450,4 @@ class V2Endpoint:
             self._requests.fail(_CATEGORY, request_id, RequestClosedError(request_id))
 
 
-__all__ = ["V2Bridge", "V2Endpoint", "V2ProtocolError"]
+__all__ = ["NegotiatedConnection", "NegotiationError", "V2Bridge", "V2Endpoint", "V2ProtocolError"]

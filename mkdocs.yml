@@ -72,6 +72,7 @@ plugins:
             - 快速开始: getting-started.md
             - 架构: architecture.md
             - 协议: addon-bridge-protocol.md
+            - v2 协议: protocol-v2.md
             - 桥接扩展: bridge-extensions.md
             - 追踪与诊断: diagnostics.md
             - 原生事件: native-events.md
@@ -128,6 +129,7 @@ nav:
   - Getting Started: getting-started.md
   - Architecture: architecture.md
   - Protocol: addon-bridge-protocol.md
+  - v2 Protocol: protocol-v2.md
   - Bridge Extensions: bridge-extensions.md
   - Diagnostics: diagnostics.md
   - Native Events: native-events.md

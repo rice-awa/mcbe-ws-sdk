@@ -15,6 +15,7 @@ from mcbe_ws_sdk.errors import (
     RequestTimeoutError,
     SendClosedError,
 )
+from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.profiles.mcbews_v2.runtime import V2Bridge
 from mcbe_ws_sdk.profiles.mcbews_v2.transport import COMMAND_PREFIX, ReassemblyPool, fragment
@@ -25,7 +26,7 @@ from .test_v2_codec import ROOT, typescript
 
 @pytest.mark.asyncio
 async def test_facade_pairs_v2_reply_and_dispatches_reverse_request() -> None:
-    bridge = V2Bridge()
+    bridge = V2Bridge(negotiate=False)
     hook = RecordingHook()
     facade = McbeServerFacade(
         v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
@@ -106,7 +107,7 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
     )
     assert process.stdin is not None and process.stdout is not None
     assert json.loads(await asyncio.wait_for(process.stdout.readline(), 5))["type"] == "ready"
-    bridge = V2Bridge(timeout_seconds=2)
+    bridge = V2Bridge(timeout_seconds=2, negotiate=False)
     hook = RecordingHook()
     facade = McbeServerFacade(
         v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
@@ -142,6 +143,7 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
         return {"payload": payload, "metadata": context.metadata, "caller": context.caller}
 
     bridge.registry.register("py.echo", echo)
+    bridge.registry.register("py.concurrent", echo)
 
     async def cycle(_name: str, payload: dict[str, Any], context: Any) -> dict[str, Any]:
         await context.client.request("ts.cycle", payload)
@@ -162,7 +164,7 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
             {
                 "op": "request",
                 "key": "reverse",
-                "method": "py.echo",
+                "method": "py.concurrent",
                 "params": {"from": "addon"},
                 "options": {"metadata": meta, "traceId": "same_trace"},
             }
@@ -209,7 +211,7 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
 
 @pytest.mark.asyncio
 async def test_pending_cleanup_on_encode_timeout_cancel_and_disconnect() -> None:
-    bridge = V2Bridge(timeout_seconds=0.05)
+    bridge = V2Bridge(timeout_seconds=0.05, negotiate=False)
     hook = RecordingHook()
     facade = McbeServerFacade(
         v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
@@ -243,3 +245,48 @@ async def test_pending_cleanup_on_encode_timeout_cancel_and_disconnect() -> None
     finally:
         if not task.done():
             await _stop(websocket, task)
+
+
+@pytest.mark.asyncio
+async def test_facade_connections_share_pool_and_release_independently() -> None:
+    bridge = V2Bridge(negotiate=False)
+    connected: asyncio.Queue[ConnectionState] = asyncio.Queue()
+
+    class Hook(RecordingHook):
+        async def on_connected(self, state: ConnectionState) -> None:
+            await connected.put(state)
+
+    facade = McbeServerFacade(
+        v2=bridge, hook=Hook(), settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
+    )
+    first_socket, second_socket = QueueWebSocket(), QueueWebSocket()
+    first_task = asyncio.create_task(facade._on_connection(first_socket))
+    first = await asyncio.wait_for(connected.get(), 2)
+    second_task = asyncio.create_task(facade._on_connection(second_socket))
+    second = await asyncio.wait_for(connected.get(), 2)
+    bridge.activate(first, epoch="first")
+    bridge.activate(second, epoch="second")
+    message = {
+        "v": "MCBEWS/2", "kind": "notification", "method": "notice",
+        "params": {"text": "long" * 200},
+    }
+    try:
+        spoofed = fragment(message, "a.first.1", "up")[0]
+        await first_socket.push(_player_frame("Alice", spoofed))
+        for index in range(1, 18):
+            frame = fragment(message, f"a.first.{index}", "up")[0]
+            await first_socket.push(_player_frame("MCBEWS_BRIDGE", frame))
+        frame = fragment(message, "a.second.1", "up")[0]
+        await second_socket.push(_player_frame("MCBEWS_BRIDGE", frame))
+        async with asyncio.timeout(2):
+            while bridge.pool.stats["buffers"] != 17:
+                await asyncio.sleep(0)
+        await _stop(first_socket, first_task)
+        assert bridge.pool.stats["buffers"] == 1
+        await _stop(second_socket, second_task)
+        assert bridge.pool.stats["buffers"] == 0
+    finally:
+        if not first_task.done():
+            await _stop(first_socket, first_task)
+        if not second_task.done():
+            await _stop(second_socket, second_task)

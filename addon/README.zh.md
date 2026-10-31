@@ -16,8 +16,8 @@
 - `bootstrap.ts` — 安全的初始化生命周期（早期初始化 → 世界加载完成后）
 
 Addon 完全拥有能力处理生命周期。能力通过 `capabilities/index.ts` 中的注册表
-按名称分发。Python SDK 提供规则相同的内部 `CapabilityRegistry`，但尚未
-路由附加包 → Python 的入站能力帧。
+按名称分发。显式启用 v2 桥后，附加包 → Python 请求和通知也会经 Python 注册表分发。
+探测与回退规则见 [v2 合同](../docs/protocol-v2.zh.md)。
 
 ## 用法
 

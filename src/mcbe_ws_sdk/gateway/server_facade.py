@@ -53,6 +53,7 @@ from mcbe_ws_sdk.errors import (
     RemoteCallError,
     SendClosedError,
 )
+from mcbe_ws_sdk.flow.flow_control import FlowControlMiddleware
 from mcbe_ws_sdk.gateway.commands import NativeCommandClient
 from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, SendPayload
 from mcbe_ws_sdk.gateway.events import EventBus, WsEventType
@@ -69,7 +70,11 @@ from mcbe_ws_sdk.gateway.sender import SendPriority
 from mcbe_ws_sdk.gateway.sink import DefaultResponseSink, ResponseSink
 from mcbe_ws_sdk.profiles.mcbews_v1.classifier import ToolPlayerMessage
 from mcbe_ws_sdk.profiles.mcbews_v1.models import UiChatMessage
-from mcbe_ws_sdk.protocol.minecraft import MinecraftCommandResponse, MinecraftErrorFrame
+from mcbe_ws_sdk.protocol.minecraft import (
+    MinecraftCommand,
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+)
 from mcbe_ws_sdk.requests import CATEGORY_COMMAND, RequestTable
 from mcbe_ws_sdk.tracing import TraceContext, current_trace, observe, trace_scope
 
@@ -107,6 +112,8 @@ class McbeServerFacade:
         self._diagnostic_observers = diagnostic_observers
         self._v2 = v2
         self._settings = settings if settings is not None else GatewaySettings()
+        if v2 is not None and self._settings.dispatch.mode != "reliable":
+            raise ValueError("MCBEWS/2 requires reliable dispatch")
         self._hook = hook if hook is not None else NoOpHook()
         self._legacy_ui_chat_hook = (
             LegacyUiChatHookAdapter(legacy_ui_chat_hook)
@@ -250,6 +257,29 @@ class McbeServerFacade:
                 connection_id=str(state.id),
                 events=list(self._handler.SUBSCRIBED_EVENTS),
             )
+            if self._v2 is not None:
+                flow = FlowControlMiddleware(self._settings.flow)
+
+                async def send_hello(hello: str) -> None:
+                    assert self._v2 is not None
+                    command = MinecraftCommand.create_scriptevent(
+                        hello, self._v2.negotiation_event
+                    ).body.commandLine
+                    payload = flow.chunk_raw_command(command)[0]
+                    await self._send_frame(
+                        state, payload, priority=SendPriority.CONTROL, source="v2.negotiation"
+                    )
+
+                async def legacy_request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+                    async def send_legacy(command: str) -> None:
+                        payload = flow.chunk_raw_command(command)[0]
+                        await self._send_frame(state, payload, source="v2.legacy_fallback")
+
+                    return await self._addon.request_capability(
+                        state.id, method, params, send_legacy
+                    )
+
+                self._v2.start(state, send_hello, legacy_request)
             # CONNECTED is emitted only after handshake + subscribe succeed.
             # On the reliable path the event and the host hook are dispatched
             # asynchronously; the reader is not blocked by either.
@@ -531,6 +561,10 @@ class McbeServerFacade:
             await self._dispatch_native_event(state, data)
             return
 
+        if self._v2 is not None and event.message.startswith(f"{self._v2.negotiation_prefix}|"):
+            self._v2.receive_negotiation(state, event.sender, event.message)
+            return
+
         if self._v2 is not None and event.message.startswith("MCBEWS2|"):
             try:
                 await self._v2.receive(state, event.sender, event.message)
@@ -656,6 +690,9 @@ class McbeServerFacade:
                 # Transforms cannot manufacture reserved bridge/control input.
                 if self._addon.is_tool_player_channel_message(message.message) or (
                     self._v2 is not None and message.message.startswith("MCBEWS2|")
+                ) or (
+                    self._v2 is not None
+                    and message.message.startswith(f"{self._v2.negotiation_prefix}|")
                 ):
                     logger.warning("native_transform_reserved_channel", connection_id=str(state.id))
                     return

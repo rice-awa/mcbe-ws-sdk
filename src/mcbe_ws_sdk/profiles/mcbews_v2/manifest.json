@@ -78,6 +78,20 @@
     "prefix": "MCBEWS2",
     "frame": "MCBEWS2|sender.session.sequence|index/total|content"
   },
+  "negotiation": {
+    "event": "mcbews:negotiate_v2",
+    "hello_prefix": "MCBEWS2H",
+    "response_prefix": "MCBEWS2N",
+    "versions": ["MCBEWS/2", "MCBEWS/1"],
+    "features": ["metadata/1", "notifications/1", "reverse/1"],
+    "v1_methods": ["get_player_snapshot", "get_inventory_snapshot"],
+    "max_attempts": 1,
+    "hello": "MCBEWS2H|epoch",
+    "response": "MCBEWS2N|epoch|2|comma-separated-features",
+    "epoch": "fresh 1-24 character ASCII alphanumeric, underscore or hyphen token",
+    "acceptance": "only the trusted bridge player may answer one outstanding epoch",
+    "legacy": "timeout selects MCBEWS/1 without replay; metadata and required features never downgrade"
+  },
   "limits": {
     "command_bytes": 461,
     "upstream_code_points": 256,

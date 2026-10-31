@@ -51,20 +51,26 @@ router.registerCapability("ts.notice", async (_name, payload, context) => {
 });
 
 async function main() {
-  await router.activateBridge(async () => {});
-  const endpoint = router.activateV2Bridge("test", async (frame) => emit({ type: "frame", frame }));
+  const automatic = process.argv.includes("--negotiate");
+  const send = async (frame) => emit({ type: "frame", frame });
+  await router.activateBridge(async () => {}, automatic ? send : undefined);
+  if (!automatic) router.activateV2Bridge("test", send);
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   lines.on("line", (line) => {
     const item = JSON.parse(line);
     if (item.op === "frame") {
       router.enqueueOrHandle({ id: "mcbews:packet_v2", message: item.frame, sourceType: "Entity" });
+    } else if (item.op === "hello") {
+      router.enqueueOrHandle({ id: "mcbews:negotiate_v2", message: item.frame, sourceType: "Entity" });
     } else if (item.op === "request") {
-      void endpoint
+      void router
+        .getV2Endpoint()
         .request(item.method, item.params, item.options)
         .then((message) => emit({ type: "result", key: item.key, message }))
         .catch((error) => emit({ type: "error", key: item.key, message: error.message }));
     } else if (item.op === "notify") {
-      void endpoint
+      void router
+        .getV2Endpoint()
         .notify(item.method, item.params, item.options)
         .catch((error) => emit({ type: "fatal", error: error.message }));
     } else if (item.op === "close") {

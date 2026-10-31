@@ -51,7 +51,7 @@ FRAME=MCBEWS2|发送方.session.sequence|index/total|content。只在Unicode标�
 通知238/217，错误217/213，最长编号250/231，4096字节meta 5189/5168（均12命令）；
 其余均1命令。选择对象JSON：数组未减少命令数，还需存在位掩码区分缺失/null，验证扩展更复杂。
 这是确定性字节实验，不是时延或实机结论；真实分片器可用更短头部。
-旧入口默认继续使用v1；显式v2桥需要可靠分发与双方约定的epoch，不静默丢弃元数据降级。
+旧入口默认继续使用v1；显式v2桥需要可靠分发，不静默丢弃必需元数据降级。
 
 ## 独立接入点
 
@@ -59,13 +59,29 @@ Python：profiles.mcbews_v2.codec 的 encode/decode；transport 的 fragment、
 downstream_payloads、send_downstream（使用现有连接scheduler）和ReassemblyPool。
 TS：bridge/v2/codec、transport 的对应函数、sendUpstream与ReassemblyPool。
 发送循环每次等待一片、失败/取消停止余片，不建立无界任务链。
-创建 `V2Bridge` 并作为 `v2` 传给可靠模式的 `McbeServerFacade`，再用
-`bridge.activate(state, epoch=...)` 显式启用约定的 epoch。Python 处理器注册到
-`bridge.registry`，通过返回的 endpoint 调用 `request` 和 `notify`。附加包路由提供
-`activateV2Bridge` 和现有能力注册表。
+创建 `V2Bridge` 并作为 `v2` 传给可靠模式的 `McbeServerFacade`。每个连接在后台
+探测一次；`await bridge.ready(state.id)` 返回选定版本、功能和 v2 endpoint。通过
+`bridge.request(state.id, ...)` 发起协商后的调用，Python 处理器注册到
+`bridge.registry`。附加包路由提供 `getV2Endpoint()` 和现有能力注册表。
 
 同一方法的顺序组正在处理时，新调用会被拒绝；业务容量耗尽时也会拒绝。不同组允许
 反向调用，不等待祖先已占用的组。通知不产生错误回复。处理器收到独立的传输归属与
 元数据；元数据身份不可信。调用方不能设置保留的 `sdk.*` 键，可通过专用参数传入
 trace ID。回复保留元数据。断连会失败所有等待请求并释放该连接的分片；空闲未完成
 消息按 TTL 过期。
+
+## 探测与回退
+
+v2 清单定义独立 hello 事件 `mcbews:negotiate_v2`，内容为 `MCBEWS2H|epoch`；
+桥玩家回复 `MCBEWS2N|epoch|2|metadata/1,notifications/1,reverse/1`。facade 只接受
+来自可信桥玩家、匹配待处理 epoch 的回复。每个连接生成随机 epoch，只探测一次，
+等待时间不超过配置的期限；探测期间普通聊天和原生命令继续运行。新附加包返回支持的
+功能并继续处理 v1；旧附加包或无附加包时选择 v1，协商入口只回退到清单列出的已知 v1
+方法。旧 v1 客户端行为不变。必需功能、显式元数据或 trace ID 不可用时直接报错；
+`stream/1` 尚未实现。
+
+重连生成新 epoch，不重放请求。两端拒绝旧 epoch 的帧，包括主动消息和分片。附加包保留
+有界的已用 epoch 集合，满时拒绝新的 hello。桥不是授权边界：传输归属和元数据不能代替
+宿主认证授权。超时不会撤销已发送的命令。
+附加包目前只支持一个活动 epoch：新 hello 会关闭前一个 endpoint，即使其中仍有未完成
+消息。并发连接和不中断消息的 epoch 切换仍待复核。
