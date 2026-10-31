@@ -7,6 +7,12 @@ the resulting tasks, bounds both the pending queue and the number of concurrent
 tasks, serialises work per lane (for example one lane per player), and reaps
 everything on close.
 
+Admission is fair across lanes: a global concurrency slot is only taken by a
+task that can actually run. An item whose lane is already executing stays in
+its lane queue without holding a slot, so one paused player cannot consume the
+whole concurrency budget while another player's work waits. Lanes are served
+round-robin, and each lane keeps FIFO order.
+
 Rejection is explicit: :meth:`BusinessDispatcher.submit` returns ``False`` and
 counts the rejection when the queue is full or the dispatcher is closed. It never
 waits for room, so the caller (the reader) cannot be blocked by a slow handler.
@@ -15,6 +21,7 @@ waits for room, so the caller (the reader) cannot be blocked by a slow handler.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -42,7 +49,7 @@ class BusinessDispatcher:
         max_queue: Maximum pending callbacks. Submissions beyond it are rejected.
         max_concurrent: Maximum callbacks running at once. Callbacks in different
             lanes may run concurrently; callbacks in the same lane run in FIFO
-            order.
+            order. A lane that is already running never holds a second slot.
         name: Dispatcher name for logs and task names.
     """
 
@@ -61,10 +68,19 @@ class BusinessDispatcher:
         self._connection_id = connection_id
         self._name = name
         self._max_queue = max_queue
-        self._queue: asyncio.Queue[_BusinessItem] = asyncio.Queue(maxsize=max_queue)
-        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._max_concurrent = max_concurrent
+
+        # One FIFO bucket per lane; only the head can run.
+        self._pending: dict[str, deque[_BusinessItem]] = {}
+        # Lanes ready to run, in round-robin order. A lane appears at most once.
+        self._ready: deque[str] = deque()
+        self._ready_set: set[str] = set()
+        self._running_lanes: set[str] = set()
+        self._task_lanes: dict[asyncio.Task[None], str] = {}
+        self._pending_count = 0
+
         self._tasks: set[asyncio.Task[None]] = set()
-        self._lane_locks: dict[str, asyncio.Lock] = {}
+        self._wakeup = asyncio.Event()
         self._supervisor: asyncio.Task[None] | None = None
         self._closed = False
         self._rejected = 0
@@ -76,7 +92,7 @@ class BusinessDispatcher:
 
     @property
     def pending_count(self) -> int:
-        return self._queue.qsize()
+        return self._pending_count
 
     @property
     def active_count(self) -> int:
@@ -100,7 +116,7 @@ class BusinessDispatcher:
 
     @property
     def lane_count(self) -> int:
-        return len(self._lane_locks)
+        return len(set(self._pending) | self._running_lanes)
 
     @property
     def is_closed(self) -> bool:
@@ -109,6 +125,10 @@ class BusinessDispatcher:
     @property
     def max_queue(self) -> int:
         return self._max_queue
+
+    @property
+    def max_concurrent(self) -> int:
+        return self._max_concurrent
 
     # -- submission ---------------------------------------------------------
 
@@ -144,7 +164,7 @@ class BusinessDispatcher:
                 label=label,
             )
             return False
-        if self._queue.full():
+        if self._pending_count >= self._max_queue:
             self._rejected += 1
             logger.warning(
                 "business_queue_overflow",
@@ -156,33 +176,60 @@ class BusinessDispatcher:
             )
             return False
         self.start()
-        self._queue.put_nowait(_BusinessItem(lane=lane, label=label, call=call))
+        self._pending.setdefault(lane, deque()).append(
+            _BusinessItem(lane=lane, label=label, call=call)
+        )
+        self._pending_count += 1
+        # A lane that is already running (or already queued) is scheduled when
+        # its turn comes; only newly idle lanes need to enter the ready ring.
+        if lane not in self._running_lanes and lane not in self._ready_set:
+            self._ready.append(lane)
+            self._ready_set.add(lane)
+        self._wakeup.set()
         return True
 
     # -- supervisor ---------------------------------------------------------
 
     async def _supervise(self) -> None:
+        """Start every runnable lane task while a global slot is available.
+
+        Only a lane that is not already running is eligible, so queued work for
+        a paused lane never consumes a concurrency slot. The ready ring is FIFO,
+        which gives round-robin fairness between lanes and keeps same-lane FIFO
+        through each lane's bucket.
+        """
         while True:
-            item = await self._queue.get()
-            try:
-                await self._semaphore.acquire()
-            except asyncio.CancelledError:
-                # The dequeued item never starts; account for it as overload.
-                self._rejected += 1
-                raise
-            self._active += 1
-            task = asyncio.create_task(
-                self._run(item),
-                name=f"{self._name}:{item.label or item.lane}:{self._connection_id}",
-            )
-            self._tasks.add(task)
-            task.add_done_callback(self._on_done)
+            await self._wakeup.wait()
+            self._wakeup.clear()
+            if self._closed:
+                return
+            while self._active < self._max_concurrent and self._ready:
+                lane = self._ready.popleft()
+                self._ready_set.discard(lane)
+                bucket = self._pending.get(lane)
+                if not bucket:
+                    # Defensive: a stale ready entry cannot consume a slot.
+                    self._pending.pop(lane, None)
+                    continue
+                item = bucket.popleft()
+                self._pending_count -= 1
+                if not bucket:
+                    self._pending.pop(lane, None)
+                self._running_lanes.add(lane)
+                self._active += 1
+                task = asyncio.create_task(
+                    self._run(item),
+                    name=f"{self._name}:{item.label or item.lane}:{self._connection_id}",
+                )
+                self._tasks.add(task)
+                self._task_lanes[task] = lane
+                task.add_done_callback(self._on_done)
 
     async def _run(self, item: _BusinessItem) -> None:
-        lock = self._lane_lock(item.lane)
+        # Lane exclusivity is enforced by the supervisor: at most one task per
+        # lane exists at any time, so no per-lane lock is needed here.
         try:
-            async with lock:
-                await item.call()
+            await item.call()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -199,9 +246,15 @@ class BusinessDispatcher:
 
     def _on_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
+        lane = self._task_lanes.pop(task, None)
         self._active = max(0, self._active - 1)
-        self._semaphore.release()
+        if lane is not None:
+            self._running_lanes.discard(lane)
+            if self._pending.get(lane) and lane not in self._ready_set:
+                self._ready.append(lane)
+                self._ready_set.add(lane)
         if task.cancelled():
+            self._wakeup.set()
             return
         exc = task.exception()
         if exc is not None:  # defensive: ``_run`` already isolates exceptions
@@ -211,13 +264,7 @@ class BusinessDispatcher:
                 dispatcher=self._name,
                 error_type=type(exc).__name__,
             )
-
-    def _lane_lock(self, lane: str) -> asyncio.Lock:
-        lock = self._lane_locks.get(lane)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._lane_locks[lane] = lock
-        return lock
+        self._wakeup.set()
 
     # -- shutdown -----------------------------------------------------------
 
@@ -233,12 +280,12 @@ class BusinessDispatcher:
             with suppress(asyncio.CancelledError):
                 await supervisor
         drained = 0
-        while True:
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            drained += 1
+        for bucket in self._pending.values():
+            drained += len(bucket)
+        self._pending.clear()
+        self._pending_count = 0
+        self._ready.clear()
+        self._ready_set.clear()
         if drained:
             self._rejected += drained
             logger.info(
@@ -252,9 +299,13 @@ class BusinessDispatcher:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        # Let done callbacks release the semaphore and update counters.
+        # Let done callbacks release counters and clear the lane table.
         await asyncio.sleep(0)
-        self._lane_locks.clear()
+        self._pending.clear()
+        self._ready.clear()
+        self._ready_set.clear()
+        self._running_lanes.clear()
+        self._task_lanes.clear()
 
 
 __all__ = ["BusinessCallable", "BusinessDispatcher"]
