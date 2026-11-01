@@ -6,9 +6,10 @@ to ``!`` commands with ``tellraw``. The application-specific behaviour lives in
 ``ExampleHook`` and ``MinecraftSink``; the SDK owns the WebSocket lifetime and
 packet protocol.
 
-Admission is mandatory: the companion MCBEWS/2 addon must be installed in the
-world. Without it the server logs ``NEGOTIATION_TIMEOUT`` and closes the
-connection; the example itself never calls addon capabilities.
+The companion addon completes protocol negotiation before chat is processed.
+Install it in a world with Experiments / Beta APIs enabled. Without it the
+server logs ``NEGOTIATION_TIMEOUT`` and closes the connection; the example
+itself never calls addon capabilities.
 
 Usage::
 

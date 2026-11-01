@@ -1,19 +1,19 @@
 # Architecture
 
-The SDK is a generic WebSocket gateway. It owns the transport, admission,
+The SDK is a generic WebSocket gateway. It owns the transport, negotiation,
 request correlation, task lifetimes, fragmentation and byte-safe delivery.
 Your host owns authorization, history and business state.
 
 ```text
 McbeServer                        only public entry
 ├── ConnectionManager / ConnectionState
-│   └── admission state machine
+│   └── connection state machine
 ├── ConnectionRuntime             bounded business + observation lanes
 │   └── OutboundScheduler         per-connection send capacity and fairness
 ├── NativeCommandClient / RequestTable
 ├── MinecraftProtocolHandler / CommandRegistry
 ├── ConnectionHook / ResponseSink  host behavior and rendering
-├── V2Bridge                       admission, requests, notifications, streams
+├── V2Bridge                       negotiation, requests, notifications, streams
 │   └── V2Endpoint                 per-connection epoch and dispatch
 ├── McbeOutboundDelivery
 └── FlowControlMiddleware          byte-safe tellraw/scriptevent chunking
@@ -25,18 +25,18 @@ router (mcbews:negotiate_v2 / mcbews:packet_v2)
 
 ## Entry and ownership
 
-`McbeServer` is the only public server entry. It always uses managed business
-lanes and always requires MCBEWS/2 admission; there is no dispatch-mode switch,
-no legacy callback path and no opt-out. The default response sink is neutral:
-hosts supply rendering when they want to turn `OutboundText` /
-`SystemNotification` into Minecraft commands.
+`McbeServer` owns each connection from transport setup through protocol
+negotiation, business processing and shutdown. Managed business lanes keep the
+reader free while callbacks await replies. To render `OutboundText` or
+`SystemNotification` in Minecraft, supply a `ResponseSink`; the default sink
+only logs messages.
 
-The SDK owns transport, admission, request waiters, task lifetimes, ordering and
+The SDK owns transport, negotiation, request waiters, task lifetimes, ordering and
 fragment state. The host owns authentication, authorization, history and
 business state. There is no SDK-owned `PlayerSession`; isolate application state
 by `(connection_id, sender)` using the current `PlayerMessageEvent.sender`.
 
-## Admission state machine
+## Connection state machine
 
 ```text
 WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
@@ -50,13 +50,13 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
   dropped and counted; they are not queued for replay.
 - `READY_V2` is the only point where the server publishes business
   `CONNECTED`, calls `on_connected` and routes player messages.
-- A timeout, malformed negotiation, busy admission, confirmation failure or
+- A timeout, malformed negotiation, busy negotiation, confirmation failure or
   invalid session reaches `REJECTED`, then `CLOSING` / `CLOSED`. Close code is
   `1008`; the reason token is bounded.
 - A rejected connection has no paired business `on_connected` /
   `on_disconnected`. Transport diagnostics still record the attempt.
-- A late or stale epoch cannot reopen a closed admission. Reconnect starts a
-  new admission and a new epoch.
+- A late or stale epoch cannot reopen a closed connection. Reconnect starts a
+  new negotiation and a new epoch.
 
 The addon accepts only `mcbews:negotiate_v2` and `mcbews:packet_v2`. Old
 `mcbews:bridge_req` / `session_req` / `text_resp` events are logged and rejected
@@ -66,7 +66,7 @@ old server; it only refuses that server's business.
 ## Managed dispatch
 
 Setup completes transport handshake and required subscriptions before the
-admission result. After `READY_V2`, the reader classifies and correlates command
+negotiation result. After `READY_V2`, the reader classifies and correlates command
 replies, negotiation frames and reserved carrier traffic before queuing business
 callbacks.
 
@@ -88,8 +88,8 @@ and `on_error`.
 
 ## Bridge and delivery
 
-`V2Bridge` owns the per-connection admission, capability registry and stream
-registry. `V2Endpoint` holds one admitted epoch: it pairs replies before
+`V2Bridge` owns the per-connection negotiation, capability registry and stream
+registry. `V2Endpoint` holds one active epoch: it pairs replies before
 dispatching requests, enforces request/stream limits, and carries metadata. A
 capability handler receives `(name, payload, CapabilityContext)` and returns a
 JSON mapping. Streams use `stream/1` and yield logical items; large items are
@@ -112,7 +112,7 @@ All wire formats, limits and error codes are defined by the installed
 ## Addon requirements and trust
 
 The companion addon needs **Experiments → Beta APIs** in the target world.
-Without it scripts do not load and admission times out. See the
+Without it scripts do not load and negotiation times out. See the
 [addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md).
 
 Carrier attribution, the simulated `MCBEWS_BRIDGE` player and metadata identity

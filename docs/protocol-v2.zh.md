@@ -1,14 +1,14 @@
-# MCBEWS/2 协议（必需）
+# MCBEWS/2 协议
 
-MCBEWS/2 是 SDK 唯一的线协议。每条 WebSocket 连接都必须先完成准入，才会执行业务。
-没有协商开关、没有 MCBEWS/1 回退，也不会在准入前缓存业务。
+当前 SDK 与配套附加包使用 **V2 协议（MCBEWS/2）**。
+连接完成协议协商后开始处理业务消息；就绪前收到的业务帧会被丢弃，不会缓存重放。
 
 安装包内的 `profiles/mcbews_v2/manifest.json` 与 `vectors.json` 是标识、字段规则、
 错误、限制与协商帧的权威来源。本页解释合同，不覆盖清单。
 
 MCBEWS/2 借鉴 JSON-RPC 的请求/响应形状，但不兼容 JSON-RPC。
 
-## 准入
+## 连接建立
 
 ```text
 WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
@@ -23,7 +23,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 | `REJECTED` | 记录原因，最多发送一次有界提示，然后关闭 |
 | `CLOSING` / `CLOSED` | 释放请求、队列、任务、租约与分片 |
 
-准入失败以 `1008` 关闭 WebSocket。关闭原因是有界标识，最多 123 个 UTF-8 字节。
+协议协商失败以 `1008` 关闭 WebSocket。关闭原因是有界标识，最多 123 个 UTF-8 字节。
 稳定原因：
 
 | 原因 | 含义 |
@@ -31,12 +31,12 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 | `UNSUPPORTED_PROTOCOL` | 对端使用已退休协议或不支持的版本 |
 | `NEGOTIATION_TIMEOUT` | 没有附加包、没有回复，或脚本未加载 |
 | `NEGOTIATION_CONFIRMATION_TIMEOUT` | 已应答挑战，但最终确认未完成 |
-| `NEGOTIATION_BUSY` | 准入容量或临时挑战名额已满 |
+| `NEGOTIATION_BUSY` | 协商容量或临时挑战名额已满 |
 | `INVALID_NEGOTIATION` | 控制帧格式错误、不匹配或已过期 |
-| `SESSION_INVALID` | 已准入会话被撤销或过期 |
+| `SESSION_INVALID` | 已就绪会话被撤销或过期 |
 
 被拒绝的连接不会产生业务 `on_connected`，也不会产生无配对的业务 `on_disconnected`。
-重连会建立新尝试与新代次；已关闭尝试的迟到帧不能重新打开准入。
+重连会建立新尝试与新代次；已关闭尝试的迟到帧不能恢复已关闭的连接。
 
 ### 控制帧
 
@@ -54,7 +54,7 @@ Python → 附加包   MCBEWS2X|epoch          （关闭）
 ```
 
 `attempt` 与 `epoch` 是新的 1–24 字符 ASCII 路由令牌。代次标识会话，不是认证。
-每条连接只准入一个未完成尝试，且挑战必须匹配后才能激活。繁忙或过期的尝试会被终止，
+每条连接同时只处理一个未完成的协商尝试，且挑战必须匹配后才能激活。繁忙或过期的尝试会被终止，
 重试次数有界。
 
 ### 已退休路由
@@ -187,7 +187,7 @@ await bridge.notify(connection_id, "demo.event", {"value": 1})
 stream = await bridge.stream(connection_id, "demo.ticks", {"count": 3})
 ```
 
-`bridge.ready(connection_id)` 等待准入并返回协商连接（版本、功能与端点）。
+`bridge.ready(connection_id)` 等待协议协商并返回协商连接（版本、功能与端点）。
 钩子已经运行在 `READY_V2` 之后，通常不需要再调用。
 
 底层仍可使用 `profiles.mcbews_v2.codec` 编解码、`transport` 分片、下行载荷与
@@ -198,7 +198,7 @@ stream = await bridge.stream(connection_id, "demo.ticks", {"count": 3})
 `registerV2Stream`。同一方法的顺序组不能重入；组执行期间的普通调用以
 `LIMIT_EXCEEDED` 拒绝，但发往其他组的反向调用仍允许。通知不产生错误回复。
 
-Python 的 `V2Bridge(timeout_seconds=...)` 对调度器准入、分片发送和等待回复设置一个总期限，
+Python 的 `V2Bridge(timeout_seconds=...)` 对调度器排队、分片发送和等待回复设置一个总期限，
 协商使用独立期限。超时、关闭、取消会停止未发送片段；已经交给传输层的帧可能继续完成，
 无法撤回。
 

@@ -10,7 +10,7 @@ The SDK exposes a dual-layer interface:
     and :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink`, then drive the stack
     through :class:`~mcbe_ws_sdk.server.McbeServer`.
 
-Connections are admitted only through MCBEWS/2 negotiation. The full
+Connections complete protocol negotiation before business processing. The full
 connection lifetime, packet request abstraction and byte-safe command chunking
 are provided; the agent's LLM / message-broker concerns are the host's.
 """

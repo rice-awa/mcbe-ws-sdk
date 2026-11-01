@@ -1,18 +1,18 @@
 # 架构
 
-SDK 是通用 WebSocket 网关，负责传输、准入、请求关联、任务生命周期、分片与字节安全投递。
+SDK 是通用 WebSocket 网关，负责传输、协议协商、请求关联、任务生命周期、分片与字节安全投递。
 授权、历史与业务状态由宿主负责。
 
 ```text
 McbeServer                        唯一公开入口
 ├── ConnectionManager / ConnectionState
-│   └── 准入状态机
+│   └── 连接状态机
 ├── ConnectionRuntime             有界业务队列 + 观察队列
 │   └── OutboundScheduler         每连接发送容量与公平调度
 ├── NativeCommandClient / RequestTable
 ├── MinecraftProtocolHandler / CommandRegistry
 ├── ConnectionHook / ResponseSink  宿主行为与渲染
-├── V2Bridge                       准入、请求、通知与流
+├── V2Bridge                       协议协商、请求、通知与流
 │   └── V2Endpoint                 每连接代次与分发
 ├── McbeOutboundDelivery
 └── FlowControlMiddleware          字节安全 tellraw/scriptevent 分片
@@ -24,15 +24,16 @@ router（mcbews:negotiate_v2 / mcbews:packet_v2）
 
 ## 入口与职责
 
-`McbeServer` 是唯一公开的服务入口。它始终使用受管理业务队列，并强制 MCBEWS/2 准入；
-没有调度模式开关、旧回调路径或跳过准入的配置。默认响应接收器保持中性：
-需要把 `OutboundText`、`SystemNotification` 渲染为游戏命令时，由宿主提供接收器。
+`McbeServer` 管理连接从传输建立、协议协商、业务处理到关闭的完整过程。
+受管理业务队列让钩子等待回复时，读取循环仍能继续工作。
+需要在游戏中显示 `OutboundText` 或 `SystemNotification` 时，提供自己的
+`ResponseSink`；默认接收器只写日志。
 
-SDK 管理传输、准入、请求等待、任务生命周期、顺序与分片状态。
+SDK 管理传输、协议协商、请求等待、任务生命周期、顺序与分片状态。
 宿主管理认证、授权、历史与业务状态。SDK 没有自带 `PlayerSession`；
 应用状态使用本次 `PlayerMessageEvent.sender`，按 `(connection_id, sender)` 隔离。
 
-## 准入状态机
+## 连接状态机
 
 ```text
 WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
@@ -47,7 +48,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
   `CLOSING` / `CLOSED`。关闭码为 `1008`，原因标识长度有界。
 - 被拒绝的连接没有配对的业务 `on_connected` / `on_disconnected`；
   传输诊断仍记录这次尝试。
-- 迟到或过期代次不能重新打开已关闭的准入。重连会建立新的准入与新代次。
+- 迟到或过期代次不能恢复已关闭的连接。重连会建立新的协议协商与新代次。
 
 附加包只接受 `mcbews:negotiate_v2` 与 `mcbews:packet_v2`。
 旧 `mcbews:bridge_req` / `session_req` / `text_resp` 事件只记录拒绝，零业务副作用。
@@ -55,7 +56,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 
 ## 受管理调度
 
-初始化先完成传输握手与必要订阅，再确定准入结果。
+初始化先完成传输握手与必要订阅，再确定协议协商结果。
 进入 `READY_V2` 后，读取循环先分类并关联命令回复、协商帧与保留载体，再将业务回调加入队列。
 
 同一玩家的聊天经过拦截器与钩子时保持先进先出，不同玩家可并发推进。
@@ -72,8 +73,8 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 
 ## 桥接与投递
 
-`V2Bridge` 管理每连接的准入、能力注册表与流注册表。
-`V2Endpoint` 持有已准入代次：先配对回复再分发请求，执行请求/流限制并携带元数据。
+`V2Bridge` 管理每连接的协议协商、能力注册表与流注册表。
+`V2Endpoint` 持有已就绪代次：先配对回复再分发请求，执行请求/流限制并携带元数据。
 能力处理器接收 `(name, payload, CapabilityContext)`，返回 JSON 映射。
 流使用 `stream/1` 逐项产生逻辑项；大项由传输层分片，重组后只交付一次。
 
@@ -90,7 +91,7 @@ MCBEWS/2 上行独立测量完整载体帧，不套用下行预算。
 ## 附加包要求与信任边界
 
 配套附加包需要目标世界开启 **实验 → 测试版 API（Beta APIs）**。
-否则脚本不加载，准入会超时。详见[附加包说明](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md)。
+否则脚本不加载，协议协商会超时。详见[附加包说明](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md)。
 
 载体归属、模拟玩家 `MCBEWS_BRIDGE` 与元数据身份都不是认证边界。
 宿主必须认证并授权调用方。协议自动化验证不扩大实机平台或版本支持承诺。

@@ -1,8 +1,8 @@
-# MCBEWS/2 protocol (required)
+# MCBEWS/2 protocol
 
-MCBEWS/2 is the SDK's only wire protocol. Every WebSocket connection must
-complete admission before business traffic runs. There is no negotiation
-opt-out, no MCBEWS/1 fallback and no pre-ready business buffering.
+The current SDK and companion addon use **V2 (MCBEWS/2)**. Connections complete
+protocol negotiation before processing business messages. Business frames
+received before readiness are dropped rather than buffered for replay.
 
 The installed `profiles/mcbews_v2/manifest.json` and `vectors.json` are
 authoritative for identifiers, field rules, errors, limits and negotiation
@@ -11,7 +11,7 @@ frames. This page explains the contract; it does not override the manifest.
 MCBEWS/2 borrows the request/response shape of JSON-RPC but is not
 JSON-RPC-compatible.
 
-## Admission
+## Connection setup
 
 ```text
 WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
@@ -26,7 +26,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 | `REJECTED` | Record the reason, send at most a bounded best-effort hint, then close. |
 | `CLOSING` / `CLOSED` | Release requests, queues, tasks, leases and fragments. |
 
-Admission failures close the WebSocket with code `1008`. The close reason is a
+Negotiation failures close the WebSocket with code `1008`. The close reason is a
 bounded token of at most 123 UTF-8 bytes. Stable reasons:
 
 | Reason | Meaning |
@@ -34,13 +34,13 @@ bounded token of at most 123 UTF-8 bytes. Stable reasons:
 | `UNSUPPORTED_PROTOCOL` | The peer spoke a retired protocol or an unsupported version |
 | `NEGOTIATION_TIMEOUT` | No addon, no reply, or the scripts did not load |
 | `NEGOTIATION_CONFIRMATION_TIMEOUT` | The challenge was answered but confirmation did not finish |
-| `NEGOTIATION_BUSY` | Admission capacity or the provisional-challenge limit is full |
+| `NEGOTIATION_BUSY` | Negotiation capacity or the provisional-challenge limit is full |
 | `INVALID_NEGOTIATION` | Malformed, mismatched or expired control frames |
-| `SESSION_INVALID` | An admitted session was revoked or became stale |
+| `SESSION_INVALID` | An active session was revoked or became stale |
 
 A rejected connection never emits a business `on_connected` or a paired
 business `on_disconnected`. Reconnect starts a new attempt and a new epoch; a
-late frame from a closed attempt cannot reopen admission.
+late frame from a closed attempt cannot reopen the connection.
 
 ### Control frames
 
@@ -208,7 +208,7 @@ await bridge.notify(connection_id, "demo.event", {"value": 1})
 stream = await bridge.stream(connection_id, "demo.ticks", {"count": 3})
 ```
 
-`bridge.ready(connection_id)` waits for admission and returns the negotiated
+`bridge.ready(connection_id)` waits for negotiation and returns the negotiated
 connection (version, features, endpoint). Hooks already run after `READY_V2`, so
 they normally do not need it.
 
@@ -224,7 +224,7 @@ during an active group are rejected with `LIMIT_EXCEEDED`, while reverse calls
 to other groups are allowed. Notifications receive no error reply.
 
 For Python requests, `V2Bridge(timeout_seconds=...)` sets one deadline covering
-scheduler admission, fragment sending and the reply wait. Discovery has its own
+scheduler queue acceptance, fragment sending and the reply wait. Discovery has its own
 timeout. Timeout, close and cancellation stop unsent fragments; a frame already
 handed to the transport may still complete and cannot be retracted.
 

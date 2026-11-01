@@ -1,8 +1,8 @@
 # Tracing and packet diagnostics
 
-Diagnostics answer four questions: did the transport connect, did admission
-succeed or fail, what did the business path do, and why did the connection
-close. Default logs are summaries; full payloads are opt-in.
+Diagnostics follow transport setup, protocol negotiation, request processing
+and shutdown. The SDK diagnostic channel records summaries by default; full
+packets are opt-in.
 
 ## Lifecycle stages
 
@@ -12,32 +12,35 @@ Every connection records at least:
 | --- | --- |
 | `WS_TRANSPORT_CONNECTED` | Connection identifier and transport establishment |
 | `NEGOTIATING` | Attempt, protocol version, feature set, timeout |
-| `READY_V2` | Admitted epoch, negotiated features, session |
+| `READY_V2` | Active epoch, negotiated features, session |
 | `REJECTED` | Reason, close code and whether the transport was closed by us |
 | `SESSION_INVALID` | Revocation or stale-session reason |
 | `CLOSING` / `CLOSED` | Close code, bounded close reason, initiator, cleanup summary |
 
-Stable admission reasons are `UNSUPPORTED_PROTOCOL`, `NEGOTIATION_TIMEOUT`,
+Stable negotiation reasons are `UNSUPPORTED_PROTOCOL`, `NEGOTIATION_TIMEOUT`,
 `NEGOTIATION_CONFIRMATION_TIMEOUT`, `NEGOTIATION_BUSY`,
 `INVALID_NEGOTIATION` and `SESSION_INVALID`. A rejected connection is not a
 business disconnect and does not produce a business `on_connected` /
 `on_disconnected` pair.
 
-Close code is `1008` for admission rejection. The close reason is at most 123
+Close code is `1008` for negotiation rejection. The close reason is at most 123
 UTF-8 bytes. If the close initiator or reason is not observable, record
 `unknown` rather than guessing.
 
-A zero-byte EOF is still an unconfirmed condition. Do not classify it as normal
-and do not suppress all `websockets` errors to hide it. Keep the evidence and
-turn it into a specific classification only when the source is known.
+For an EOF without a close code or reason, retain the transport error and
+record the cause as unknown until it can be traced.
 
 ## Default summary vs raw payloads
 
-Default diagnostics record identifiers, stages, sizes and frame
-classification. Business text, commands and packet bodies are omitted. The
-bundled example servers accept an explicit `--log-raw` flag to include full
-payloads; without it, raw payloads stay disabled. `--log-raw` is opt-in for a
-reason: payloads may contain player text and application secrets.
+The SDK diagnostic channel records identifiers, stages, sizes and frame
+classification. It omits business text, commands and packet bodies by default.
+The example servers additionally log commands, capability parameters and results
+at INFO level. These application logs are separate from the diagnostic channel
+and its redaction settings.
+
+`--log-raw` enables complete outbound packet logs in the examples. Leave it off
+for normal use. Review application logging as well before handling private
+player data.
 
 ```python
 from mcbe_ws_sdk import DiagnosticSettings, McbeServer, trace_scope
@@ -80,7 +83,7 @@ requests. Unsolicited inbound frames receive a new local trace.
 | `received` | A frame arrived, including malformed or external-output frames |
 | `processing_started/completed/rejected/failed` | Managed business processing |
 | `request_registered` | A native or capability waiter exists before sending |
-| `enqueued` | Scheduler admission; not delivery |
+| `enqueued` | Scheduler queue acceptance; not delivery |
 | `prepared` | Transport is about to send; not delivery |
 | `transport_sent/transport_failed` | The transport call returned or raised |
 | `remote_success/remote_failure` | Native `statusCode` or remote protocol result |

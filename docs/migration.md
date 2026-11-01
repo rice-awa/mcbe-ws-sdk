@@ -1,26 +1,27 @@
-# Migrating to the MCBEWS/2-only release
+# Upgrade to the current SDK
 
-This is a breaking release. The SDK no longer speaks MCBEWS/1 and no longer
+This guide covers the retired V1 API, including intermediate dual-protocol
+builds. The current SDK introduces breaking changes. The SDK no longer speaks MCBEWS/1 and no longer
 offers a second server entry point. Deploy the Python package and the companion
-addon as one version; mixed old/new deployments are rejected by design.
+addon as a matched pair; mixed old/new deployments are rejected by design.
 
 The symbols and routes marked **removed** below no longer exist in this version.
 They are named here only so existing hosts can find what to replace.
 
 ## What changed at a glance
 
-| Area | Old dual-protocol release | This release |
+| Area | Older hosts | This release |
 | --- | --- | --- |
-| Python entry | `McbeServerFacade` plus `McbeServer` | `McbeServer` only |
+| Python entry | `McbeServerFacade`; some development builds also exposed `McbeServer` | `McbeServer` only |
 | Dispatch | `legacy` callback order or `reliable` lanes | Always reliable managed lanes |
-| Protocol | MCBEWS/1 by default, MCBEWS/2 opt-in | MCBEWS/2 required for every connection |
-| Admission | Business could run before discovery finished | `READY_V2` required before business |
+| Protocol | MCBEWS/1 by default, MCBEWS/2 opt-in | V2 (MCBEWS/2); negotiated before business processing |
+| Negotiation | Business could run before discovery finished | `READY_V2` required before business |
 | Fallback | Old addons continued on known v1 methods | No fallback; old peers are rejected |
 | Addon routes | `mcbews:bridge_req`, `mcbews:text_resp`, UI/session routes | `mcbews:negotiate_v2`, `mcbews:packet_v2` only |
 | Host business DTOs | SDK-owned UI chat, session, approval, text response | Removed; model these as host V2 methods |
 | Streams | Negotiated `stream/1` on the v2 path | `stream/1` on the only path |
 
-## Admission is mandatory
+## Connection readiness
 
 ```text
 WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
@@ -37,7 +38,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 
 | Peer combination | Result | Business side effects |
 | --- | --- | --- |
-| New server + new addon | One MCBEWS/2 admission; ready | Allowed after `READY_V2` |
+| New server + new addon | One MCBEWS/2 negotiation; ready | Allowed after `READY_V2` |
 | New server + old addon | `UNSUPPORTED_PROTOCOL` or `NEGOTIATION_TIMEOUT`, then close | None |
 | New server + no addon | Bounded timeout, then close | None; `!wscmd` does not run |
 | Old server + new addon | Addon logs and rejects old events | None; the addon cannot close a WebSocket it does not own |
@@ -61,8 +62,8 @@ protocol and is unrelated to MCBEWS/1. It stays as Bedrock defines it.
 | `ConnectionHook.on_ui_chat_reassembled` | Removed. Use native events or host V2 methods |
 | `AddonControlHook` | Removed |
 | `LegacyUiChatHook`, `LegacyUiChatHookAdapter` | Removed |
-| `V2Bridge(negotiate=False)` | Removed. Admission is automatic and mandatory |
-| `V2Bridge.activate(...)` as a public manual path | Removed. Endpoints are installed by admission |
+| `V2Bridge(negotiate=False)` | Removed. Protocol negotiation runs during connection setup |
+| `V2Bridge.activate(...)` as a public manual path | Removed. Endpoints are installed by negotiation |
 
 `ConnectionHook` now has five lifecycle hooks: `on_connected`,
 `on_disconnected`, `on_player_message`, `on_command_response`, `on_error`.
@@ -185,12 +186,12 @@ The SDK no longer interprets these payloads or exposes typed DTOs for them.
 
 ### 5. Rebuild the addon
 
-The old build scripts still produce a pack, but it will not admit. Rebuild from
-the new sources and re-import the pack:
+Rebuild from the new sources and re-import the pack to update the Minecraft
+side of the protocol:
 
 ```bash
 cd addon
-npm install
+npm ci
 npm run build
 npm run mcaddon
 ```
@@ -198,7 +199,44 @@ npm run mcaddon
 Demo capabilities ship in the default package. Use `npm run build:base` /
 `npm run mcaddon:base` only when you want the lean two-snapshot pack.
 
+## Version numbers
+
+| Version axis | Current value | Meaning |
+| --- | --- | --- |
+| Python SDK | `0.3.0rc1` | Release candidate; becomes `0.3.0` after acceptance |
+| npm project | `0.3.0-rc.1` | Addon build project; private, not an npm release |
+| Pack header and modules | `1.1.0` | Behavior/resource pack deployment version |
+| Wire protocol | `MCBEWS/2` | Message and negotiation contract |
+| Script API dependencies | server `2.8.0`, server-ui `2.1.0` | Game-provided APIs |
+| Gametest | pack `1.0.0-beta`; npm `1.0.0-beta.1.26.30-stable` | Engine module declaration and matching development package |
+| Minimum engine | `[1, 26, 30]` | Declared game target; validate the actual game build separately |
+
+Pack versions use three integers, so they do not carry the SDK's `rc1` suffix.
+Keep the candidate's Python and addon artifacts together. Changing a Script API
+dependency does not change the wire protocol or determine the SDK version.
+
 ## Rollback and deployment
+
+1. Save the currently deployed Python wheel, addon file, host configuration and
+   a world backup as one rollback set. Keep their version and source information.
+2. Install the candidate wheel into a separate environment:
+
+   ```bash
+   python -m venv .venv-next
+   .venv-next/bin/pip install ./dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl
+   ```
+
+   On Windows, use `.venv-next\Scripts\pip` instead. Install your host's own
+   dependencies there and migrate its API calls before switching traffic.
+3. Disconnect the old server, activate the matching candidate addon in the
+   target world, enable **Experiments → Beta APIs**, reload the world and start
+   the updated host in the new environment.
+4. Reconnect with `/wsserver`, then check protocol readiness, `!inv`, `!echo`
+   and `!stream 5` using the addon example before accepting traffic.
+5. To roll back, disconnect, stop the new host, deactivate the new pack and
+   reactivate the saved old addon. Reload the world, start the old host in its
+   saved environment and reconnect. Restore the saved world only if world state
+   also needs to be reverted.
 
 This release has no v1 fallback. A rollback means redeploying a complete older
 version of **both** the Python package and the addon, then reconnecting.

@@ -7,8 +7,8 @@ SDK-owned awaitable ``commandRequest`` / ``commandResponse`` client
 
 * ``!player [target]`` → ``get_player_snapshot``
 * ``!inv [target]`` → ``get_inventory_snapshot``
-* ``!cmd <command>`` → ``run_world_command`` (must be enabled in the addon)
-* ``!wscmd <command>`` → WS-side ``commandRequest`` (no addon required)
+* ``!cmd <command>`` → ``run_world_command`` (included in the default addon)
+* ``!wscmd <command>`` → WS-side ``commandRequest`` (no addon capability call)
 * ``!echo <text>`` → custom capability and metadata
 * ``!stream [count]`` → continuously produced items and normal completion
 * ``!stream-cancel [count]`` → early consumer exit cancels an unlimited producer
@@ -66,8 +66,8 @@ _HELP_TEXT = (
     "Addon 示例命令：\n"
     "  !player [target]  获取玩家快照（默认自己）\n"
     "  !inv [target]     获取背包快照（默认自己）\n"
-    "  !cmd <command>    通过 addon 以自己为上下文执行（危险命令被拒绝）\n"
-    "  !wscmd <command>  通过 WS commandRequest 执行命令（不依赖 addon）\n"
+    "  !cmd <command>    通过 addon 以自己为上下文执行（命令禁止列表生效）\n"
+    "  !wscmd <command>  通过 WS commandRequest 执行命令（不调用 addon 能力）\n"
     "  !echo <text>      自定义能力与元数据\n"
     "  !stream [count]   持续流直到正常结束（默认5项）\n"
     "  !stream-cancel [count]  消费后取消无限流（默认3项）\n"
@@ -330,8 +330,7 @@ class AddonDemoHook(NoOpHook):
             self._reply(
                 state,
                 sender,
-                f"{label} 失败 [{exc.reason}] {_bounded_text(str(exc))}"
-                f"{_action_hint(capability)}",
+                f"{label} 失败 [{exc.reason}] {_bounded_text(str(exc))}{_action_hint(capability)}",
             )
             return
         except Exception:
@@ -392,8 +391,7 @@ class AddonDemoHook(NoOpHook):
             self._reply(
                 state,
                 sender,
-                f"流失败 [{exc.reason}] {_bounded_text(str(exc))}"
-                f"{_action_hint('demo.ticks')}",
+                f"流失败 [{exc.reason}] {_bounded_text(str(exc))}{_action_hint('demo.ticks')}",
             )
         except StreamError as exc:
             logger.warning(
@@ -406,8 +404,7 @@ class AddonDemoHook(NoOpHook):
             self._reply(
                 state,
                 sender,
-                f"流失败 [{exc.code}] {_bounded_text(exc.message)}"
-                f"{_action_hint('demo.ticks')}",
+                f"流失败 [{exc.code}] {_bounded_text(exc.message)}{_action_hint('demo.ticks')}",
             )
         except Exception:
             logger.exception(
@@ -513,7 +510,7 @@ def _bounded_text(text: object, limit: int = _MAX_ERROR_BYTES) -> str:
 def _action_hint(capability: str) -> str:
     if capability == "run_world_command":
         return (
-            "\n提示：该命令在 addon 的危险命令禁止列表内，"
+            "\n提示：该命令在 addon 的命令禁止列表内，"
             "或当前附加包是 --base 精简构建（不含世界命令能力）。"
         )
     if capability == "demo.ticks":
@@ -524,10 +521,7 @@ def _action_hint(capability: str) -> str:
 def _format_remote_error(label: str, capability: str, exc: RemoteCallError) -> str:
     """Render a public remote failure; the request id stays in server logs."""
     code = exc.code if isinstance(exc.code, str) and exc.code else "ERROR"
-    return (
-        f"{label} 失败 [{code}] {_bounded_text(exc.message)}"
-        f"{_action_hint(capability)}"
-    )
+    return f"{label} 失败 [{code}] {_bounded_text(exc.message)}{_action_hint(capability)}"
 
 
 def format_capability_result(capability: str, result: Any, label: str) -> str:
@@ -683,7 +677,8 @@ async def main(argv: Sequence[str] | None = None) -> None:
     logger.info(
         "addon_hint",
         note="Enable Beta APIs and load the addon; the default demo build includes "
-        "!cmd/!echo/!stream; !wscmd needs only /wsserver",
+        "!cmd/!echo/!stream. Both examples need the addon for protocol negotiation; "
+        "!wscmd uses native WebSocket commands.",
     )
     logger.info("ready", stop_with="Ctrl+C")
     await facade.run_lifetime()

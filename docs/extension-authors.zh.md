@@ -44,7 +44,7 @@ registration = bridge.registry.register("demo.echo", echo, validate=validate)
 ```typescript
 import { registerCapability } from "./bridge/router";
 
-const registration = registerCapability("demo.echo", (_method, payload, context) => ({
+const registration = registerCapability("custom.echo", (_method, payload, context) => ({
   text: payload.text,
   metadata: context.metadata,
 }));
@@ -57,8 +57,6 @@ const registration = registerCapability("demo.echo", (_method, payload, context)
 
 自定义能力与内置能力共存，无需修改 SDK。重名默认抛错，传入 `replace: true` 才覆盖。
 调用进行中注销不影响当前调用。
-
-当前版本没有聚合的 `setCapabilityHandler` 入口，请按名称逐个注册。
 
 ## 注册流生产者
 
@@ -77,7 +75,7 @@ bridge.streams.register("demo.ticks", ticks)
 ```typescript
 import { registerV2Stream } from "./bridge/router";
 
-const unregister = registerV2Stream("demo.ticks", async function* (_method, params, context) {
+const unregister = registerV2Stream("custom.ticks", async function* (_method, params, context) {
   for (let index = 0; index < (params.count ?? 5); index += 1) {
     if (context.cancellation?.cancelled) return;
     yield { index };
@@ -90,10 +88,10 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 
 ## 调用附加包
 
-准入后，受管理钩子可以直接使用桥接：
+协议协商后，受管理钩子可以直接使用桥接：
 
 ```python
-selection = await server.v2.ready(state.id)     # 需要显式等待准入时使用
+selection = await server.v2.ready(state.id)     # 需要显式等待协议协商时使用
 response = await server.v2.request(
     state.id,
     "demo.echo",
@@ -157,7 +155,7 @@ async with stream:
 
 ```bash
 cd addon
-npm install
+npm ci
 npm run build
 npm run mcaddon
 ```
@@ -173,7 +171,7 @@ npm run mcaddon:base
 输出路径仍是 `dist/scripts/main.js`。添加自己的处理器时，在自己的入口中导入，
 并在 `initializeAfterWorldLoad` 内注册一次。
 
-`run_world_command` 默认应用危险命令禁止列表；需要更严格时可向
+`run_world_command` 默认应用命令禁止列表；需要更严格时可向
 `handleRunWorldCommand` 传入显式允许列表。无论附加包策略如何，宿主侧授权都必须保留。
 
 附加包必须导入目标世界，并开启 **实验 → 测试版 API（Beta APIs）**。

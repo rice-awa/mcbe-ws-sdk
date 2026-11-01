@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.3.0rc1 — release candidate
+
+### Breaking changes
+
+- Use `McbeServer` as the server entry point, with managed business lanes and
+  protocol negotiation before player messages reach host callbacks.
+- Use V2 (`MCBEWS/2`) for bidirectional requests, notifications, metadata and
+  streams. Remove V1 APIs, codecs, routes, production assets and fallback.
+- Remove SDK-owned UI chat, session, approval and text-response DTOs. Hosts
+  register their own methods and notifications for application flows.
+- Require the companion addon for connection setup in both examples. Example
+  chat commands require the ASCII `!` prefix; ordinary chat stays silent.
+
+### Added and improved
+
+- Keep reads and reply correlation active while callbacks await capabilities
+  or native commands; bound business, observation and outbound queues.
+- Add capability registration, native event subscriptions and interception,
+  trace context, diagnostic observers and orderly resource cleanup.
+- Support incremental request streams with completion, cancellation and
+  bounded slow-consumer handling.
+- Target Script API server 2.8.0 / server-ui 2.1.0 and engine 1.26.30. Set pack
+  deployment versions to 1.1.0, independently of the SDK and wire versions.
+- Rewrite bilingual setup and migration documentation around the current API;
+  document complete Python/addon upgrades and rollback.
+- Repair the websockets CI matrix's reference to a removed V1-era test file.
+
+### Command transport fixes
 
 - Preserve literal selectors in both directions of the MCBEWS/2 carrier by
   JSON-escaping `@` before fragmentation and byte accounting.
@@ -10,7 +37,7 @@
 - Ship the demo capability set (`demo.echo`, the `demo.ticks` stream and
   `run_world_command`) in the default addon package; `--base` / `MCBE_BASE=1`
   builds the lean two-snapshot pack.
-- Run `run_world_command` with the dangerous-command denylist only; callers can
+- Run `run_world_command` with the command denylist only; callers can
   pass an explicit allowlist to narrow it.
 - Expose `StreamError.message` so hosts can render stream failures without
   parsing exception text.

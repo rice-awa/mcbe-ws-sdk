@@ -110,3 +110,15 @@ def test_websockets_gate_includes_public_server_entries() -> None:
     steps = load_workflow("ci.yml")["jobs"]["websockets"]["steps"]
     commands = [step.get("run", "") for step in steps]
     assert any("tests/unit/test_server_entry.py" in command for command in commands)
+
+
+def test_workflow_test_paths_exist() -> None:
+    """Deleted test files must not leave a permanently failing release gate."""
+    root = Path(__file__).resolve().parents[2]
+    for name in ("ci.yml", "release.yml"):
+        for job in load_workflow(name)["jobs"].values():
+            for step in job["steps"]:
+                for argument in shlex.split(step.get("run", "")):
+                    path = argument.split("::", 1)[0]
+                    if path.startswith("tests/") and path.endswith(".py"):
+                        assert (root / path).is_file(), f"{name}: missing test path {path}"

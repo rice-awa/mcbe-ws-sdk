@@ -1,49 +1,48 @@
-# mcbe-ws-sdk
+# Connect Minecraft to Python
 
-A generic WebSocket gateway SDK for Minecraft Bedrock Edition. `McbeServer` owns
-the transport, mandatory MCBEWS/2 admission, request correlation, byte-safe
-command chunking, capabilities and request streams. Model services, message
-brokers, authentication and business history stay in your host.
+**mcbe-ws-sdk** is a WebSocket gateway for Minecraft Bedrock Edition. Handle
+player messages in Python, execute game commands, call addon capabilities and
+receive streams without managing packet fragments or request wait tables.
 
-```text
-Minecraft client  ←── /wsserver IP:port ──→  Python host
-                                              ├── ConnectionHook / ResponseSink
-                                              └── V2Bridge ←→ companion addon
-```
+**The current protocol is V2 (MCBEWS/2).** Connections complete protocol
+negotiation before processing business messages. The SDK package version and
+protocol version are independent.
 
-## Quickstart
+## Try it
+
+From the repository root:
 
 ```bash
-pip install -e ".[dev,docs]"                 # from this checkout
-python examples/basic-server/server.py       # command demo, tellraw replies
+pip install -e ".[dev,docs]"
+npm ci --prefix addon
+npm --prefix addon run mcaddon:production
 ```
 
-In Minecraft: `/wsserver <host-ip>:8080`, then send `!help` or
-`!wscmd time query daytime`.
+Import `addon/dist/packages/mc-ws-sdk.mcaddon`, enable **Experiments → Beta APIs**
+in the target world and activate the behavior pack. The addon is required for
+connection setup in both examples; without Beta APIs, scripts do not load.
 
-The example handles only trimmed messages that start with ASCII `!`. Ordinary
-chat, bare `help` / `帮助`, mid-sentence `!` and full-width `！` are silent with
-no reply and no capability call. A bare `!` returns one usage hint; an unknown
-`!command` returns one hint.
+```bash
+python examples/addon-server/server.py
+```
 
-Addon capabilities need the companion pack and **Experiments → Beta APIs** in
-the target world. Without Beta APIs the scripts do not load and admission times
-out.
+In Minecraft, run `/wsserver <python-host-ip>:8080`, then send `!inv` to query
+your inventory. Try `!echo hello` or `!stream 5` next. Only messages starting
+with ASCII `!` are handled; ordinary chat stays silent.
 
-## Where to go next
+See [getting started](getting-started.md) for prerequisites, configuration and
+troubleshooting.
 
-- [Getting started](getting-started.md): install, addon, first server, commands
-  and troubleshooting.
-- [Architecture](architecture.md): admission state machine, runtime and bridge
-  layers.
-- [Extension authors](extension-authors.md): capabilities, notifications,
-  metadata, events and streams.
-- [Protocol (MCBEWS/2)](protocol-v2.md): required admission, carrier, limits and
-  streams.
-- [Diagnostics](diagnostics.md): lifecycle logs, `--log-raw`, redaction.
-- [Native events](native-events.md): observers, interceptors and subscriptions.
-- [Migration](migration.md): breaking changes from the dual-protocol release.
-- [API reference](reference.md): generated from the public source.
+## Build your host
 
-Automated protocol coverage does not by itself prove live-game support. Verify
-your game version, platform and addon loading before relying on a deployment.
+- [Architecture](architecture.md): connection setup, queues and lifecycle.
+- [Extension authors](extension-authors.md): capabilities, notifications, metadata and streams.
+- [Native events](native-events.md): subscriptions, observers and interceptors.
+- [Diagnostics](diagnostics.md): trace a request and interpret failures.
+- [V2 protocol](protocol-v2.md): messages, negotiation, fragmentation and limits.
+- [API reference](reference.md): classes, methods and parameters.
+- [Migration](migration.md): upgrade from 0.2.x and roll back both deployment components.
+
+The SDK owns transport and protocol handling. Your host owns authentication,
+authorization and application state; `ConnectionHook` handles input and
+`ResponseSink` renders replies.

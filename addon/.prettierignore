@@ -1,0 +1,2 @@
+# Generated projection; tools/generate_v2_assets.py --check validates its bytes.
+scripts/bridge/v2/assets.ts

@@ -49,7 +49,7 @@ In your addon composition, register through the router API:
 ```typescript
 import { registerCapability } from "./bridge/router";
 
-const registration = registerCapability("demo.echo", (_method, payload, context) => ({
+const registration = registerCapability("custom.echo", (_method, payload, context) => ({
   text: payload.text,
   metadata: context.metadata,
 }));
@@ -63,9 +63,6 @@ Context includes `caller`, `requestVersion`, `metadata`, `client` and
 Custom handlers coexist with the built-ins and need no SDK changes. Duplicate
 names throw unless `replace: true` is passed. Unregistering during an in-flight
 call does not change that call.
-
-There is no aggregate `setCapabilityHandler` entry in this version. Register one
-handler per name.
 
 ## Register a stream producer
 
@@ -84,7 +81,7 @@ Addon:
 ```typescript
 import { registerV2Stream } from "./bridge/router";
 
-const unregister = registerV2Stream("demo.ticks", async function* (_method, params, context) {
+const unregister = registerV2Stream("custom.ticks", async function* (_method, params, context) {
   for (let index = 0; index < (params.count ?? 5); index += 1) {
     if (context.cancellation?.cancelled) return;
     yield { index };
@@ -98,10 +95,10 @@ Registering a duplicate stream name throws.
 
 ## Call the addon
 
-After admission, a managed hook can use the bridge:
+After negotiation, a managed hook can use the bridge:
 
 ```python
-selection = await server.v2.ready(state.id)     # explicit admission wait
+selection = await server.v2.ready(state.id)     # explicit negotiation wait
 response = await server.v2.request(
     state.id,
     "demo.echo",
@@ -173,7 +170,7 @@ The default addon build registers every bundled capability: `get_player_snapshot
 
 ```bash
 cd addon
-npm install
+npm ci
 npm run build
 npm run mcaddon
 ```
@@ -191,7 +188,7 @@ npm run mcaddon:base
 handlers, import them in your entry and register once during
 `initializeAfterWorldLoad`.
 
-`run_world_command` applies the dangerous-command denylist by default; pass an
+`run_world_command` applies the command denylist by default; pass an
 explicit allowlist to `handleRunWorldCommand` to narrow it further. Keep
 host-side authorization in place regardless of the addon policy.
 

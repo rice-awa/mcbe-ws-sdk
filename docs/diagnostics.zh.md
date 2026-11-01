@@ -1,7 +1,7 @@
 # 追踪与数据包诊断
 
-诊断回答四个问题：传输是否建立、准入成功还是失败、业务路径做了什么、连接为什么关闭。
-默认日志只输出摘要；完整数据包需要显式开启。
+诊断覆盖传输建立、协议协商、请求处理和关闭过程。
+SDK 诊断通道默认记录摘要，完整数据包需要显式开启。
 
 ## 生命周期阶段
 
@@ -11,27 +11,29 @@
 | --- | --- |
 | `WS_TRANSPORT_CONNECTED` | 连接标识与传输建立 |
 | `NEGOTIATING` | 尝试编号、协议版本、功能集合、超时 |
-| `READY_V2` | 已准入代次、协商功能、会话 |
+| `READY_V2` | 已就绪代次、协商功能、会话 |
 | `REJECTED` | 原因、关闭码，以及传输是否由本端关闭 |
 | `SESSION_INVALID` | 撤销或过期原因 |
 | `CLOSING` / `CLOSED` | 关闭码、有界关闭原因、发起方、清理摘要 |
 
-稳定的准入原因包括 `UNSUPPORTED_PROTOCOL`、`NEGOTIATION_TIMEOUT`、
+稳定的协议协商原因包括 `UNSUPPORTED_PROTOCOL`、`NEGOTIATION_TIMEOUT`、
 `NEGOTIATION_CONFIRMATION_TIMEOUT`、`NEGOTIATION_BUSY`、`INVALID_NEGOTIATION`
 与 `SESSION_INVALID`。被拒绝的连接不是业务断连，不会产生业务
 `on_connected` / `on_disconnected` 配对。
 
-准入拒绝的关闭码为 `1008`，关闭原因最多 123 个 UTF-8 字节。
+协议协商拒绝的关闭码为 `1008`，关闭原因最多 123 个 UTF-8 字节。
 无法观测关闭发起方或原因时记录 `unknown`，不要猜测。
 
-零字节 EOF 仍是未确认现象。不要把它当作正常行为，也不要为了隐藏它而屏蔽全部
-`websockets` 错误。先保留证据，确认来源后再做精确分类。
+遇到没有关闭码或原因的 EOF 时，保留传输错误，并将原因记录为未知，直到能确认来源。
 
 ## 默认摘要与原始数据包
 
-默认诊断记录标识、阶段、大小与帧分类，不记录业务文本、命令或完整数据包。
-仓库示例服务接受显式的 `--log-raw` 才会包含完整数据包；未提供时保持关闭。
-`--log-raw` 需要显式开启，因为数据包可能包含玩家文本和应用密钥。
+SDK 诊断通道默认记录标识、阶段、大小与帧分类，省略业务文本、命令和完整数据包。
+示例服务另外在 INFO 级别记录命令、能力参数和结果；这些应用日志独立于诊断通道，
+不受其脱敏配置控制。
+
+示例的 `--log-raw` 会额外开启完整出站数据包日志，日常使用时保持关闭。
+处理私人玩家数据前，也要检查应用层日志。
 
 ```python
 from mcbe_ws_sdk import DiagnosticSettings, McbeServer, trace_scope

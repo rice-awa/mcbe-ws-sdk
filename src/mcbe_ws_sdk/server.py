@@ -1,4 +1,4 @@
-"""MCBEWS/2-only server entry point.
+"""WebSocket server entry point.
 
 :class:`McbeServer` owns the WebSocket transport and the connection / protocol
 machinery, but not any host application concern: there is no message broker, no
@@ -6,7 +6,7 @@ LLM worker and no provider selection. All of that is injected through
 :class:`~mcbe_ws_sdk.gateway.hook.ConnectionHook` and
 :class:`~mcbe_ws_sdk.gateway.sink.ResponseSink`.
 
-Admission is mandatory and V2-only::
+Connections negotiate the protocol before business processing::
 
     WS_TRANSPORT_CONNECTED -> NEGOTIATING -> READY_V2 -> CLOSING -> CLOSED
                                   \\-> REJECTED ------------------> CLOSED
@@ -446,9 +446,7 @@ class McbeServer:
             return
         try:
             flow = FlowControlMiddleware(self._settings.flow)
-            command = MinecraftCommand.create_scriptevent(
-                reason, _REJECT_NOTICE
-            ).body.commandLine
+            command = MinecraftCommand.create_scriptevent(reason, _REJECT_NOTICE).body.commandLine
             payload = flow.chunk_raw_command(command)[0]
             async with asyncio.timeout(0.5):
                 await self._send_frame(

@@ -2,7 +2,7 @@
 
 A minimal `McbeServer` host. It shows the connection lifecycle, managed hooks,
 `!` command dispatch, tellraw replies and native `commandRequest` correlation.
-The SDK owns admission, request waiters, timeouts and fragments; the example
+The SDK owns negotiation, request waiters, timeouts and fragments; the example
 owns the chat behavior.
 
 ## Run
@@ -33,15 +33,16 @@ to the example only; SDK protocol and native events are never filtered by it.
 | `!help` / `!帮助` | Show help |
 | `!wscmd <command>` | Await a native command response, for example `!wscmd time query daytime` |
 
-Admission is mandatory, so the MCBEWS/2 addon must be installed in the world
-even though this example calls no addon capability. `!wscmd` uses the SDK's
+Install the companion addon and enable **Experiments → Beta APIs** in the
+world. The addon completes protocol negotiation even though this example calls
+no addon capability. `!wscmd` uses the SDK's
 native command client and returns the typed `MinecraftCommandResponse`; inspect
 `statusCode`. Without the addon the server logs `NEGOTIATION_TIMEOUT` and
 closes the connection — it never falls back to processing chat.
 
 ## Behavior
 
-- `on_connected` fires only after MCBEWS/2 admission reaches `READY_V2`.
+- `on_connected` fires only after MCBEWS/2 negotiation reaches `READY_V2`.
 - Same-player callbacks stay ordered; different players may progress
   concurrently. The reader keeps receiving replies while a hook awaits a
   command.

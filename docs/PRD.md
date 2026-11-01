@@ -21,7 +21,7 @@
 - **绝对不污染**主仓 `services/` / `models/` — 新包放独立文件夹，独立 git 仓库。
 - 透传 `PlayerMessageEvent.sender`，由**宿主**按 `(connection_id, sender)` 分桶做多人隔离。
 - 通过 MCBEWS/2 提供双向能力、通知、元数据与持续请求流。
-- 强制 MCBEWS/2 准入：旧协议不再兼容，旧端明确拒绝并关闭。
+- 连接完成协议协商后处理业务；当前使用 V2（MCBEWS/2），不兼容版本明确拒绝并关闭。
 
 ### 非目标（明确不做）
 
@@ -74,9 +74,9 @@
 - 连接生命周期：
   `WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED`，
   失败为 `REJECTED → CLOSED`。
-- 准入前只处理协商、必要控制帧和已关联的原生 `commandResponse` / `error`；
+- 协议协商前只处理协商、必要控制帧和已关联的原生 `commandResponse` / `error`；
   不发布业务 `CONNECTED`、不调用 `on_connected`、不执行玩家消息、不缓存业务重放。
-- 准入失败以 `1008` 关闭，原因标识长度有界；旧端、无响应、无 addon 与混合旧帧均不能继续业务。
+- 协议协商失败以 `1008` 关闭，原因标识长度有界；旧端、无响应、无 addon 与混合旧帧均不能继续业务。
 - 多人隔离是宿主职责：SDK 只透传 `PlayerMessageEvent.sender`；
   权威身份以 `sender` 为准，`ConnectionState.player_name` 只是弃用的最近发言者指针。
 - 字节级出站经由 `FlowControlMiddleware`，不重复实现分片。
@@ -87,12 +87,12 @@
   `on_command_response` / `on_error`。`parsed` 是 registry 预解析结果，不是“已消费”布尔。
 - **响应上抛** `ResponseSink`（2 路）：`on_outbound_text` / `on_system_notification`。
 - `McbeServer.run_lifetime()` / `stop()`：宿主注入 hook/sink/registry；
-  服务负责握手、订阅与准入，welcome 由宿主 `on_connected` 负责。
+  服务负责握手、订阅与协议协商，welcome 由宿主 `on_connected` 负责。
 
 ### MCBEWS/2 桥（profiles.mcbews_v2）
 
-- `V2Bridge`：每连接准入、能力注册表、流注册表、请求/通知/流入口。
-- `V2Endpoint`：已准入代次、回复配对、顺序组、请求与流限制。
+- `V2Bridge`：每连接协议协商、能力注册表、流注册表、请求/通知/流入口。
+- `V2Endpoint`：已就绪代次、回复配对、顺序组、请求与流限制。
 - 能力处理器接收 `(name, payload, CapabilityContext)`；未知方法、参数错误与处理器异常
   映射为 `UNSUPPORTED_METHOD` / `INVALID_PARAMS` / `HANDLER_FAILED`。
 - 通知没有回复等待项；请求流要求协商出 `stream/1`，有界缓存，慢消费者 `LIMIT_EXCEEDED`。
@@ -105,7 +105,7 @@
 - 能力通过 `registerCapability` 按名注册；流通过 `registerV2Stream` 注册。
 - 默认包注册 `get_player_snapshot`、`get_inventory_snapshot`、`demo.echo`、
   `demo.ticks` 与 `run_world_command`；`--base` 精简包只含两个只读快照。
-- `run_world_command` 默认应用危险命令禁止列表；需要更严格时可传入显式允许列表。
+- `run_world_command` 默认应用命令禁止列表；需要更严格时可传入显式允许列表。
 - 依赖 `@minecraft/server` 2.8.0、`@minecraft/server-ui` 2.1.0，
   以及与 1.26.30 基线匹配的 gametest beta；两个包清单最低引擎为 `[1,26,30]`。
 - 目标世界必须开启 **实验 → 测试版 API（Beta APIs）**。
@@ -145,7 +145,7 @@
 | `services/websocket/flow_control.py` | `src/mcbe_ws_sdk/flow/flow_control.py` | 保留 |
 | `services/websocket/command.py` | `src/mcbe_ws_sdk/command/registry.py` | 保留 |
 | `services/websocket/delivery.py` | `src/mcbe_ws_sdk/delivery/outbound.py` | 保留 |
-| `services/websocket/connection.py` | `src/mcbe_ws_sdk/gateway/connection.py` | 保留并加入准入状态 |
+| `services/websocket/connection.py` | `src/mcbe_ws_sdk/gateway/connection.py` | 保留并加入协议协商状态 |
 | `services/websocket/minecraft.py` | `src/mcbe_ws_sdk/gateway/handler.py` | 保留 |
 
 ## 7. 历史迁移批序
@@ -157,7 +157,7 @@
 - **批 E**（主仓适配+示例+文档）。
 
 后续 V2-only 重构删除了批 D 的旧 facade/addon service 兼容层，
-并新增 `profiles.mcbews_v2` 的准入、能力、通知与流实现。
+并新增 `profiles.mcbews_v2` 的协议协商、能力、通知与流实现。
 
 ## 8. 风险
 
@@ -170,7 +170,7 @@
 
 ## 9. 成功指标
 
-- 包内 e2e（内存 WS 跑 `run_lifetime` 全链路），覆盖 MCBEWS/2 准入。
+- 包内 e2e（内存 WS 跑 `run_lifetime` 全链路），覆盖 MCBEWS/2 协议协商。
 - 基础与完整演示附加包均可构建，能力清单可重复验证。
 - 旧协议帧只产生拒绝，不产生业务副作用。
 - `examples/basic-server` 与 `examples/addon-server` 端到端可用。

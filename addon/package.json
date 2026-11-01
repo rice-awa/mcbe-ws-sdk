@@ -1,6 +1,6 @@
 {
   "name": "mcbe-ws-sdk",
-  "version": "0.2.1",
+  "version": "0.3.0-rc.1",
   "productName": "MCBE-WS-SDK",
   "description": "Script bridge for MCBE-WS-SDK",
   "private": true,

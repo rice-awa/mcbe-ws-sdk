@@ -2,7 +2,7 @@
 
 A `McbeServer` host that calls the companion addon through `V2Bridge`. It shows
 capability requests, metadata, notifications and streams while the SDK owns
-admission, callbacks, request waiters, timeouts and fragments.
+negotiation, callbacks, request waiters, timeouts and fragments.
 
 ## Build the addon
 
@@ -10,7 +10,7 @@ The default package includes every capability this server calls:
 
 ```bash
 cd addon
-npm install
+npm ci
 npm run build
 npm run mcaddon
 ```
@@ -25,14 +25,13 @@ npm run mcaddon:base
 
 Import the generated `.mcaddon`. In the target world's settings enable
 **Experiments → Beta APIs** and activate its behavior pack. Without Beta APIs,
-scripts do not load and admission times out. See
+scripts do not load and negotiation times out. See
 [addon setup](../../addon/README.md#enable-in-a-world).
 
 The default build bundles `addon/scripts/main.demo.ts` and calls
 `registerDemoCapabilities()`; you do not copy files into the addon by hand.
 `demoCapabilities.ts` is the shared registration source for `demo.echo`, the
-`demo.ticks` stream and `run_world_command`, whose dangerous commands stay
-denied.
+`demo.ticks` stream and `run_world_command`, which applies the command denylist.
 
 ## Run
 
@@ -63,7 +62,7 @@ filtered by this rule.
 | `!player [target]` / `!玩家` | `get_player_snapshot`, current player by default | Default + lean |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` | Default + lean |
 | `!wscmd <command>` / `!ws命令` | Native `command_client.run`, no addon capability needed | Default + lean |
-| `!cmd <command>` / `!命令` | `run_world_command` as the chat sender, dangerous commands denied | Default only |
+| `!cmd <command>` / `!命令` | `run_world_command` as the chat sender, commands on the denylist rejected | Default only |
 | `!echo <text>` | `demo.echo`, with `example.label` and `example.player` metadata | Default only |
 | `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) | Default only |
 | `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) | Default only |
@@ -71,7 +70,7 @@ filtered by this rule.
 
 With the lean `--base` package, the demo commands return a readable
 `UNSUPPORTED_METHOD` error and a hint to use the default build.
-`run_world_command` keeps the dangerous-command denylist; pass an explicit
+`run_world_command` keeps the command denylist; pass an explicit
 allowlist to `handleRunWorldCommand` to narrow it further.
 
 ### Selectors and command context
@@ -92,7 +91,7 @@ does not select by type. `setblock` requires three coordinates (for example,
 
 ## Ordering, failures and cancellation
 
-`McbeServer` requires MCBEWS/2 admission. Same-player callbacks remain FIFO;
+`McbeServer` starts business processing after protocol negotiation. Same-player callbacks remain FIFO;
 other players can progress independently. The reader continues receiving replies
 while a hook awaits work. The example keeps no request wait table, manual
 fragment state or background request tasks.

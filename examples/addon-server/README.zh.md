@@ -1,7 +1,7 @@
 # 附加包能力演示服务器
 
 通过 `V2Bridge` 调用配套附加包的 `McbeServer` 宿主。展示能力请求、元数据、通知与流；
-准入、回调、请求等待、超时与分片由 SDK 负责。
+协议协商、回调、请求等待、超时与分片由 SDK 负责。
 
 ## 构建附加包
 
@@ -9,7 +9,7 @@
 
 ```bash
 cd addon
-npm install
+npm ci
 npm run build
 npm run mcaddon
 ```
@@ -23,12 +23,12 @@ npm run mcaddon:base
 ```
 
 导入生成的 `.mcaddon`。在目标世界设置中开启 **实验 → 测试版 API（Beta APIs）**，
-并启用行为包。未开启时脚本不会加载，准入会超时。
+并启用行为包。未开启时脚本不会加载，协议协商会超时。
 详见[附加包设置](../../addon/README.zh.md)。
 
 默认构建会打包 `addon/scripts/main.demo.ts` 并调用 `registerDemoCapabilities()`，
 不需要手动复制文件。`demoCapabilities.ts` 是 `demo.echo`、`demo.ticks` 流与
-`run_world_command` 的共同注册源；世界命令中的危险命令仍会被拒绝。
+`run_world_command` 的共同注册源；世界命令仍受命令禁止列表约束。
 
 ## 运行
 
@@ -57,14 +57,14 @@ python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DE
 | `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 | 默认 + 精简 |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` | 默认 + 精简 |
 | `!wscmd <command>` / `!ws命令` | 原生 `command_client.run`，不需要附加包能力 | 默认 + 精简 |
-| `!cmd <command>` / `!命令` | `run_world_command`，以发言玩家为上下文，危险命令被拒绝 | 仅默认 |
+| `!cmd <command>` / `!命令` | `run_world_command`，以发言玩家为上下文，命中禁止列表的命令被拒绝 | 仅默认 |
 | `!echo <text>` | `demo.echo`，附带 `example.label` 与 `example.player` 元数据 | 仅默认 |
 | `!stream [count]` | 消费有限的 `demo.ticks` 直到正常结束（默认 5 项） | 仅默认 |
 | `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） | 仅默认 |
 | `!help` / `!帮助` | 查看帮助 | 默认 + 精简 |
 
 使用 `--base` 精简包时，演示命令会返回可读的 `UNSUPPORTED_METHOD` 错误，并提示使用默认构建。
-`run_world_command` 始终保留危险命令禁止列表；需要更严格时可向
+`run_world_command` 始终保留命令禁止列表；需要更严格时可向
 `handleRunWorldCommand` 传入显式允许列表。
 
 ### 选择器与执行上下文
@@ -82,7 +82,7 @@ python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DE
 
 ## 顺序、失败与取消
 
-`McbeServer` 强制 MCBEWS/2 准入。同一玩家的回调保持先进先出，其他玩家可独立推进。
+`McbeServer` 在协议协商完成后开始处理业务。同一玩家的回调保持先进先出，其他玩家可独立推进。
 钩子等待业务时，读取循环仍接收回复。示例不维护请求等待表、分片状态或后台请求任务。
 
 协商请求返回响应信封，成功数据在 `result` 中；远端协议错误抛出带 `code` 的

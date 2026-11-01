@@ -6,13 +6,13 @@
 
 - Python 3.11+。
 - 可使用 `/wsserver`、允许执行命令的基岩版世界。
-- 使用附加包能力时：配套 TypeScript 附加包，依赖固定在
+- 配套 TypeScript 附加包，依赖固定在
   [`addon/package.json`](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/package.json)：
   `@minecraft/server` 2.8.0、`@minecraft/server-ui` 2.1.0，以及与 1.26.30 基线匹配的
   `@minecraft/server-gametest` 测试版。
 - 附加包清单的目标 `min_engine_version` 为 `[1, 26, 30]`。
 
-SDK 要求每条连接完成 MCBEWS/2 准入。没有旧协议模式，也不会在准入前缓存业务。
+两个示例都需要配套附加包完成协议协商，包括只调用原生 WebSocket 命令的基础示例。
 
 ## 安装
 
@@ -24,7 +24,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
 ```
 
-如果已有构建好的 wheel，`pip install ./dist/mcbe_ws_sdk-*.whl` 即可安装。
+如果已有构建好的 wheel，`pip install ./dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl` 即可安装。
 
 ## 构建并导入附加包
 
@@ -32,21 +32,22 @@ pip install -e ".[dev,docs]"
 
 ```bash
 cd addon
-npm install
+npm ci
 npm run build
 npm run mcaddon
+cd ..
 ```
 
 精简包只注册两个只读快照：
 
 ```bash
-npm run build:base
-npm run mcaddon:base
+npm --prefix addon run build:base
+npm --prefix addon run mcaddon:base
 ```
 
 两个变体写入同一个脚本路径 `dist/scripts/main.js`，但构建产物彼此独立：
 默认包生成 `mc-ws-sdk.mcaddon`，精简包生成 `mc-ws-sdk-base.mcaddon`，均位于
-`dist/packages/`，不会互相覆盖。`--base` 或 `MCBE_BASE=1` 选择 `main.ts`；
+`addon/dist/packages/`，不会互相覆盖。`--base` 或 `MCBE_BASE=1` 选择 `main.ts`；
 默认入口是 `main.demo.ts`。
 
 ### 在世界中启用
@@ -55,13 +56,13 @@ npm run mcaddon:base
 2. 打开**目标世界**设置（新建世界，或对已有世界点**编辑**）。
 3. 在 **实验**（Experiments）中开启 **测试版 API（Beta APIs）**。
 4. 启用行为包（如有提示，也启用配套资源包）。
-5. 进入世界。未开启 Beta APIs 时脚本不会加载，准入会超时。
+5. 进入世界。未开启 Beta APIs 时脚本不会加载，协议协商会超时。
 
 开启实验性玩法可能使世界无法解锁部分成就，建议使用专用测试世界。
 
 ## 启动示例服务
 
-两个示例都需要附加包完成准入。基础示例不调用附加包能力，只响应带前缀的命令，
+基础示例不调用附加包能力，只响应带前缀的命令，
 并等待原生 `commandRequest` 回复：
 
 ```bash
@@ -80,7 +81,7 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 跨设备时改用运行 Python 的机器的局域网 IP，并在防火墙放行监听端口。
 示例没有登录步骤，也没有鉴权。
 
-连接只有在 MCBEWS/2 准入进入 `READY_V2` 后才算就绪。
+协议协商进入 `READY_V2` 后，连接就绪。
 `on_connected` 在该时刻触发；此前不会处理任何业务消息。
 
 ## 示例命令
@@ -92,9 +93,9 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 | --- | --- |
 | 空串或空白 | 静默 |
 | `hello`、`a`、`stream 5` | 静默 |
-| 裸 `help` 或 `帮助` | 静默（别名现在必须带前缀） |
+| 裸 `help` 或 `帮助` | 静默 |
 | `hello !player`、全角 `！player` | 静默 |
-| ` !player ` | trim 后正常处理 |
+| ` !player ` | 去掉首尾空白后正常处理 |
 | 裸 `!` | 一次用法提示 |
 | `!unknown` | 一次未知命令提示 |
 | `!help`、`!帮助` | 帮助 |
@@ -117,13 +118,13 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 | `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` |
 | `!wscmd <command>` / `!ws命令` | 原生命令，不需要附加包能力 |
-| `!cmd <command>` / `!命令` | `run_world_command`，以发言玩家为上下文，危险命令被拒绝 |
+| `!cmd <command>` / `!命令` | `run_world_command`，以发言玩家为上下文，命中禁止列表的命令被拒绝 |
 | `!echo <text>` | `demo.echo`，附带示例元数据 |
 | `!stream [count]` | 消费 `demo.ticks` 直到正常结束（默认 5 项） |
 | `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） |
 | `!help` / `!帮助` | 显示帮助 |
 
-`run_world_command` 随默认包发布。默认策略为仅禁止列表：命中危险命令禁止列表的入口
+`run_world_command` 随默认包发布。默认策略为仅禁止列表：命中命令禁止列表的入口
 一律拒绝；需要更严格时可向 `handleRunWorldCommand` 传入显式允许列表。
 `!cmd testfor @s` 使用发送者的玩家上下文，包括位置与维度。
 直接调用能力时可传入在线玩家的完整 `player` 名称；省略时保留主世界上下文。
@@ -131,7 +132,7 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 
 ## 从 Python 调用附加包能力
 
-在准入后的受管理钩子中，使用服务的 `V2Bridge`：
+在协议协商后的受管理钩子中，使用服务的 `V2Bridge`：
 
 ```python
 response = await server.v2.request(
@@ -177,20 +178,20 @@ async with stream:
 | 连接立即以 `UNSUPPORTED_PROTOCOL` 关闭 | 附加包或客户端不是 MCBEWS/2。旧协议帧会被拒绝，没有回退。 |
 | `NEGOTIATION_TIMEOUT` | 附加包缺失、未启用，或脚本未加载。确认行为包与 **测试版 API**。 |
 | `NEGOTIATION_CONFIRMATION_TIMEOUT` | 附加包已应答挑战，但最终确认未完成。重连并查看世界/脚本日志。 |
-| `NEGOTIATION_BUSY` | 临时准入或对端名额已满；等旧会话过期后重连。 |
+| `NEGOTIATION_BUSY` | 临时协议协商或对端名额已满；等旧会话过期后重连。 |
 | `INVALID_NEGOTIATION` | 控制帧格式错误或不匹配。确认附加包版本与本 SDK 一致。 |
-| `SESSION_INVALID` | 已准入会话被撤销或过期。重连会获得新的会话代次。 |
+| `SESSION_INVALID` | 已就绪会话被撤销或过期。重连会获得新的会话代次。 |
 | 能力调用超时 | 确认启用的包、目标世界、测试版 API 与 `/wsserver` 连接。 |
-| `!cmd` 失败但 `!wscmd` 正常 | 命令在危险命令禁止列表内，或附加包是 `--base` 精简构建。 |
+| `!cmd` 失败但 `!wscmd` 正常 | 命令在命令禁止列表内，或附加包是 `--base` 精简构建。 |
 | 普通聊天没有回复 | 这是预期行为。示例只处理以 ASCII `!` 开头的消息。 |
 | 文本分成多段 | SDK 使用 461 字节经验预算拆分 tellraw/scriptevent；原生命令保持原子，超限即拒绝。 |
 
-准入失败会以 `1008` 关闭 WebSocket。关闭原因是有界标识（最多 123 个 UTF-8 字节）。
-日志中的零字节 EOF 仍是未确认现象，不能当作正常行为。详见[追踪与诊断](diagnostics.md)。
+协议协商失败会以 `1008` 关闭 WebSocket。关闭原因是有界标识（最多 123 个 UTF-8 字节）。
+连接与传输错误的排查见[追踪与诊断](diagnostics.md)。
 
 ## 关闭与回退
 
 调用 `await server.stop()` 或取消 `run_lifetime()`；受管理任务、待完成调用与分片会被清理。
-重连会重新准入并建立新会话。已经执行的世界修改不会撤销，也不会自动重放。
+重连会重新协商协议并建立新会话。已经执行的世界修改不会撤销，也不会自动重放。
 
 示例没有鉴权。桥接不是安全边界；宿主负责调用方认证、授权与应用状态。

@@ -1,8 +1,7 @@
 """Frozen gateway settings.
 
-The SDK is MCBEWS/2-only: the empirical command budget comes from the v2
-manifest, and there is no dispatch-mode switch because every connection uses
-the reliable business lanes.
+The empirical command budget comes from the current protocol manifest.
+Every connection uses managed business lanes.
 """
 
 from __future__ import annotations

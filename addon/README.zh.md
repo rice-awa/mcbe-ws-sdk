@@ -3,16 +3,19 @@
 # MCBE WebSocket 桥接附加包
 
 `mcbe-ws-sdk` 的 TypeScript 对应实现，负责 MCBEWS/2 的 Minecraft 侧：
-准入、数据包载体、能力注册表与请求流。Python 宿主实现另一侧。
+协议协商、数据包载体、能力注册表与请求流。Python 宿主实现另一侧。
 
-附加包**只支持 MCBEWS/2**，只接受两个 scriptevent 标识：
+当前附加包使用 **V2 协议（MCBEWS/2）**，接收两个 scriptevent 标识：
 
-- `mcbews:negotiate_v2` —— 准入控制；
+- `mcbews:negotiate_v2` —— 协议协商控制；
 - `mcbews:packet_v2` —— 逻辑消息载体。
 
 已退休的 `mcbews:bridge_req`、`mcbews:session_req`、`mcbews:text_resp`
 只记录并拒绝，不解析、不排队、不回复、不分发。附加包无法关闭旧服务持有的 WebSocket，
 只拒绝其业务帧。
+
+SDK、npm 项目、pack、协议和 Script API 的版本分别管理。
+当前数值见[版本说明](../docs/migration.zh.md#版本号分别表示什么)。
 
 ## 环境要求
 
@@ -29,7 +32,7 @@
 ## 构建
 
 ```bash
-npm install
+npm ci
 npm run build       # tsc 类型检查 + esbuild 打包
 npm run mcaddon     # 组装 .mcaddon
 ```
@@ -59,7 +62,7 @@ npm run mcaddon:base
 4. 启用行为包（如有提示，也启用配套资源包）。
 5. 进入世界后执行 `/wsserver <主机IP>:8080`。
 
-未开启 Beta APIs 时脚本不会加载：准入会超时，游戏内也看不到桥接活动。
+未开启 Beta APIs 时脚本不会加载：协议协商会超时，游戏内也看不到桥接活动。
 开启实验性玩法可能使世界无法解锁部分成就；建议使用专用测试世界。
 
 ## 工作方式
@@ -76,7 +79,7 @@ V2Endpoint
 ```
 
 路由器只在世界就绪后激活。激活前到达的 hello 只保留一个经过清洗的尝试；
-其他就绪前业务直接丢弃，不重放。每个已准入对端有自己的代次、分片与等待项，
+其他就绪前业务直接丢弃，不重放。每个已就绪对端有自己的代次、分片与等待项，
 新对端不会替换其他对端。
 
 下行使用 `scriptevent mcbews:packet_v2`；上行由模拟玩家 `MCBEWS_BRIDGE`
@@ -87,7 +90,7 @@ V2Endpoint
 ```typescript
 import { registerCapability } from "./bridge/router";
 
-const registration = registerCapability("demo.echo", (_method, payload, context) => ({
+const registration = registerCapability("custom.echo", (_method, payload, context) => ({
   text: payload.text,
   metadata: context.metadata,
 }));
@@ -99,14 +102,14 @@ const registration = registerCapability("demo.echo", (_method, payload, context)
 可选校验器返回消息即拒绝输入。
 
 重名默认抛错，传入 `replace: true` 才覆盖。调用进行中注销不影响当前调用；
-之后的调用不再看到该名称。当前版本没有聚合的 `setCapabilityHandler` 入口。
+之后的调用不再看到该名称。
 
 ## 注册流
 
 ```typescript
 import { registerV2Stream } from "./bridge/router";
 
-const unregister = registerV2Stream("demo.ticks", async function* (_method, params, context) {
+const unregister = registerV2Stream("custom.ticks", async function* (_method, params, context) {
   for (let index = 0; index < (params.count ?? 5); index += 1) {
     if (context.cancellation?.cancelled) return;
     yield { index };
@@ -123,18 +126,18 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 
 所有包都会注册：
 
-| 能力 | 说明 |
-| --- | --- |
-| `get_player_snapshot` | 玩家名称、生命值、标签、坐标、维度与游戏模式 |
-| `get_inventory_snapshot` | 背包槽位、物品 ID、数量与自定义名称 |
+| 能力                     | 说明                                         |
+| ------------------------ | -------------------------------------------- |
+| `get_player_snapshot`    | 玩家名称、生命值、标签、坐标、维度与游戏模式 |
+| `get_inventory_snapshot` | 背包槽位、物品 ID、数量与自定义名称          |
 
 默认演示构建额外注册：
 
-| 能力 / 流 | 说明 |
-| --- | --- |
-| `demo.echo` | 回显载荷与请求元数据 |
-| `demo.ticks` | 有限或无限的索引流；取消后停止生产 |
-| `run_world_command` | 世界命令处理器；危险命令禁止列表仍然生效 |
+| 能力 / 流           | 说明                                 |
+| ------------------- | ------------------------------------ |
+| `demo.echo`         | 回显载荷与请求元数据                 |
+| `demo.ticks`        | 有限或无限的索引流；取消后停止生产   |
+| `run_world_command` | 世界命令处理器；命令禁止列表仍然生效 |
 
 `find_entities` 等能力不随包提供。自定义实体查询由宿主定义，并自行校验范围。
 
@@ -149,7 +152,7 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 
 `run_world_command` 随默认包发布，但策略仍然生效：
 
-- 默认策略为仅禁止列表：命中危险命令禁止列表（`execute`、`script`、`op`、
+- 默认策略为仅禁止列表：命中命令禁止列表（`execute`、`script`、`op`、
   `setblock`、`fill` 等）的入口一律拒绝；
 - 需要更严格时，可向 `handleRunWorldCommand` 传入显式允许列表；
 - 每次调用仍须由 Python 宿主授权。
@@ -159,14 +162,14 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 
 ## 排查
 
-| 现象 | 检查 |
-| --- | --- |
-| 准入超时 | 包未启用、目标世界不对，或 **测试版 API** 未开启 |
-| 日志出现 `UNSUPPORTED_PROTOCOL` | 有已退休的 scriptevent 到达附加包；把 Python 宿主或附加包升级到 MCBEWS/2 |
-| `!echo` / `!stream` 返回 `UNSUPPORTED_METHOD` | 安装的是 `--base` 精简包，请使用默认演示构建 |
-| `!cmd` 被拒绝 | 命令在危险命令禁止列表内，或附加包是 `--base` 精简构建 |
-| 游戏内没有桥接活动 | 脚本未加载；确认测试版 API、内容日志与包启用情况 |
-| `demo.ticks` 提前停止 | 消费者取消，或超过流限制 |
+| 现象                                          | 检查                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------ |
+| 协议协商超时                                  | 包未启用、目标世界不对，或 **测试版 API** 未开启                         |
+| 日志出现 `UNSUPPORTED_PROTOCOL`               | 有已退休的 scriptevent 到达附加包；把 Python 宿主或附加包升级到 MCBEWS/2 |
+| `!echo` / `!stream` 返回 `UNSUPPORTED_METHOD` | 安装的是 `--base` 精简包，请使用默认演示构建                             |
+| `!cmd` 被拒绝                                 | 命令在命令禁止列表内，或附加包是 `--base` 精简构建                       |
+| 游戏内没有桥接活动                            | 脚本未加载；确认测试版 API、内容日志与包启用情况                         |
+| `demo.ticks` 提前停止                         | 消费者取消，或超过流限制                                                 |
 
 ## 许可证
 
