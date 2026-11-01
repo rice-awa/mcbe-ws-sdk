@@ -32,7 +32,7 @@ async def test_legacy_positional_state_enqueues_and_routes(with_tracking: bool) 
     tracking = (
         ConnectionRuntime(
             connection_id=identity,
-            dispatch=DispatchSettings(mode="reliable"),
+            dispatch=DispatchSettings(),
             send=SendSchedulerSettings(),
             flow=FlowControlSettings(),
             transport=_send_noop,

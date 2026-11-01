@@ -5,56 +5,28 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
 import pytest
 
 from mcbe_ws_sdk import DiagnosticSettings, TraceContext, current_trace, trace_scope
-from mcbe_ws_sdk.config import DispatchSettings, GatewaySettings, SendSchedulerSettings
+from mcbe_ws_sdk.config import GatewaySettings, SendSchedulerSettings
 from mcbe_ws_sdk.diagnostics import Diagnostics, is_external_echo
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.dispatch import BusinessDispatcher
 from mcbe_ws_sdk.gateway.events import WsEventType
 from mcbe_ws_sdk.gateway.hook import NoOpHook
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.protocol.minecraft import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
     PlayerMessageEvent,
 )
+from mcbe_ws_sdk.server import McbeServer
 from mcbe_ws_sdk.tracing import observe
 
-
-class QueueWebSocket:
-    """Async-iterable transport fed by explicit ``push`` calls."""
-
-    def __init__(self) -> None:
-        self.sent: list[str] = []
-        self._incoming: asyncio.Queue[str | None] = asyncio.Queue()
-        self.on_send: Callable[[str], Awaitable[None]] | None = None
-
-    async def send(self, payload: str) -> None:
-        self.sent.append(payload)
-        if self.on_send is not None:
-            await self.on_send(payload)
-
-    async def push(self, frame: str) -> None:
-        await self._incoming.put(frame)
-
-    async def close(self) -> None:
-        await self._incoming.put(None)
-
-    def __aiter__(self) -> AsyncIterator[str]:
-        return self._iter_frames()
-
-    async def _iter_frames(self) -> AsyncIterator[str]:
-        while True:
-            frame = await self._incoming.get()
-            if frame is None:
-                return
-            yield frame
+from .test_reliable_facade import QueueWebSocket
 
 
 class RecordingHook(NoOpHook):
@@ -114,11 +86,8 @@ def _command_response_frame(request_id: str) -> str:
 
 async def start(settings: DiagnosticSettings | None = None, observers: tuple[Any, ...] = ()):
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        settings=GatewaySettings(
-            dispatch=DispatchSettings(mode="reliable"),
-            send=SendSchedulerSettings(min_interval_seconds=0),
-        ),
+    facade = McbeServer(
+        settings=GatewaySettings(send=SendSchedulerSettings(min_interval_seconds=0)),
         hook=hook,
         diagnostics=settings,
         diagnostic_observers=observers,
@@ -463,84 +432,6 @@ async def test_logger_failure_and_packet_size_bound(monkeypatch) -> None:
     assert records[0]["packet_omitted"] == "size_limit"
     assert sink.observer_failures == 1
     await sink.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failed", [False, True])
-async def test_addon_logical_request_and_reply_share_original_player_trace(failed) -> None:
-    from mcbe_ws_sdk.delivery.outbound import McbeOutboundDelivery
-    from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1
-
-    records = []
-    complete = asyncio.Event()
-
-    def observer(record):
-        records.append(record)
-        if record.get("category") == "addon.bridge" and record["stage"] in {
-            "remote_success",
-            "remote_failure",
-            "request_failed",
-        }:
-            complete.set()
-
-    facade, ws, task, hook, state = await start(observers=(observer,))
-    logical = []
-
-    async def on_send(payload):
-        data = json.loads(payload)
-        command = data.get("body", {}).get("commandLine", "")
-        if command.startswith("scriptevent "):
-            request = json.loads(command.split(" ", 2)[2])
-            logical.append(request["request_id"])
-            await ws.push(_command_response_frame(data["header"]["requestId"]))
-            content = json.dumps(
-                {
-                    "ok": not failed,
-                    "result": {"value": 1},
-                    "error": {"code": "DENIED", "message": "denied"},
-                }
-            )
-            await ws.push(
-                _player_frame(
-                    MCBEWS_V1.trusted_bridge_player_name,
-                    f"{MCBEWS_V1.capability_response_chat_prefix}|{request['request_id']}|1/1|{content}",
-                )
-            )
-
-    ws.on_send = on_send
-
-    async def player(state, event):
-        delivery = McbeOutboundDelivery(
-            connection_id=state.id, send_payload=state.send_payload, settings=facade.settings.flow
-        )
-
-        async def command(value):
-            await delivery.send_raw_command(value)
-
-        try:
-            await facade.addon.request_capability(state.id, "custom", {}, command)
-        except Exception:
-            if not failed:
-                raise
-
-    hook.on_player = player
-    await ws.push(_player_frame("Alice", "go"))
-    await asyncio.wait_for(complete.wait(), 2)
-    related = [r for r in records if r.get("request_id") == logical[0]]
-    phases = {r["stage"] for r in related}
-    assert {"request_registered", "enqueued", "prepared", "transport_sent", "received"} <= phases
-    assert ("remote_failure" if failed else "remote_success") in phases
-    if failed:
-        assert "remote_success" not in phases
-    assert {r["player"] for r in related} == {"Alice"}
-    assert len({r["trace_id"] for r in related}) == 1
-    sent = next(r for r in related if r["stage"] == "prepared")
-    assert sent["wire_request_id"] != sent["request_id"] != sent["trace_id"]
-    acknowledgements = [r for r in related if r.get("frame_type") == "commandResponse"]
-    assert len(acknowledgements) == 1
-    assert acknowledgements[0]["trace_id"] == sent["trace_id"]
-    await stop(ws, task)
-    assert facade.addon._diagnostics == {}
 
 
 @pytest.mark.asyncio

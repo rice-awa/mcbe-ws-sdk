@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Guard wire-protocol and public-API names for the mcbews v1 cutover.
+"""Fail when MCBEWS/1 business identifiers survive in production surfaces.
 
 Checks:
-1. Python ``McbewsV1Profile`` defaults match Addon ``constants.ts`` exports.
-2. Forbidden AI-branded tokens are absent outside an explicit whitelist.
-3. Public API exports the new symbols and does not export the old ones.
-4. Flow-control delay kinds use ``text_resp`` (not the retired AI name).
+
+1. Every ``src/mcbe_ws_sdk/**/*.py`` file is free of the retired MCBEWS/1
+   business identifiers. No source file is exempt.
+2. Every ``addon/scripts/**/*.ts`` production file is free of the same
+   identifiers. Negative fixtures belong under ``addon/tests``.
+3. Package JSON assets and Addon pack manifests are free of the identifiers.
+   ``vectors.json`` may keep an old-version sample only inside
+   ``invalid``/``raw_invalid``, where the vector's ``expected`` code is a
+   declared rejection.
+4. The v2 manifest is the sole authority: ``protocol == "MCBEWS/2"``,
+   ``versions == ["MCBEWS/2"]`` and no ``v1_methods``/``legacy`` keys.
+5. ``addon/scripts/bridge/v2/assets.ts`` still matches the manifest/vectors
+   projection produced by :mod:`tools.generate_v2_assets`.
 
 Usage::
 
@@ -17,135 +26,54 @@ exits 1.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]
 
-# Python semantic profile field → generated TypeScript constant name.
-PAIRS: dict[str, str] = {
-    "capability_request_script_event_id": "CAPABILITY_REQUEST_SCRIPT_EVENT_ID",
-    "text_response_script_event_id": "TEXT_RESPONSE_SCRIPT_EVENT_ID",
-    "capability_response_chat_prefix": "CAPABILITY_RESPONSE_CHAT_PREFIX",
-    "ui_chat_chunk_prefix": "UI_CHAT_CHUNK_PREFIX",
-    "trusted_bridge_player_name": "TRUSTED_BRIDGE_PLAYER_NAME",
-}
+V2_MANIFEST = ROOT / "src/mcbe_ws_sdk/profiles/mcbews_v2/manifest.json"
+V2_VECTORS = ROOT / "src/mcbe_ws_sdk/profiles/mcbews_v2/vectors.json"
+V2_ASSETS = ROOT / "addon/scripts/bridge/v2/assets.ts"
+V2_GENERATOR = ROOT / "tools/generate_v2_assets.py"
 
-FORBIDDEN: list[str] = [
-    r"\bmcbeai\b",
-    r"\bMCBEAI\b",
-    r"\bMcbeAi\b",
-    r"\bMCBEAI_TOOL\b",
-    r"\bai_resp\b",
-    r"\bAI_RESP\b",
-    r"\bLegacyMcbeAi",
-    r"\bLEGACY_MCBEAI",
-    r"\blegacy_mcbeai",
-    r"\bAiRespHandler\b",
-    r"\bsetAiRespHandler\b",
-    r"\bencode_legacy_response_commands\b",
-    r"\bLegacyResponseChunk\b",
-    r"\bparseLegacyResponseChunk\b",
-    r"\bTOOL_PLAYER_NAME\b",
-    r"\bBRIDGE_MESSAGE_ID\b",
-    r"\bAI_RESP_MESSAGE_ID\b",
-]
-FORBIDDEN_RES = [re.compile(pattern) for pattern in FORBIDDEN]
-
-# Relative path prefixes that are never scanned for forbidden tokens.
-WHITELIST_PREFIXES: tuple[str, ...] = (
-    "docs/reviews/",
-    "docs/superpowers/",
-    "docs/plans/",
-    ".superpowers/",
+# Retired MCBEWS/1 business identifiers. These are substrings, so a new v1
+# spelling cannot slip through by changing surrounding punctuation.
+FORBIDDEN_IDENTIFIERS: tuple[str, ...] = (
+    "MCBEWS/1",
+    "mcbews:bridge_req",
+    "mcbews:session_req",
+    "mcbews:text_resp",
+    "MCBEWS|BRIDGE",
+    "MCBEWS|UI_CHAT",
+    "MCBEWS|SESSION",
+    "MCBEWS|TOOL_APPROVE",
+    "MCBEWS|TOOL_DENY",
 )
 
-# Directory name components that exclude a path from the forbidden scan.
-SKIP_DIR_PARTS: frozenset[str] = frozenset(
-    {
-        "node_modules",
-        "__pycache__",
-        "dist",
-        ".git",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        "lib",
-    }
+# Manifest keys that only existed to select or emulate the v1 wire protocol.
+# Any key containing ``legacy`` (case-insensitive) or named ``v1`` /
+# ``v1_methods`` is rejected; this set documents the known spellings.
+FORBIDDEN_MANIFEST_KEYS: frozenset[str] = frozenset(
+    {"v1_methods", "legacy", "legacy_request", "_legacy"}
 )
 
-# File suffixes considered text for the forbidden scan.
-TEXT_SUFFIXES: frozenset[str] = frozenset(
-    {
-        ".py",
-        ".ts",
-        ".tsx",
-        ".js",
-        ".jsx",
-        ".mjs",
-        ".cjs",
-        ".json",
-        ".md",
-        ".txt",
-        ".toml",
-        ".yml",
-        ".yaml",
-        ".cfg",
-        ".ini",
-        ".sh",
-        ".css",
-        ".html",
-        ".svg",
-    }
+# Package directories removed by the V2-only cutover.
+RETIRED_PACKAGE_PATHS: tuple[str, ...] = (
+    "src/mcbe_ws_sdk/profiles/mcbews_v1",
+    "src/mcbe_ws_sdk/extensions/mcbews_v1",
+    "src/mcbe_ws_sdk/addon",
 )
 
-# docs/addon-bridge-protocol.md migration section: skip lines between these
-# headings (EN + 中文) and the next top-level ``## `` heading. Legacy token
-# names are intentionally documented there and must not trip the scanner.
-MIGRATION_HEADINGS: tuple[str, ...] = (
-    "## Relation to the legacy protocol (mcbeai)",
-    "## 与旧协议（mcbeai）的关系",
-)
-MIGRATION_DOC = "docs/addon-bridge-protocol.md"
+# Sections of vectors.json that deliberately contain rejected payloads.
+NEGATIVE_VECTOR_SECTIONS: tuple[str, ...] = ("invalid", "raw_invalid")
 
-SCAN_DIRS: tuple[str, ...] = (
-    "src",
-    "addon/scripts",
-    "addon/tests",
-    "tests",
-    "examples",
-)
-SCAN_FILES: tuple[str, ...] = (
-    "docs/addon-bridge-protocol.md",
-    "docs/PRD.md",
-    "README.md",
-    "README.zh.md",
-    "addon/README.md",
-    "addon/README.zh.md",
-    "CLAUDE.md",
-)
-
-TS_CONST_RE = re.compile(r'export const ([A-Z0-9_]+) = "([^"]+)"')
-TS_NUMERIC_CONST_RE = re.compile(r"export const ([A-Z0-9_]+) = ([0-9]+)")
-TS_ROLE_ARRAY_RE = re.compile(
-    r'export const TEXT_RESPONSE_ALLOWED_ROLES = \[([^\]]+)\] as const'
-)
-TS_ERROR_ARRAY_RE = re.compile(r'export const MCBEWS_V1_ERROR_CODES = \[([^\]]+)\] as const')
-REQUIRED_PUBLIC = (
-    "MCBEWS_V1",
-    "McbewsV1Profile",
-    "McbewsV1Delivery",
-    "encode_text_response_commands",
-)
-BANNED_PUBLIC = (
-    "LEGACY_MCBEAI_V1",
-    "LegacyMcbeAiV1Profile",
-    "LegacyMcbeAiV1Delivery",
-    "encode_legacy_response_commands",
-)
+_EXPECTED_VERSION = ["MCBEWS/2"]
 
 
 @dataclass(frozen=True)
@@ -167,411 +95,250 @@ def _rel(path: Path) -> str:
         return path.as_posix()
 
 
-def _is_whitelisted(rel: str) -> bool:
-    if any(rel == prefix.rstrip("/") or rel.startswith(prefix) for prefix in WHITELIST_PREFIXES):
-        return True
-    parts = Path(rel).parts
-    return bool(SKIP_DIR_PARTS.intersection(parts))
-
-
-def _is_text_file(path: Path) -> bool:
-    # Extensionless files under scan roots are rare; skip them.
-    return path.suffix.lower() in TEXT_SUFFIXES
-
-
-def _iter_scan_files() -> Iterator[Path]:
-    for dirname in SCAN_DIRS:
-        root = ROOT / dirname
-        if not root.exists():
-            continue
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = _rel(path)
-            if _is_whitelisted(rel):
-                continue
-            if not _is_text_file(path):
-                continue
-            yield path
-    for filename in SCAN_FILES:
-        path = ROOT / filename
-        if path.is_file() and not _is_whitelisted(filename):
-            yield path
-
-
-def _read_text(path: Path) -> str:
+def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def check_parity() -> list[Violation]:
-    """Ensure Python profile defaults match Addon TypeScript constants."""
-    violations: list[Violation] = []
-
-    # Import lazily so the script can still report path issues if the package
-    # is missing; public-API check will also fail clearly.
-    try:
-        from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
-    except Exception as exc:  # noqa: BLE001 - surface import failure as violation
-        return [
-            Violation(
-                kind="parity",
-                location="mcbe_ws_sdk.profiles.mcbews_v1.profile",
-                detail=f"failed to import McbewsV1Profile: {exc}",
-            )
-        ]
-
-    profile = McbewsV1Profile()
-    ts_path = ROOT / "addon" / "scripts" / "bridge" / "protocol.ts"
-    if not ts_path.is_file():
-        return [
-            Violation(
-                kind="parity",
-                location=_rel(ts_path),
-                detail="constants.ts not found",
-            )
-        ]
-
-    ts_text = _read_text(ts_path)
-    ts_consts = dict(TS_CONST_RE.findall(ts_text))
-
-    for py_field, ts_name in PAIRS.items():
-        py_value = getattr(profile, py_field, None)
-        if py_value is None:
-            violations.append(
-                Violation(
-                    kind="parity",
-                    location=f"McbewsV1Profile.{py_field}",
-                    detail="field missing on profile",
-                )
-            )
-            continue
-        if ts_name not in ts_consts:
-            violations.append(
-                Violation(
-                    kind="parity",
-                    location=_rel(ts_path),
-                    detail=f"missing export const {ts_name}",
-                )
-            )
-            continue
-        ts_value = ts_consts[ts_name]
-        if py_value != ts_value:
-            violations.append(
-                Violation(
-                    kind="parity",
-                    location=f"{py_field} ↔ {ts_name}",
-                    detail=f"Python={py_value!r} TS={ts_value!r}",
-                )
-            )
-    return violations
+def _matches(text: str) -> list[str]:
+    """Return the forbidden identifiers present in *text*, in declaration order."""
+    return [token for token in FORBIDDEN_IDENTIFIERS if token in text]
 
 
-def check_asset_parity() -> list[Violation]:
-    """Check manifest fields, version axes, limits and vectors against TS assets."""
-
-    violations: list[Violation] = []
-    try:
-        from mcbe_ws_sdk.profiles.mcbews_v1.manifest import MCBEWS_V1_MANIFEST
-    except Exception as exc:  # noqa: BLE001 - report the asset import boundary
-        return [Violation("asset", "mcbews_v1.manifest", f"failed to import: {exc}")]
-
-    ts_path = ROOT / "addon" / "scripts" / "bridge" / "protocol.ts"
-    if not ts_path.is_file():
-        return [Violation("asset", _rel(ts_path), "generated protocol projection not found")]
-    ts_text = _read_text(ts_path)
-    ts_strings = dict(TS_CONST_RE.findall(ts_text))
-    ts_numbers = {name: int(value) for name, value in TS_NUMERIC_CONST_RE.findall(ts_text)}
-
-    wire_pairs = {
-        "capability_request_script_event_id": "CAPABILITY_REQUEST_SCRIPT_EVENT_ID",
-        "capability_response_chat_prefix": "CAPABILITY_RESPONSE_CHAT_PREFIX",
-        "ui_chat_chunk_prefix": "UI_CHAT_CHUNK_PREFIX",
-        "session_request_chat_prefix": "SESSION_REQUEST_CHAT_PREFIX",
-        "session_request_script_event_id": "SESSION_REQUEST_SCRIPT_EVENT_ID",
-        "session_response_script_event_id": "SESSION_RESPONSE_SCRIPT_EVENT_ID",
-        "text_response_script_event_id": "TEXT_RESPONSE_SCRIPT_EVENT_ID",
-        "approval_allow_chat_prefix": "APPROVAL_ALLOW_CHAT_PREFIX",
-        "approval_deny_chat_prefix": "APPROVAL_DENY_CHAT_PREFIX",
-        "trusted_bridge_player_name": "TRUSTED_BRIDGE_PLAYER_NAME",
-    }
-    for field, constant in wire_pairs.items():
-        expected = MCBEWS_V1_MANIFEST["wire"].get(field)
-        actual = ts_strings.get(constant)
-        if expected != actual:
-            violations.append(Violation("asset", constant, f"manifest={expected!r} TS={actual!r}"))
-
-    version_pairs = {
-        "capability_request_schema": "CAPABILITY_REQUEST_SCHEMA_VERSION",
-        "session_schema": "SESSION_SCHEMA_VERSION",
-        "text_response_framing": "TEXT_RESPONSE_FRAMING_VERSION",
-        "ddui_persistence": "DDUI_PERSISTENCE_VERSION",
-    }
-    for field, constant in version_pairs.items():
-        expected = MCBEWS_V1_MANIFEST["versions"].get(field)
-        actual = ts_numbers.get(constant)
-        if expected != actual:
-            violations.append(Violation("asset", constant, f"manifest={expected!r} TS={actual!r}"))
-
-    limit_pairs = {
-        "command_line_byte_budget": "COMMAND_LINE_BYTE_BUDGET",
-        "upstream_max_content_code_points": "UPSTREAM_MAX_CONTENT_CODE_POINTS",
-        "response_max_buffers": "RESPONSE_MAX_BUFFERS",
-        "response_max_chunks_per_message": "RESPONSE_MAX_CHUNKS_PER_MESSAGE",
-        "response_max_message_bytes": "RESPONSE_MAX_MESSAGE_BYTES",
-        "response_max_total_buffer_bytes": "RESPONSE_MAX_TOTAL_BUFFER_BYTES",
-        "response_buffer_ttl_ms": "RESPONSE_BUFFER_TTL_MS",
-        "session_response_max_command_bytes": "SESSION_RESPONSE_MAX_COMMAND_BYTES",
-    }
-    for field, constant in limit_pairs.items():
-        expected = MCBEWS_V1_MANIFEST["limits"].get(field)
-        actual = ts_numbers.get(constant)
-        if expected != actual:
-            violations.append(Violation("asset", constant, f"manifest={expected!r} TS={actual!r}"))
-
-    expected_roles = list(MCBEWS_V1_MANIFEST["text_response"].get("allowed_roles", ()))
-    role_match = TS_ROLE_ARRAY_RE.search(ts_text)
-    actual_roles = re.findall(r'"([^"]+)"', role_match.group(1)) if role_match else None
-    if expected_roles != actual_roles:
-        violations.append(
-            Violation(
-                "asset",
-                "TEXT_RESPONSE_ALLOWED_ROLES",
-                f"manifest={expected_roles!r} TS={actual_roles!r}",
-            )
-        )
-    expected_errors = list(MCBEWS_V1_MANIFEST.get("error_codes", ()))
-    error_match = TS_ERROR_ARRAY_RE.search(ts_text)
-    actual_errors = re.findall(r'"([^"]+)"', error_match.group(1)) if error_match else None
-    if expected_errors != actual_errors:
-        violations.append(
-            Violation(
-                "asset",
-                "MCBEWS_V1_ERROR_CODES",
-                f"manifest={expected_errors!r} TS={actual_errors!r}",
-            )
-        )
-    required_projection_fragments = (
-        "protocolLine: MCBEWS_PROTOCOL_LINE",
-        "sessionResponseMaxCommandBytes: SESSION_RESPONSE_MAX_COMMAND_BYTES",
-        "usageField: TEXT_RESPONSE_USAGE_FIELD",
-        "usageCompletionOnly: TEXT_RESPONSE_USAGE_COMPLETION_ONLY",
-        "conversationIdField: TEXT_RESPONSE_CONVERSATION_ID_FIELD",
-        "titleField: TEXT_RESPONSE_TITLE_FIELD",
-    )
-    for fragment in required_projection_fragments:
-        if fragment not in ts_text:
-            violations.append(
-                Violation("asset", fragment, "missing generated manifest projection field")
-            )
-
-    # Vector messages are executable fixtures, not just documentation.  The TS
-    # projection must contain every wire-bearing string and frame field.
-    vectors_path = ROOT / "src" / "mcbe_ws_sdk" / "profiles" / "mcbews_v1" / "vectors.json"
-    vectors_text = _read_text(vectors_path)
-    manifest_text = _read_text(
-        ROOT / "src" / "mcbe_ws_sdk" / "profiles" / "mcbews_v1" / "manifest.json"
-    )
-    for needle in (
-        "MCBEWS|",
-        "mcbews:",
-        "legacy-v1-without-version",
-        "current-v2",
-        "ui-chat-cid",
-        "assistant-final-usage",
-        "approval-role",
-        "session-list",
-        "approval-allow",
-        "approval-legacy-id",
-        "resp-1",
-        "chat-a",
-        "approval-1",
-        "sess-1",
-    ):
-        if needle not in vectors_text + manifest_text or needle not in ts_text:
-            violations.append(
-                Violation("vector", needle, "missing from Python/TypeScript projection")
-            )
-    return violations
+def _iter_python_sources() -> Iterator[Path]:
+    """Every production Python module, including comments and docstrings."""
+    yield from sorted((ROOT / "src" / "mcbe_ws_sdk").rglob("*.py"))
 
 
-def check_generated_assets() -> list[Violation]:
-    """Require the complete generated projection and fixture to be current."""
+def _iter_addon_scripts() -> Iterator[Path]:
+    """Every handwritten production Addon TypeScript module.
 
-    try:
-        from generate_protocol_assets import check_outputs
-    except Exception as exc:  # noqa: BLE001 - report generator import failures
-        return [
-            Violation(
-                "generated",
-                "tools/generate_protocol_assets.py",
-                f"failed to import: {exc}",
-            )
-        ]
-    return [
-        Violation(
-            "generated",
-            path,
-            "generated output differs from manifest.json/vectors.json; "
-            "run generate_protocol_assets.py",
-        )
-        for path in check_outputs()
-    ]
-
-
-def _lines_with_migration_skip(rel: str, text: str) -> Iterable[tuple[int, str]]:
-    """Yield (1-based line number, line) skipping the migration section.
-
-    For ``docs/addon-bridge-protocol.md`` only, lines from either the English
-    or Chinese legacy-protocol heading through the line before the next
-    ``## `` heading are skipped. The heading line itself is also skipped.
+    ``addon/scripts/bridge/v2/assets.ts`` is generated from ``vectors.json``.
+    That source allows a declared negative vector, and ``check_generated_assets``
+    proves this projection is byte-identical to it, so the projection is not
+    text-scanned twice.
     """
-    in_migration = False
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        if rel == MIGRATION_DOC:
-            stripped = line.lstrip()
-            if any(stripped.startswith(heading) for heading in MIGRATION_HEADINGS):
-                in_migration = True
-                continue
-            if in_migration and stripped.startswith("## "):
-                in_migration = False
-            if in_migration:
-                continue
-        yield lineno, line
-
-
-def check_forbidden() -> list[Violation]:
-    """Scan source/docs for retired AI-branded protocol tokens."""
-    violations: list[Violation] = []
-    seen: set[tuple[str, int, str]] = set()
-
-    for path in _iter_scan_files():
-        rel = _rel(path)
-        try:
-            text = _read_text(path)
-        except UnicodeDecodeError:
+    for path in sorted((ROOT / "addon" / "scripts").rglob("*.ts")):
+        if path == V2_ASSETS:
             continue
+        yield path
 
-        for lineno, line in _lines_with_migration_skip(rel, text):
-            for pattern in FORBIDDEN_RES:
-                match = pattern.search(line)
-                if match is None:
-                    continue
-                key = (rel, lineno, match.group(0))
-                if key in seen:
-                    continue
-                seen.add(key)
+
+def _iter_package_json() -> Iterator[Path]:
+    """Every JSON asset shipped inside the Python package."""
+    yield from sorted((ROOT / "src" / "mcbe_ws_sdk").rglob("*.json"))
+
+
+def _iter_addon_json() -> Iterator[Path]:
+    """Addon package manifests; no negative fixtures belong here."""
+    for relative in ("addon/behavior_packs", "addon/resource_packs"):
+        yield from sorted((ROOT / relative).rglob("*.json"))
+    package = ROOT / "addon" / "package.json"
+    if package.is_file():
+        yield package
+
+
+def _scan_text(path: Path, *, kind: str) -> list[Violation]:
+    violations: list[Violation] = []
+    try:
+        text = _read(path)
+    except UnicodeDecodeError:
+        return [Violation(kind, _rel(path), "file is not valid UTF-8 production text")]
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for token in _matches(line):
+            violations.append(
+                Violation(kind, f"{_rel(path)}:{lineno}", f"retired identifier {token!r}")
+            )
+    return violations
+
+
+def _scan_json_asset(path: Path) -> list[Violation]:
+    """Scan a package JSON asset, allowing explicit negative vectors only."""
+    rel = _rel(path)
+    try:
+        payload = json.loads(_read(path))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return [Violation("asset", rel, f"not valid JSON: {exc}")]
+
+    if path != V2_VECTORS:
+        violations: list[Violation] = []
+        for token in _matches(json.dumps(payload, ensure_ascii=False)):
+            violations.append(Violation("asset", rel, f"retired identifier {token!r}"))
+        return violations
+
+    if not isinstance(payload, dict):
+        return [Violation("asset", rel, "v2 vectors must be a JSON object")]
+    violations = []
+    allowed_codes = _manifest_errors()
+    valid_text = json.dumps(payload.get("valid", []), ensure_ascii=False)
+    for token in _matches(valid_text):
+        violations.append(Violation("asset", f"{rel} valid[]", f"retired identifier {token!r}"))
+    for section in NEGATIVE_VECTOR_SECTIONS:
+        for vector in payload.get(section, []):
+            if not isinstance(vector, dict):
+                violations.append(
+                    Violation("asset", f"{rel} {section}[]", "vector is not an object")
+                )
+                continue
+            text = json.dumps(vector, ensure_ascii=False)
+            tokens = _matches(text)
+            if not tokens:
+                continue
+            expected = vector.get("expected")
+            if expected not in allowed_codes:
                 violations.append(
                     Violation(
-                        kind="forbidden",
-                        location=f"{rel}:{lineno}",
-                        detail=f"matched {match.group(0)!r} via /{pattern.pattern}/",
+                        "asset",
+                        f"{rel} {section}[]",
+                        f"retired identifier {tokens[0]!r} without a declared rejection code",
                     )
                 )
     return violations
 
 
-def check_public_api() -> list[Violation]:
-    """Verify public exports include new symbols and exclude retired ones."""
-    violations: list[Violation] = []
+def _manifest_errors() -> set[str]:
+    """Return the declared MCBEWS/2 error codes, or an empty set on failure."""
     try:
-        import mcbe_ws_sdk
-    except Exception as exc:  # noqa: BLE001
-        return [
-            Violation(
-                kind="public_api",
-                location="mcbe_ws_sdk",
-                detail=f"failed to import package: {exc}",
-            )
-        ]
+        manifest = json.loads(_read(V2_MANIFEST))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    errors = manifest.get("errors")
+    return set(errors) if isinstance(errors, list) else set()
 
-    exported = set(mcbe_ws_sdk.__all__)
-    for name in REQUIRED_PUBLIC:
-        if name not in exported:
+
+def _walk_keys(value: Any) -> Iterator[str]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str):
+                yield key
+            yield from _walk_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_keys(item)
+
+
+def check_retired_packages() -> list[Violation]:
+    """Fail when a retired package still contains Python modules."""
+    violations: list[Violation] = []
+    for relative in RETIRED_PACKAGE_PATHS:
+        path = ROOT / relative
+        if path.is_dir() and any(path.rglob("*.py")):
+            violations.append(
+                Violation("tree", relative, "retired package still contains Python modules")
+            )
+    return violations
+
+
+def check_production_sources() -> list[Violation]:
+    """Scan Python, Addon and package JSON production surfaces."""
+    violations: list[Violation] = []
+    for path in _iter_python_sources():
+        violations.extend(_scan_text(path, kind="python"))
+    for path in _iter_addon_scripts():
+        violations.extend(_scan_text(path, kind="addon"))
+    for path in _iter_addon_json():
+        violations.extend(_scan_text(path, kind="asset"))
+    for path in _iter_package_json():
+        violations.extend(_scan_json_asset(path))
+    return violations
+
+
+def check_manifest_authority() -> list[Violation]:
+    """Require the v2 manifest to be the only protocol authority."""
+    try:
+        manifest = json.loads(_read(V2_MANIFEST))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return [Violation("manifest", _rel(V2_MANIFEST), f"cannot load: {exc}")]
+    if not isinstance(manifest, dict):
+        return [Violation("manifest", _rel(V2_MANIFEST), "must be a JSON object")]
+
+    violations: list[Violation] = []
+    if manifest.get("protocol") != "MCBEWS/2":
+        violations.append(
+            Violation(
+                "manifest",
+                "protocol",
+                f"expected 'MCBEWS/2', got {manifest.get('protocol')!r}",
+            )
+        )
+
+    carrier = manifest.get("carrier")
+    if not isinstance(carrier, dict) or carrier.get("event") != "mcbews:packet_v2":
+        violations.append(Violation("manifest", "carrier.event", "expected 'mcbews:packet_v2'"))
+    negotiation = manifest.get("negotiation")
+    if not isinstance(negotiation, dict) or negotiation.get("event") != "mcbews:negotiate_v2":
+        violations.append(
+            Violation("manifest", "negotiation.event", "expected 'mcbews:negotiate_v2'")
+        )
+    version_sources: list[tuple[str, object]] = []
+    if "versions" in manifest:
+        version_sources.append(("versions", manifest["versions"]))
+    if isinstance(negotiation, dict):
+        version_sources.append(("negotiation.versions", negotiation.get("versions")))
+    if not version_sources:
+        violations.append(Violation("manifest", "versions", "no protocol version list is declared"))
+    for location, versions in version_sources:
+        if versions != _EXPECTED_VERSION:
             violations.append(
                 Violation(
-                    kind="public_api",
-                    location="mcbe_ws_sdk.__all__",
-                    detail=f"missing required export {name!r}",
+                    "manifest",
+                    location,
+                    f"expected {_EXPECTED_VERSION!r}, got {versions!r}",
                 )
             )
-    for name in BANNED_PUBLIC:
-        if name in exported:
+
+    for key in _walk_keys(manifest):
+        lowered = key.lower()
+        retired = (
+            key in FORBIDDEN_MANIFEST_KEYS
+            or "legacy" in lowered
+            or re.fullmatch(r"v1(?:_methods)?", lowered) is not None
+        )
+        if retired:
             violations.append(
                 Violation(
-                    kind="public_api",
-                    location="mcbe_ws_sdk.__all__",
-                    detail=f"banned export still present: {name!r}",
+                    "manifest",
+                    "keys",
+                    f"retired selection key {key!r} is not allowed in the v2 authority",
                 )
             )
     return violations
 
 
-def check_delay_kinds() -> list[Violation]:
-    """Ensure flow-control delay kinds use the mcbews ``text_resp`` name."""
-    violations: list[Violation] = []
-    try:
-        from mcbe_ws_sdk.config import FlowControlSettings
-    except Exception as exc:  # noqa: BLE001
-        return [
-            Violation(
-                kind="delay_kind",
-                location="mcbe_ws_sdk.config.FlowControlSettings",
-                detail=f"failed to import: {exc}",
-            )
-        ]
-
-    expected = frozenset({"tellraw", "scriptevent", "text_resp"})
-    if expected != FlowControlSettings.VALID_DELAY_KINDS:
-        violations.append(
-            Violation(
-                kind="delay_kind",
-                location="FlowControlSettings.VALID_DELAY_KINDS",
-                detail=(
-                    f"expected {sorted(expected)}, "
-                    f"got {sorted(FlowControlSettings.VALID_DELAY_KINDS)}"
-                ),
-            )
+def check_generated_assets() -> list[Violation]:
+    """Require the generated Addon projection to match the v2 authority."""
+    proc = subprocess.run(
+        [sys.executable, str(V2_GENERATOR), "--check"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        return []
+    detail = (proc.stderr or proc.stdout or "generator failed").strip()
+    return [
+        Violation(
+            "generated",
+            _rel(V2_ASSETS),
+            f"stale or mismatched projection; run tools/generate_v2_assets.py ({detail})",
         )
+    ]
 
-    settings = FlowControlSettings()
-    if "text_resp" not in settings.chunk_delays:
-        violations.append(
-            Violation(
-                kind="delay_kind",
-                location="FlowControlSettings().chunk_delays",
-                detail="missing key 'text_resp'",
-            )
-        )
 
-    # Avoid embedding the retired token as a source literal in this file's
-    # own narrative; construct it so a future self-scan of tools/ stays clean.
-    retired = "ai" + "_resp"
-    if retired in settings.chunk_delays:
-        violations.append(
-            Violation(
-                kind="delay_kind",
-                location="FlowControlSettings().chunk_delays",
-                detail=f"retired key {retired!r} must not be present",
-            )
-        )
-    return violations
+def collect() -> Iterable[Violation]:
+    yield from check_retired_packages()
+    yield from check_production_sources()
+    yield from check_manifest_authority()
+    yield from check_generated_assets()
 
 
 def main() -> int:
-    violations: list[Violation] = []
-    violations.extend(check_parity())
-    violations.extend(check_generated_assets())
-    violations.extend(check_asset_parity())
-    violations.extend(check_forbidden())
-    violations.extend(check_public_api())
-    violations.extend(check_delay_kinds())
-
+    violations = list(collect())
     if violations:
         print(f"check_protocol_names: {len(violations)} violation(s)", file=sys.stderr)
         for item in violations:
             print(item.format(), file=sys.stderr)
         return 1
-
     print("check_protocol_names: ok")
     return 0
 

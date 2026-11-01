@@ -36,13 +36,13 @@ def measure() -> list[dict[str, int | str]]:
         jc, jb = cost(msg)
         cc, cb = cost(compact)
         rows.append(
-            dict(
-                name=vector["name"],
-                json_commands=jc,
-                json_final_command_bytes=jb,
-                compact_commands=cc,
-                compact_final_command_bytes=cb,
-            )
+            {
+                "name": vector["name"],
+                "json_commands": jc,
+                "json_final_command_bytes": jb,
+                "compact_commands": cc,
+                "compact_final_command_bytes": cb,
+            }
         )
     return rows
 

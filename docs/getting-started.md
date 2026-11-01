@@ -1,77 +1,37 @@
 # Getting started
 
-This guide uses `McbeServer` from the **unreleased checkout**. The current PyPI
-release is `0.2.1`; `pip install mcbe-ws-sdk` does not install these new APIs.
-For the old entry point and callback contract, see [migration](migration.md).
+This guide connects a Bedrock client to a Python host through `McbeServer`,
+runs the bundled examples, and covers the first failures you are likely to hit.
 
-## Install this checkout
+## Prerequisites
 
-Requires Python 3.11+ and a Bedrock client/world where `/wsserver` is available
-and commands are permitted. No additional platform or game-version support is
-claimed by the new APIs; live-game acceptance remains pending.
+- Python 3.11+.
+- A Bedrock world where `/wsserver` is available and commands are allowed.
+- For addon capabilities: the companion TypeScript addon, built with the
+  dependencies pinned in [`addon/package.json`](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/package.json):
+  `@minecraft/server` 2.8.0, `@minecraft/server-ui` 2.1.0, and a
+  `@minecraft/server-gametest` beta matched to the 1.26.30 baseline.
+- The addon pack manifests target `min_engine_version` `[1, 26, 30]`.
+
+The SDK requires MCBEWS/2 admission for every connection. There is no legacy
+protocol mode and no pre-ready business buffering.
+
+## Install
+
+From the repository root:
 
 ```bash
-cd mcbe-ws-sdk
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
 ```
 
-## Connect and reply
+If you have a built wheel, `pip install ./dist/mcbe_ws_sdk-*.whl` is enough; the
+runtime dependencies are resolved from its metadata.
 
-Start the runnable echo server:
+## Build and import the addon
 
-```bash
-python examples/basic-server/server.py --host 0.0.0.0 --port 8080
-```
-
-In the game, run `/wsserver 127.0.0.1:8080` when Python runs on the same
-machine. From another device, replace `127.0.0.1` with the Python machine's
-LAN IP and allow the listening port through its firewall. Send a chat message;
-the example sends a tellraw reply and filters the game's external-message echo.
-Use `--log-level DEBUG` for diagnostics and `Ctrl+C` to stop.
-
-For a minimal host that prints chat and executes a command:
-
-```python
-import asyncio
-from mcbe_ws_sdk import McbeServer, NoOpHook
-
-class Hook(NoOpHook):
-    async def on_connected(self, state):
-        print("connected:", state.id)
-
-    async def on_player_message(self, state, event, parsed=None):
-        if event.sender in {"External", "外部"}:
-            return
-        print(event.sender, event.message)
-        if event.message == "!daytime":
-            response = await state.command_client.run("time query daytime")
-            print(response)
-
-async def main():
-    server = McbeServer(hook=Hook())
-    await server.run_lifetime()
-
-asyncio.run(main())
-```
-
-`McbeServer` uses SDK-managed tasks. You can await a reply in a hook without
-blocking the WebSocket reader. Messages from one player remain FIFO; different
-players may progress concurrently. Synchronous hooks must stay nonblocking.
-No application-owned wait table, request task or fragment buffer is needed.
-`McbeServer()` keeps a neutral `DefaultResponseSink`: it does not automatically
-render your application's replies. The basic example supplies a Minecraft sink
-using `McbeOutboundDelivery` and queues `OutboundText` for delivery.
-
-Use `event.sender` as the current player identity and reply target. A single
-connection may carry many players; bucket application history and locks by
-`(state.id, event.sender)`. The deprecated `state.player_name` is only a
-last-speaker convenience pointer.
-
-## Query inventory through the addon
-
-Build the companion addon:
+Basic package, with exactly the two read-only snapshot capabilities:
 
 ```bash
 cd addon
@@ -80,72 +40,176 @@ npm run build
 npm run mcaddon
 ```
 
-Import the generated `.mcaddon`, enable **Experiments → Beta APIs** in the
-**target world's** settings, and activate its behavior pack. Without Beta APIs,
-scripts do not load and capability requests time out. See the
-[addon setup](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#enable-in-a-world).
-Then start the example from the repository root:
+Complete demo package, which additionally registers `demo.echo`, the
+`demo.ticks` stream, and the restricted `run_world_command` handler:
 
 ```bash
-python examples/addon-server/server.py
+npm run build:demo
+npm run mcaddon:demo
 ```
 
-Connect with `/wsserver <host-ip>:8080`, then send `!inv` or `!player`.
-`!wscmd time query daytime` uses native commands and needs no addon.
-`!cmd` uses a separately enabled addon world-command handler.
+Both variants write the same final script path, `dist/scripts/main.js`, but they
+are separate builds. The basic pack produces `mc-ws-sdk.mcaddon`; the demo pack
+produces `mc-ws-sdk-demo.mcaddon` under `dist/packages/`, so one does not
+overwrite the other. The demo entry is selected by `--demo` or `MCBE_DEMO=1`;
+the npm scripts above are shortcuts for that flag plus `--production`.
 
-Inside your own managed hook, use the same server's negotiated bridge:
+### Enable the world
+
+1. Import the generated `.mcaddon` into Minecraft.
+2. Open the **target world** settings (create a world, or **Edit** an existing
+   one).
+3. Under **Experiments**, enable **Beta APIs**.
+4. Activate the behavior pack (and the companion resource pack if prompted).
+5. Enter the world. Without Beta APIs the scripts never load and admission
+   times out.
+
+Enabling experiments can make a world ineligible for some achievements. Use a
+dedicated test world when possible.
+
+## Start the example server
+
+Both examples need the addon for admission. The basic example calls no addon
+capability; it answers prefixed commands and waits for native
+`commandRequest` replies:
+
+```bash
+python examples/basic-server/server.py --host 0.0.0.0 --port 8080
+```
+
+Use `--log-level DEBUG` for lifecycle diagnostics. Stop it with `Ctrl+C`.
+
+Then in Minecraft run:
+
+```text
+/wsserver 127.0.0.1:8080
+```
+
+Use `127.0.0.1` when Python and the game run on the same machine. From another
+device, use the Python machine's LAN IP and allow the listening port through
+its firewall. There is no login step and no authentication in the examples.
+
+Connection setup is complete only after MCBEWS/2 admission reaches `READY_V2`.
+`on_connected` fires at that point; no business frame is handled before it.
+
+## Commands in the examples
+
+Both examples share one input rule: after trimming surrounding whitespace, the
+message must start with ASCII `!`. Everything else is silent — no reply, no
+command, no capability or stream call.
+
+| Input | Result |
+| --- | --- |
+| empty or whitespace | silent |
+| `hello`, `a`, `stream 5` | silent |
+| bare `help` or `帮助` | silent (the aliases are prefixed now) |
+| `hello !player`, full-width `！player` | silent |
+| ` !player ` | handled after trimming |
+| bare `!` | one usage hint |
+| `!unknown` | one unknown-command hint |
+| `!help`, `!帮助` | help |
+| other `!command` | dispatched |
+
+The filter applies only to the example's player-command dispatch. SDK protocol
+frames, negotiation, `MCBEWS2|` carrier traffic, native `commandResponse` /
+`error` frames and native events are never filtered by this rule.
+
+Basic example commands:
+
+| Command | Action |
+| --- | --- |
+| `!help` / `!帮助` | Show help |
+| `!wscmd <command>` | Run a native command and await its `commandResponse` |
+
+Addon example commands:
+
+| Command | Action |
+| --- | --- |
+| `!player [target]` / `!玩家` | `get_player_snapshot`; current player by default |
+| `!inv [target]` / `!背包` | `get_inventory_snapshot` |
+| `!wscmd <command>` / `!ws命令` | Native command, no addon capability needed |
+| `!cmd <command>` / `!命令` | `run_world_command`; only present in the demo pack |
+| `!echo <text>` | `demo.echo`, with example metadata |
+| `!stream [count]` | Consume `demo.ticks` until normal completion (default 5) |
+| `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) |
+| `!help` / `!帮助` | Show help |
+
+`run_world_command` is not registered by the basic package. The demo package
+registers it explicitly, and its policy still allows only `say` by default; the
+denylist for dangerous commands remains in force even if the allowlist is
+widened.
+
+## Call an addon capability from Python
+
+From any managed hook after admission, use the server's `V2Bridge`:
 
 ```python
 response = await server.v2.request(
-    state.id, "get_inventory_snapshot", {"target": event.sender}
+    state.id,
+    "get_player_snapshot",
+    {"target": event.sender},
 )
 print(response["result"])
 ```
 
-The SDK owns correlation, timeouts, chunking and reassembly. Remote v2 errors
-raise `RemoteCallError`; v1 fallback retains its capability-level result inside
-`result`, including any `ok: false`. Inspect failures rather than treating a
-received response as proof of success. Native command responses also need their
-`statusCode` checked. Cancelling the caller ends its wait; it cannot undo an
-already executed command.
+The SDK owns correlation, timeouts, fragmentation and reassembly. A remote
+protocol error raises `RemoteCallError` with its wire `code`. Inspect native
+command responses for `statusCode` as well; a received frame is not proof of
+business success.
 
-## Extend the host
+For streams:
 
-| Need | Public entry |
+```python
+stream = await server.v2.stream(state.id, "demo.ticks", {"count": 3})
+async with stream:
+    async for item in stream:
+        print(item)
+```
+
+Streams require `stream/1` in the negotiated feature set. The demo package
+registers the `demo.ticks` producer. Use `async with` or `await stream.aclose()`
+when consumption may stop early; cancelling a pending read cancels that stream,
+not other requests.
+
+## Errors players see
+
+Application-level failures should show the player:
+
+- the method or capability being called,
+- a stable error code,
+- a bounded readable message (at most 256 UTF-8 bytes, never split Unicode),
+- an action hint, such as “enable the demo package” or “check the parameter”.
+
+Internal request IDs, trace IDs and stack traces stay in logs. The addon maps
+unknown capabilities, invalid parameters and handler failures to
+`UNSUPPORTED_METHOD`, `INVALID_PARAMS` and `HANDLER_FAILED`.
+
+## Troubleshooting
+
+| Symptom | Check |
 | --- | --- |
-| Custom Python capability | `server.v2.registry.register(name, handler, validate=...)` |
-| Custom addon capability | `registerCapability(name, handler)` in the addon router |
-| Metadata and trace | `server.v2.request(..., metadata=..., trace_id=...)` |
-| Event observer | `await state.native_events.subscribe(name, observer)` |
-| Python stream producer | `server.v2.streams.register(name, handler)` |
-| Stream consumer | `await server.v2.stream(state.id, name, params)` |
+| Connection closes immediately with `UNSUPPORTED_PROTOCOL` | The addon or client is not speaking MCBEWS/2. Old protocol frames are rejected; there is no fallback. |
+| `NEGOTIATION_TIMEOUT` | The addon is absent, not active, or scripts are not loaded. Confirm the pack and **Beta APIs**. |
+| `NEGOTIATION_CONFIRMATION_TIMEOUT` | The addon answered the challenge but the final confirmation did not complete. Reconnect and check the world/log for script errors. |
+| `NEGOTIATION_BUSY` | Too many provisional admissions or peers; reconnect after the previous session expires. |
+| `INVALID_NEGOTIATION` | A malformed or mismatched control frame. Verify the addon version matches this SDK. |
+| `SESSION_INVALID` | The admitted session was revoked or became stale. Reconnect; the new session gets a fresh epoch. |
+| Capability call times out | Confirm the active pack, the target world, Beta APIs and the live `/wsserver` connection. |
+| `!cmd` fails while `!wscmd` works | `run_world_command` is absent from the basic package and is intentionally restricted. Use the demo build and review its policy. |
+| Ordinary chat gets no reply | This is expected. Examples answer only trimmed messages that start with ASCII `!`. |
+| Text arrives in pieces | The SDK uses a 461-byte empirical command budget and may split tellraw/scriptevent. Native commands stay atomic and reject overflow. |
 
-See [extension authors](extension-authors.md) for complete registration and
-consumption snippets, cancellation and limits. The addon example includes
-optional custom capability and stream registrations; follow its README before
-using `!echo`, `!stream` or `!stream-cancel`.
+Admission failures close the WebSocket with code `1008`. The close reason is a
+bounded token (at most 123 UTF-8 bytes). A zero-byte EOF in a log is still an
+unconfirmed condition; do not assume it is normal. See
+[diagnostics](diagnostics.md).
 
-Discovery is bounded and independent of chat/native commands. Old addons may
-fall back to known v1 methods. Metadata and streams require negotiated features
-and fail explicitly when unavailable. No required fields are silently lost.
-Streams have bounded buffers and terminate on slow consumers; receiver credits
-are not implemented. See [v2](protocol-v2.md).
+## Shutdown and rollback
 
-## Existing hosts and troubleshooting
-
-`McbeServerFacade()` still defaults to the old serial callback path. Only that
-path needs a separately managed background task when a hook waits for a reply
-that the reader must receive. Do not copy that workaround into the new entry
-point. Compare defaults and return values in the [migration table](migration.md).
-
-- Connection fails: check the listening process, IP, port and firewall.
-- Addon call times out: check the active pack, **Experiments → Beta APIs**, and
-  the live `/wsserver` connection.
-- Text arrives in pieces: the SDK enforces a default 461-byte command budget;
-  deployments may lower it. Native commands remain atomic and reject overflow.
-- Shutdown: `await server.stop()` or cancel `run_lifetime()`; managed work and
-  pending calls are cleaned up. Reconnect never replays world mutations.
+Call `await server.stop()` or cancel `run_lifetime()`; managed tasks, pending
+calls and fragments are cleaned up. Reconnecting starts a new admission and a
+fresh session. Already executed world changes are not undone and are never
+replayed automatically.
 
 The examples have no authentication. The bridge is not a security boundary;
 your host owns caller authentication, authorization and application state.

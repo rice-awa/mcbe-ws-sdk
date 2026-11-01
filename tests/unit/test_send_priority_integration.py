@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 from mcbe_ws_sdk.config import (
-    DispatchSettings,
     FlowControlSettings,
     GatewaySettings,
     SendSchedulerSettings,
@@ -25,8 +24,8 @@ from mcbe_ws_sdk.delivery.outbound import McbeOutboundDelivery
 from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.gateway.hook import NoOpHook
 from mcbe_ws_sdk.gateway.sender import SendPriority
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.gateway.sink import DefaultResponseSink
+from mcbe_ws_sdk.server import McbeServer
 
 
 class GatedWebSocket:
@@ -44,6 +43,45 @@ class GatedWebSocket:
             self.send_started.set()
             await self.gate.wait()
         self.sent.append(payload)
+        await self._answer_negotiation(payload)
+
+    async def _answer_negotiation(self, payload: str) -> None:
+        try:
+            command = json.loads(payload).get("body", {}).get("commandLine", "")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            return
+        prefix = "scriptevent mcbews:negotiate_v2 "
+        if not command.startswith(prefix):
+            return
+        parts = command[len(prefix) :].split("|")
+        if parts[0] == "MCBEWS2H":
+            attempt = parts[1]
+            await self.push(
+                json.dumps(
+                    {
+                        "header": {"eventName": "PlayerMessage", "requestId": "evt"},
+                        "body": {
+                            "sender": "MCBEWS_BRIDGE",
+                            "message": (
+                                f"MCBEWS2N|{attempt}|e{attempt[:22]}|2|"
+                                f"{_FEATURES}"
+                            ),
+                        },
+                    }
+                )
+            )
+        elif parts[0] == "MCBEWS2C":
+            await self.push(
+                json.dumps(
+                    {
+                        "header": {"eventName": "PlayerMessage", "requestId": "evt"},
+                        "body": {
+                            "sender": "MCBEWS_BRIDGE",
+                            "message": f"MCBEWS2N|{parts[1]}|{parts[2]}|ready",
+                        },
+                    }
+                )
+            )
 
     async def push(self, frame: str) -> None:
         await self._incoming.put(frame)
@@ -72,6 +110,9 @@ class ConnectedHook(NoOpHook):
         self.connected.set()
 
 
+_FEATURES = "metadata/1,notifications/1,reverse/1,stream/1"
+
+
 async def _wait_until(predicate: object, *, timeout: float = 2.0) -> None:
     iterations = int(timeout / 0.005)
     for _ in range(iterations):
@@ -93,11 +134,8 @@ def _command_response_frame(request_id: str) -> str:
 @pytest.mark.asyncio
 async def test_two_long_tellraws_and_a_command_keep_distinct_priorities() -> None:
     hook = ConnectedHook()
-    settings = GatewaySettings(
-        dispatch=DispatchSettings(mode="reliable"),
-        send=SendSchedulerSettings(),
-    )
-    facade = McbeServerFacade(
+    settings = GatewaySettings(send=SendSchedulerSettings())
+    facade = McbeServer(
         settings=settings,
         hook=hook,
         sink=DefaultResponseSink(),

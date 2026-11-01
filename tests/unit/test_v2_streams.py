@@ -11,11 +11,11 @@ from typing import Any
 
 import pytest
 
-from mcbe_ws_sdk.config import DispatchSettings, GatewaySettings
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
+from mcbe_ws_sdk.config import GatewaySettings
 from mcbe_ws_sdk.profiles.mcbews_v2.runtime import NegotiationError, V2Bridge, V2Endpoint
 from mcbe_ws_sdk.profiles.mcbews_v2.streams import StreamError
 from mcbe_ws_sdk.profiles.mcbews_v2.transport import COMMAND_PREFIX, ReassemblyPool, fragment
+from mcbe_ws_sdk.server import McbeServer
 
 from .test_reliable_facade import QueueWebSocket, RecordingHook, _stop
 
@@ -28,10 +28,14 @@ class _Peer:
     commands: list[str] = field(default_factory=list)
     sequence: int = 0
 
+    @property
+    def epoch(self) -> str:
+        return self.endpoint.epoch
+
     async def send(self, kind: str, stream_id: str, **fields: Any) -> None:
         self.sequence += 1
         message = {"v": "MCBEWS/2", "kind": kind, "id": stream_id, **fields}
-        for frame in fragment(message, f"a.test.{self.sequence}", "up"):
+        for frame in fragment(message, f"a.{self.epoch}.{self.sequence}", "up"):
             await self.endpoint.receive(frame, source="MCBEWS_BRIDGE")
 
     async def next_message(self, kind: str) -> dict[str, Any]:
@@ -48,18 +52,15 @@ class _Peer:
 
 @asynccontextmanager
 async def _peer(**stream_limits: int) -> AsyncIterator[_Peer]:
-    bridge = V2Bridge(negotiate=False, stream_limits=stream_limits)
+    bridge = V2Bridge(stream_limits=stream_limits)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge,
-        hook=hook,
-        settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable")),
-    )
+    server = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket()
-    connection = asyncio.create_task(facade._on_connection(websocket))
+    connection = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
     assert hook.state is not None
-    endpoint = bridge.activate(hook.state, epoch="test")
+    endpoint = bridge.connection(hook.state.id)
+    assert endpoint is not None
     peer = _Peer(endpoint, bridge)
     pool = ReassemblyPool()
 
@@ -148,7 +149,11 @@ async def test_python_producer_streams_large_item_and_empty_stream_once() -> Non
         peer.bridge.streams.register("large", produce)
         peer.bridge.streams.register("empty", empty)
         await peer.send(
-            "stream_open", "a.test.81", method="large", params={}, meta={"extra": [None, "值"]}
+            "stream_open",
+            f"a.{peer.epoch}.81",
+            method="large",
+            params={},
+            meta={"extra": [None, "值"]},
         )
         item = await peer.next_message("stream_item")
         assert item["item"] == large and item["seq"] == 0
@@ -157,15 +162,15 @@ async def test_python_producer_streams_large_item_and_empty_stream_once() -> Non
         assert contexts[0].client is peer.endpoint
         assert len(peer.commands) > 1
         assert all(len(command.encode()) <= 461 for command in peer.commands)
-        await peer.send("stream_open", "a.test.82", method="empty", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.82", method="empty", params={})
         empty_end = await peer.next_message("stream_end")
-        assert empty_end["id"] == "a.test.82" and empty_end["seq"] == 0
+        assert empty_end["id"] == f"a.{peer.epoch}.82" and empty_end["seq"] == 0
         release.set()
         assert (await peer.next_message("stream_item"))["item"] is None
         end = await peer.next_message("stream_end")
-        assert end["id"] == "a.test.81" and end["seq"] == 2
-        await peer.send("stream_open", "a.test.81", method="large", params={})
-        await peer.send("stream_open", "a.test.82", method="empty", params={})
+        assert end["id"] == f"a.{peer.epoch}.81" and end["seq"] == 2
+        await peer.send("stream_open", f"a.{peer.epoch}.81", method="large", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.82", method="empty", params={})
         await asyncio.sleep(0)
         assert peer.messages.empty()
 
@@ -283,12 +288,12 @@ async def test_remote_cancel_unwinds_producer_without_replaying_completed_work()
                 finished.set()
 
         peer.bridge.streams.register("world", produce)
-        await peer.send("stream_open", "a.test.81", method="world", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.81", method="world", params={})
         assert (await peer.next_message("stream_item"))["item"] == {"worldChangeDone": True}
         await asyncio.wait_for(entered.wait(), 2)
-        await peer.send("stream_cancel", "a.test.81")
+        await peer.send("stream_cancel", f"a.{peer.epoch}.81")
         await asyncio.wait_for(finished.wait(), 2)
-        await peer.send("stream_open", "a.test.81", method="world", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.81", method="world", params={})
         await asyncio.sleep(0)
         assert calls == 1
         assert peer.messages.empty()
@@ -321,10 +326,10 @@ async def test_producer_exception_becomes_correlated_error() -> None:
             raise RuntimeError("private exception content")
 
         peer.bridge.streams.register("broken", produce)
-        await peer.send("stream_open", "a.test.90", method="broken", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.90", method="broken", params={})
         assert (await peer.next_message("stream_item"))["item"] == "first"
         error = await peer.next_message("stream_error")
-        assert error["id"] == "a.test.90" and error["seq"] == 1
+        assert error["id"] == f"a.{peer.epoch}.90" and error["seq"] == 1
         assert error["error"]["code"] == "HANDLER_FAILED"
         assert "private" not in error["error"]["message"]
 
@@ -355,7 +360,7 @@ async def test_endpoint_close_wakes_consumer_and_unwinds_producer() -> None:
                 producer_closed.set()
 
         peer.bridge.streams.register("waiting", produce)
-        await peer.send("stream_open", "a.test.91", method="waiting", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.91", method="waiting", params={})
         await asyncio.wait_for(producer_entered.wait(), 2)
         waiting = asyncio.create_task(anext(stream))
         peer.endpoint.close()
@@ -405,14 +410,10 @@ async def test_real_node_and_python_stream_both_directions_before_producers_fini
     )
     assert process.stdin is not None and process.stdout is not None
     assert json.loads(await asyncio.wait_for(process.stdout.readline(), 15))["type"] == "ready"
-    bridge = V2Bridge(negotiate=False)
+    bridge = V2Bridge()
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge,
-        hook=hook,
-        settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable")),
-    )
-    websocket = QueueWebSocket()
+    server = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
+    websocket = QueueWebSocket(auto_negotiate=False)
     events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     release_python = asyncio.Event()
     python_done = asyncio.Event()
@@ -435,7 +436,10 @@ async def test_real_node_and_python_stream_both_directions_before_producers_fini
 
     async def send(payload: str) -> None:
         command = json.loads(payload).get("body", {}).get("commandLine", "")
-        if command.startswith(COMMAND_PREFIX):
+        hello = "scriptevent mcbews:negotiate_v2 "
+        if command.startswith(hello):
+            await write({"op": "hello", "frame": command[len(hello) :]})
+        elif command.startswith(COMMAND_PREFIX):
             assert len(command.encode()) <= 461
             await write({"op": "frame", "frame": command[len(COMMAND_PREFIX) :]})
 
@@ -450,10 +454,11 @@ async def test_real_node_and_python_stream_both_directions_before_producers_fini
 
     websocket.on_send = send
     reader = asyncio.create_task(read_node())
-    task = asyncio.create_task(facade._on_connection(websocket))
+    task = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
     assert hook.state is not None
-    endpoint = bridge.activate(hook.state, epoch="test")
+    endpoint = bridge.connection(hook.state.id)
+    assert endpoint is not None
     try:
         stream = await endpoint.stream("ts.stream", {"gate": "next", "large": 1200}, metadata=meta)
         assert await asyncio.wait_for(anext(stream), 5) == {"first": True, "metadata": meta}
@@ -503,7 +508,7 @@ async def test_rejected_stream_cannot_restart_after_active_capacity_frees() -> N
             yield params["marker"]
 
         peer.bridge.streams.register("side.effect", produce)
-        for stream_id in ("a.test.81", "a.test.82"):
+        for stream_id in (f"a.{peer.epoch}.81", f"a.{peer.epoch}.82"):
             await peer.send(
                 "stream_open", stream_id, method="side.effect", params={"marker": "rejected"}
             )
@@ -514,18 +519,18 @@ async def test_rejected_stream_cannot_restart_after_active_capacity_frees() -> N
         await occupied.aclose()
         await peer.next_message("stream_cancel")
         await asyncio.gather(*peer.endpoint.streams.controls)
-        for stream_id in ("a.test.81", "a.test.82"):
+        for stream_id in (f"a.{peer.epoch}.81", f"a.{peer.epoch}.82"):
             await peer.send(
                 "stream_open", stream_id, method="side.effect", params={"marker": "replayed"}
             )
         await peer.send(
-            "stream_open", "a.test.83", method="side.effect", params={"marker": "fresh"}
+            "stream_open", f"a.{peer.epoch}.83", method="side.effect", params={"marker": "fresh"}
         )
         item = await peer.next_message("stream_item")
-        assert item["id"] == "a.test.83" and item["item"] == "fresh"
+        assert item["id"] == f"a.{peer.epoch}.83" and item["item"] == "fresh"
         assert calls == ["fresh"]
         end = await peer.next_message("stream_end")
-        assert end["id"] == "a.test.83"
+        assert end["id"] == f"a.{peer.epoch}.83"
 
 
 @pytest.mark.asyncio
@@ -539,15 +544,15 @@ async def test_rejected_stream_tombstones_respect_active_and_retired_id_limit() 
             yield None
 
         peer.bridge.streams.register("blocked", produce)
-        await peer.send("stream_open", "a.test.81", method="blocked", params={})
+        await peer.send("stream_open", f"a.{peer.epoch}.81", method="blocked", params={})
         await asyncio.wait_for(entered.wait(), 2)
-        for stream_id in ("a.test.82", "a.test.83", "a.test.84"):
+        for stream_id in (f"a.{peer.epoch}.82", f"a.{peer.epoch}.83", f"a.{peer.epoch}.84"):
             await peer.send("stream_open", stream_id, method="blocked", params={})
             assert (await peer.next_message("stream_error"))["id"] == stream_id
             await asyncio.gather(*peer.endpoint.streams.controls)
         manager = peer.endpoint.streams
         assert len(manager.producers) + len(manager.tombstones) == 2
-        assert set(manager.tombstones) == {"a.test.82"}
+        assert set(manager.tombstones) == {f"a.{peer.epoch}.82"}
 
 
 @pytest.mark.asyncio
@@ -561,7 +566,7 @@ async def test_stream_producer_nested_request_inherits_incoming_trace_id() -> No
         peer.bridge.streams.register("nested.trace", produce)
         await peer.send(
             "stream_open",
-            "a.test.91",
+            f"a.{peer.epoch}.91",
             method="nested.trace",
             params={},
             meta={"sdk.trace_id": "stream_trace"},
@@ -570,7 +575,7 @@ async def test_stream_producer_nested_request_inherits_incoming_trace_id() -> No
         assert request["meta"] == {"sdk.trace_id": "stream_trace"}
         item = await peer.next_message("stream_item")
         assert item["item"] == {"sdk.trace_id": "stream_trace"}
-        assert (await peer.next_message("stream_end"))["id"] == "a.test.91"
+        assert (await peer.next_message("stream_end"))["id"] == f"a.{peer.epoch}.91"
 
 
 @pytest.mark.asyncio

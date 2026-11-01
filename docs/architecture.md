@@ -1,82 +1,125 @@
 # Architecture
 
-This describes the unreleased checkout. See [migration](migration.md) for the
-PyPI `0.2.1` boundary and unchanged legacy defaults.
+The SDK is a generic WebSocket gateway. It owns the transport, admission,
+request correlation, task lifetimes, fragmentation and byte-safe delivery.
+Your host owns authorization, history and business state.
 
 ```text
-McbeServer               new entry: reliable dispatch + V2Bridge
-└── McbeServerFacade      transport lifetime and injected collaborators
-    ├── ConnectionManager / ConnectionState
-    ├── ConnectionRuntime: bounded business/observation lanes and sender
-    ├── NativeCommandClient / RequestTable: reply correlation and deadlines
-    ├── MinecraftProtocolHandler / CommandRegistry
-    ├── ConnectionHook / ResponseSink: host behavior and rendering
-    ├── AddonBridgeService: v1 capabilities and optional business extensions
-    ├── V2Bridge: discovery, bidirectional capabilities, metadata and streams
-    └── McbeOutboundDelivery / FlowControlMiddleware: byte-safe delivery
+McbeServer                        only public entry
+├── ConnectionManager / ConnectionState
+│   └── admission state machine
+├── ConnectionRuntime             bounded business + observation lanes
+│   └── OutboundScheduler         per-connection send capacity and fairness
+├── NativeCommandClient / RequestTable
+├── MinecraftProtocolHandler / CommandRegistry
+├── ConnectionHook / ResponseSink  host behavior and rendering
+├── V2Bridge                       admission, requests, notifications, streams
+│   └── V2Endpoint                 per-connection epoch and dispatch
+├── McbeOutboundDelivery
+└── FlowControlMiddleware          byte-safe tellraw/scriptevent chunking
+
+Companion addon
+router (mcbews:negotiate_v2 / mcbews:packet_v2)
+└── V2Endpoint (capability registry + stream registry)
 ```
 
-## Entry points and ownership
+## Entry and ownership
 
-`McbeServer` preserves the facade's keyword-only injection and lifecycle APIs,
-selects reliable dispatch and supplies a v2 bridge. `McbeServerFacade()` retains
-its legacy defaults; reliable mode and v2 can also be injected explicitly there.
-The default response sink is neutral, so hosts supply rendering when they want
-to turn `OutboundText` / `SystemNotification` into Minecraft commands.
+`McbeServer` is the only public server entry. It always uses managed business
+lanes and always requires MCBEWS/2 admission; there is no dispatch-mode switch,
+no legacy callback path and no opt-out. The default response sink is neutral:
+hosts supply rendering when they want to turn `OutboundText` /
+`SystemNotification` into Minecraft commands.
 
-The SDK owns transport, request waiters, task lifetimes, ordering and fragment
-state. The host owns authorization, history and business state. There is no
-SDK-owned `PlayerSession`; isolate application state by `(connection_id, sender)`
-using the current `PlayerMessageEvent.sender`.
+The SDK owns transport, admission, request waiters, task lifetimes, ordering and
+fragment state. The host owns authentication, authorization, history and
+business state. There is no SDK-owned `PlayerSession`; isolate application state
+by `(connection_id, sender)` using the current `PlayerMessageEvent.sender`.
+
+## Admission state machine
+
+```text
+WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
+                              └────────→ REJECTED ────────→ CLOSED
+```
+
+- The reader and required event subscriptions start before negotiation. The
+  server never awaits negotiation before it can read replies.
+- `NEGOTIATING` accepts negotiation frames, required control frames and
+  correlated native `commandResponse` / `error` frames. Business frames are
+  dropped and counted; they are not queued for replay.
+- `READY_V2` is the only point where the server publishes business
+  `CONNECTED`, calls `on_connected` and routes player messages.
+- A timeout, malformed negotiation, busy admission, confirmation failure or
+  invalid session reaches `REJECTED`, then `CLOSING` / `CLOSED`. Close code is
+  `1008`; the reason token is bounded.
+- A rejected connection has no paired business `on_connected` /
+  `on_disconnected`. Transport diagnostics still record the attempt.
+- A late or stale epoch cannot reopen a closed admission. Reconnect starts a
+  new admission and a new epoch.
+
+The addon accepts only `mcbews:negotiate_v2` and `mcbews:packet_v2`. Old
+`mcbews:bridge_req` / `session_req` / `text_resp` events are logged and rejected
+with zero business side effects. The addon cannot close a WebSocket owned by an
+old server; it only refuses that server's business.
 
 ## Managed dispatch
 
-Setup sends handshake and subscribes to `PlayerMessage` before delivering the
-connected notification. The welcome banner remains host-owned.
-The reader classifies and correlates command replies, negotiation and reserved
-addon traffic before queuing business callbacks. Awaiting a command/capability
-inside a managed callback leaves the reader free to receive its reply.
+Setup completes transport handshake and required subscriptions before the
+admission result. After `READY_V2`, the reader classifies and correlates command
+replies, negotiation frames and reserved carrier traffic before queuing business
+callbacks.
 
 Same-player chat stays FIFO across interceptors and the hook; different players
 can progress concurrently. Other native business events share a FIFO lane.
-Observers use a separate bounded lane. Business/observation overload rejects
-work explicitly. Callback exceptions are isolated; disconnect cancels and joins
-managed work, fails waiters and releases buffers. This differs from the legacy
-reader's inline callback ordering; see [migration](migration.md).
+Observers use a separate bounded lane. Business or observation overload rejects
+work explicitly instead of growing without bound. Callback exceptions are
+isolated.
+
+Awaiting a command or capability inside a managed callback leaves the reader
+free to receive its reply. Disconnect cancels and joins managed work, fails
+waiters and releases buffers. Hosts do not create request wait tables, request
+tasks or fragment buffers.
 
 Hooks return `None`. `on_player_message(state, event, parsed=None)` receives an
-optional registry match, not a consumed flag. UI chat uses
-`on_ui_chat_reassembled(state, UiChatMessage)`; optional `AddonControlHook`
-receives session/approval DTOs. The old three-argument UI callback requires the
-explicit `LegacyUiChatHookAdapter`.
+optional registry match, not a consumed flag. The five lifecycle hooks are
+`on_connected`, `on_disconnected`, `on_player_message`, `on_command_response`
+and `on_error`.
 
-## Delivery and protocols
+## Bridge and delivery
 
-The response sender wraps queued messages with `RouteEnvelope.from_message()`
-and calls the sink's two `on_*` methods. Hosts can use `McbeOutboundDelivery`
-with `state.send_bulk` to classify long output separately from requests.
-The bounded sender reserves control capacity and schedules bulk fairly.
+`V2Bridge` owns the per-connection admission, capability registry and stream
+registry. `V2Endpoint` holds one admitted epoch: it pairs replies before
+dispatching requests, enforces request/stream limits, and carries metadata. A
+capability handler receives `(name, payload, CapabilityContext)` and returns a
+JSON mapping. Streams use `stream/1` and yield logical items; large items are
+fragmented by the transport layer and delivered once.
 
-The final commandLine budget defaults to 461 UTF-8 bytes and may only be
-lowered. Tellraw and framed ScriptEvents can be split; native commands remain
-atomic and reject overflow. V2 uplink uses its own carrier bounds.
+The outbound scheduler is per connection. It bounds queued frames and bytes,
+reserves control capacity, and schedules bulk content fairly. Hosts can pass
+`state.send_bulk` to `McbeOutboundDelivery` to keep long text off the request
+path.
 
-`McbewsV1Profile` / `MCBEWS_V1` define the legacy profile, not a replaceable
-runtime seam. Installed manifests and vectors define v1 and v2 separately.
-`V2Bridge` negotiates per connection; it falls back only to known v1 methods.
-Required metadata and streams fail when unsupported. Reconnect creates a fresh
-session without replaying requests. See [v1](addon-bridge-protocol.md) and
-[v2](protocol-v2.md) for authoritative formats and resource limits.
+The final command-line budget defaults to 461 UTF-8 bytes and may only be
+lowered. tellraw and framed scriptevents can be split; native commands remain
+atomic and reject overflow. MCBEWS/2 uplink measures the complete carrier frame
+independently and does not inherit the downlink budget.
+
+All wire formats, limits and error codes are defined by the installed
+`profiles/mcbews_v2/manifest.json` and `vectors.json`. See
+[the protocol contract](protocol-v2.md).
 
 ## Addon requirements and trust
 
 The companion addon needs **Experiments → Beta APIs** in the target world.
-Without it scripts do not load and capability requests time out. See the
+Without it scripts do not load and admission times out. See the
 [addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md).
-The bridge and metadata identity are not authentication boundaries. Hosts must
-authenticate and authorize callers. Automated protocol coverage does not expand
-live-game platform/version support.
 
-The SDK imports no host application modules. `ConnectionState.send_payload`
-is an opaque async callable wired to transport by the facade; host-specific
-message IDs, timestamps and business framing stay outside the SDK.
+Carrier attribution, the simulated `MCBEWS_BRIDGE` player and metadata identity
+are not authentication boundaries. Hosts must authenticate and authorize
+callers. Automated protocol coverage does not expand live-game platform or
+version support.
+
+The SDK imports no host application modules. `ConnectionState.send_payload` is
+an opaque async callable wired to the transport; host-specific message IDs,
+timestamps and business framing stay outside the SDK.

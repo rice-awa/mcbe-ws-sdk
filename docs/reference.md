@@ -4,9 +4,10 @@ Auto-generated from source via [mkdocstrings](https://mkdocstrings.github.io/).
 Private names (`_*`) are filtered out. Prefer the public re-exports on
 [`mcbe_ws_sdk`][mcbe_ws_sdk] when writing host code.
 
-Start new checkout hosts with `McbeServer`; retain `McbeServerFacade` for its
-legacy defaults. These new exports are unreleased and are not in PyPI `0.2.1`.
-See [migration](migration.md) and [extension authors](extension-authors.md).
+`McbeServer` is the only public server entry. `server.v2` exposes the
+`V2Bridge` for capabilities, notifications and streams. See
+[getting started](getting-started.md), [extension authors](extension-authors.md)
+and [protocol](protocol-v2.md).
 
 ## Public package
 
@@ -22,17 +23,11 @@ See [native events](native-events.md) for observer, interceptor and subscription
     options:
       show_submodules: true
 
-## Addon bridge
+## MCBEWS/2 runtime, transports and streams
 
-::: mcbe_ws_sdk.addon
+::: mcbe_ws_sdk.profiles.mcbews_v2
     options:
       show_submodules: true
-
-## Negotiated v2 and streams
-
-::: mcbe_ws_sdk.profiles.mcbews_v2.runtime
-
-::: mcbe_ws_sdk.profiles.mcbews_v2.streams
 
 ## Flow control
 
@@ -43,12 +38,6 @@ See [native events](native-events.md) for observer, interceptor and subscription
 ## Protocol models
 
 ::: mcbe_ws_sdk.protocol
-    options:
-      show_submodules: true
-
-## Profiles
-
-::: mcbe_ws_sdk.profiles
     options:
       show_submodules: true
 
@@ -70,7 +59,7 @@ See [native events](native-events.md) for observer, interceptor and subscription
     options:
       show_submodules: true
 
-## Config & logging
+## Config and logging
 
 ::: mcbe_ws_sdk.config
 
@@ -78,7 +67,8 @@ See [native events](native-events.md) for observer, interceptor and subscription
 
 ## Tracing and diagnostics
 
-See [diagnostic contracts](diagnostics.md) for packet privacy and delivery stages.
+See [diagnostic contracts](diagnostics.md) for lifecycle stages, packet privacy
+and delivery results.
 
 ::: mcbe_ws_sdk.tracing
 

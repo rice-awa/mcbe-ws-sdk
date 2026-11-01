@@ -38,12 +38,9 @@ beforeEach(async () => {
   _testingReset();
   vi.useFakeTimers();
   sent = [];
-  await activateBridge(
-    async () => {},
-    async (frame) => {
-      sent.push(frame);
-    }
-  );
+  await activateBridge(async (frame) => {
+    sent.push(frame);
+  });
 });
 afterEach(() => {
   _testingReset();

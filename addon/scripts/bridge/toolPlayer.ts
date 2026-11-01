@@ -1,8 +1,7 @@
 import { GameMode, world, system } from "@minecraft/server";
 import { spawnSimulatedPlayer } from "@minecraft/server-gametest";
 
-import { chunkBridgePayload, utf8ByteLength } from "./chunking";
-import { TRUSTED_BRIDGE_PLAYER_NAME } from "./protocol";
+import { MANIFEST } from "./v2/assets";
 
 const DEBUG = true;
 
@@ -15,6 +14,7 @@ function log(message: string): void {
 const TOOL_PLAYER_DIMENSION = "overworld";
 const TOOL_PLAYER_LOCATION = { x: 300000, y: 100, z: 300000 };
 const TOOL_PLAYER_CHECK_INTERVAL_TICKS = 20 * 30;
+const TRUSTED_BRIDGE_PLAYER_NAME = MANIFEST.carrier.trusted_player;
 
 let isToolPlayerInitialized = false;
 
@@ -50,30 +50,7 @@ export function ensureToolPlayer(): void {
   }
 }
 
-export async function sendBridgeResponseChunks(requestId: string, payload: string): Promise<void> {
-  const toolPlayer = world.getAllPlayers().find((player) => player.name === TRUSTED_BRIDGE_PLAYER_NAME);
-
-  if (!toolPlayer) {
-    log(`sendBridgeResponseChunks: channel=capability, tool player missing for requestId=${requestId}`);
-    throw new Error("Tool player is not available");
-  }
-
-  const chunks = chunkBridgePayload(requestId, payload);
-  log(
-    `sendBridgeResponseChunks: channel=capability, requestId=${requestId}, ` +
-      `chunks=${chunks.length}, payloadBytes=${utf8ByteLength(payload)}`
-  );
-  for (const [index, chunk] of chunks.entries()) {
-    log(
-      `sendBridgeResponseChunks: channel=capability, requestId=${requestId}, ` +
-        `chunk=${index + 1}/${chunks.length}, bytes=${utf8ByteLength(chunk)}`
-    );
-    await toolPlayer.runCommand(`tell @s ${chunk}`);
-  }
-  log(`sendBridgeResponseChunks: channel=capability, requestId=${requestId}, status=done`);
-}
-
-/** Send one already bounded v2 carrier frame through the bridge player. */
+/** Send one already bounded MCBEWS/2 carrier frame through the bridge player. */
 export async function sendV2Frame(frame: string): Promise<void> {
   const player = world.getAllPlayers().find((entry) => entry.name === TRUSTED_BRIDGE_PLAYER_NAME);
   if (!player) throw new Error("Tool player is not available");

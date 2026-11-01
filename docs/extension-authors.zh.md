@@ -1,12 +1,11 @@
 # 扩展作者指南
 
-这些接口属于**尚未发布的当前源码**，不在 PyPI `0.2.1` 中。
-新宿主先读[快速开始](getting-started.md)，现有宿主参考[迁移指南](migration.md)。
 扩展只注册处理函数，不维护请求等待表、线格式编号或分片状态。
+新宿主先读[快速开始](getting-started.md)；更新现有宿主时参考[迁移指南](migration.md)。
 
 ## 注册 Python 能力
 
-在服务使用的 `V2Bridge.registry` 上注册，并在开始接收请求前完成组装：
+在服务使用的 `V2Bridge` 上注册：
 
 ```python
 from mcbe_ws_sdk import CapabilityContext, McbeServer, V2Bridge
@@ -14,11 +13,14 @@ from mcbe_ws_sdk import CapabilityContext, McbeServer, V2Bridge
 bridge = V2Bridge()
 server = McbeServer(v2=bridge)
 
-async def echo(name, payload, context: CapabilityContext):
-    return {"ok": True, "payload": dict(payload), "metadata": dict(context.metadata)}
 
-def validate(payload, context):
+async def echo(name: str, payload: dict, context: CapabilityContext) -> dict:
+    return {"ok": True, "payload": dict(payload), "metadata": dict(context.metadata or {})}
+
+
+def validate(payload: dict, context: CapabilityContext) -> str | None:
     return None if "text" in payload else "text is required"
+
 
 registration = bridge.registry.register("demo.echo", echo, validate=validate)
 # bridge.registry.unregister(registration)
@@ -26,100 +28,151 @@ registration = bridge.registry.register("demo.echo", echo, validate=validate)
 
 处理器接收 `(name, payload, CapabilityContext)`，返回映射，或最终返回映射的可等待对象。
 校验器返回 `None` 表示通过，返回字符串表示拒绝及原因。
+
 同名注册必须显式传入 `replace=True`。注销只影响后续调用，旧句柄不能删除替换后的注册；
-正在执行的调用继续使用已经选定的处理器。
-v2 将未知方法、输入不合法、处理器异常分别映射为
+正在执行的调用继续使用开始时选定的处理器。未知方法、输入不合法、处理器异常分别映射为
 `UNSUPPORTED_METHOD`、`INVALID_PARAMS`、`HANDLER_FAILED`。
 
-`context.client` 是当前连接的 v2 端点，可用于反向请求与通知。
+`context.client` 是当前连接的 V2 端点，可用于反向请求、通知与流。
 调用正在执行的方法顺序组会被拒绝，避免递归等待队列中的自身任务。
-元数据中的身份不可信，传输来源与宿主授权仍须分开处理。
+元数据中的身份不可信，传输归属与宿主授权仍须分开处理。
 
 ## 注册附加包能力
 
-在自己的附加包组装代码中使用路由器导出的接口：
+在自己的附加包组装代码中使用路由器接口：
 
 ```typescript
 import { registerCapability } from "./bridge/router";
 
-registerCapability("demo.echo", (_name, payload, context) => ({
-  ok: true,
-  payload,
+const registration = registerCapability("demo.echo", (_method, payload, context) => ({
+  text: payload.text,
   metadata: context.metadata,
 }));
+// unregisterCapability(registration)
 ```
 
-自定义能力与内置能力共存，无需修改 SDK。
-构建并导入生成的附加包，在目标世界开启 **实验 → 测试版 API（Beta APIs）**，
-然后启用行为包；未开启时脚本不会加载。
-详见[附加包说明](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.zh.md)。
-这不代表新增了平台或游戏版本支持承诺。
+处理器接收 `(method, payload, context)`，返回对象或 Promise。
+上下文包含 `caller`、`requestVersion`、`metadata`、`client` 与 `cancellation`。
+可选校验器返回消息即拒绝输入。
 
-## 元数据与通知
+自定义能力与内置能力共存，无需修改 SDK。重名默认抛错，传入 `replace: true` 才覆盖。
+调用进行中注销不影响当前调用。
 
-执行 `selection = await bridge.ready(state.id)` 后，可发起协商调用：
+当前版本没有聚合的 `setCapabilityHandler` 入口，请按名称逐个注册。
+
+## 注册流生产者
+
+Python：
 
 ```python
-response = await bridge.request(
-    state.id, "demo.echo", {"text": "hello"},
+async def ticks(name: str, params: dict, context: CapabilityContext):
+    for index in range(params.get("count", 5)):
+        yield {"index": index}
+
+bridge.streams.register("demo.ticks", ticks)
+```
+
+附加包：
+
+```typescript
+import { registerV2Stream } from "./bridge/router";
+
+const unregister = registerV2Stream("demo.ticks", async function* (_method, params, context) {
+  for (let index = 0; index < (params.count ?? 5); index += 1) {
+    if (context.cancellation?.cancelled) return;
+    yield { index };
+  }
+});
+```
+
+生产者逐项产生 JSON，不需要预先知道总长度。大项由 SDK 分片，重组后作为一个逻辑项交付。
+重复注册同名流会抛错。
+
+## 调用附加包
+
+准入后，受管理钩子可以直接使用桥接：
+
+```python
+selection = await server.v2.ready(state.id)     # 需要显式等待准入时使用
+response = await server.v2.request(
+    state.id,
+    "demo.echo",
+    {"text": "hello"},
     metadata={"demo.locale": "zh", "demo.options": {"compact": True}},
-    trace_id="demo-trace", require={"metadata/1"},
+    trace_id="demo-trace",
+    require={"metadata/1"},
 )
 print(response["result"], response.get("meta"))
-```
 
-v2 远端协议错误抛出 `RemoteCallError`；传输故障、超时、取消也会结束调用。
-v1 回退结果仍包在 `response["result"]` 中，需要检查能力结果本身的 `ok` 字段。
-只要提供元数据，就要求 `metadata/1`，不会静默降级到 v1。
-未知可选字段与嵌套值按约定往返保留。元数据上限为紧凑 JSON 编码后 4096 个 UTF-8 字节，
-并遵守协议深度与数值规则。调用方不能传入保留的 `sdk.*` 键；追踪请使用 `trace_id`。
-身份字段不授予权限。
+await server.v2.notify(state.id, "demo.event", {"value": 1})
 
-仅限 v2 的通知可在确认协商出端点后调用 `selection.endpoint.notify(...)`。
-通知没有回复等待项，因此无法用响应报告远端处理失败。详见[v2 合同](protocol-v2.md)。
-
-## 订阅原生事件
-
-在受管理的钩子中使用：
-
-```python
-token = await state.native_events.subscribe("PlayerMessage", observe)
-# Later: await state.native_events.unsubscribe(token)
-```
-
-`observe(event)` 接收 `NativeEvent`。观察者不能消费业务消息，返回值会被忽略；
-拦截器则显式允许、拒绝或变换业务投递。注册与观察队列有界，断连时清理。
-其他事件名称只是透传，不代表游戏版本支持该事件。详见[原生事件](native-events.md)。
-
-## 持续流式
-
-在服务的桥接对象上注册生产者：
-
-```python
-async def count(name, params, context):
-    for value in range(params["count"]):
-        yield {"value": value}
-
-bridge.streams.register("demo.count", count)
-```
-
-对端注册同一生产者后，可以这样消费：
-
-```python
-stream = await bridge.stream(state.id, "demo.count", {"count": 3})
+stream = await server.v2.stream(state.id, "demo.ticks", {"count": 3})
 async with stream:
     async for item in stream:
         print(item)
 ```
 
-附加包端对应接口是 `registerV2Stream(name, handler)`，生产者返回 `AsyncIterable`。
-消费不需要预先知道总长度；大项由 SDK 分片，重组后作为一个逻辑项交付。
-提前退出请使用上下文管理器或 `await stream.aclose()`。
-取消正在等待的读取只取消该流，不影响其他请求。生产者必须配合取消；
-JavaScript 生产者应检查 `context.cancellation`。
+只有不在钩子中启动的工作才需要 `ready()`；钩子本身已运行在 `READY_V2` 之后。
 
-流要求协商出 `stream/1`。默认最多 16 条活跃流；每个消费者最多缓存 32 项、
-131072 个逻辑项字节，每个端点最多缓存 262144 字节。
-慢消费者以 `LIMIT_EXCEEDED` 明确失败；当前没有接收额度机制，固定延迟也不等于接收方背压。
-失败或取消会丢弃排队项，不撤销世界修改。
-截止时间与重复抑制边界见[流式合同](protocol-v2.md#request-streams)。
+远端协议错误抛出带 `code` 和受限说明的 `RemoteCallError`。
+传输故障、超时与取消也会结束调用。通知没有回复等待项，因此无法用响应报告远端处理器失败。
+
+元数据上限为紧凑 JSON 编码后 4096 个 UTF-8 字节，并遵守协议深度与数值规则。
+未知可选字段与嵌套值按约定往返保留。调用方不能传入保留的 `sdk.*` 键；
+追踪请使用 `trace_id`。身份字段不授予权限。
+
+## 取消与错误
+
+- 取消等待中的 Python 请求会结束等待。已经交给传输层的帧仍可能送达，
+  已经执行的世界修改不会撤销。
+- 附加包调用方为每个请求使用独立的 `V2RequestCancellation`：调用 `cancel()`，
+  并在继续工作前检查 `cancelled`。
+- 流消费者用 `async with` 或 `await stream.aclose()` 提前退出；
+  取消正在等待的读取只取消该流，不影响其他请求。
+- 生产者必须配合取消。JavaScript 生产者应检查 `context.cancellation`；
+  任意永不完成的 Promise 无法被强制解除。
+- 玩家看到的失败包含方法/能力名、错误码、最多 256 个 UTF-8 字节的可读说明和行动提示。
+  内部请求编号与堆栈只留在日志中。
+
+## 限制
+
+| 资源 | 默认值 |
+| --- | --- |
+| 单条消息 | 65536 个 UTF-8 字节 |
+| 元数据 | 紧凑 JSON 编码后 4096 个 UTF-8 字节 |
+| 下行命令行 | 461 个 UTF-8 字节，只能降低 |
+| 上行载体帧 | 256 个 Unicode 码点且不超过 1024 个 UTF-8 字节 |
+| 单端点活跃流 | 双向合计 16 条 |
+| 单消费者缓存 | 32 项 / 131072 个逻辑项字节 |
+| 单端点缓存 | 262144 字节 |
+| 流空闲期限 | 开流、产生下一项、发送单条消息各 30000 毫秒 |
+
+慢消费者以 `LIMIT_EXCEEDED` 失败并发送取消。固定发送间隔不等于接收方背压；
+当前没有接收额度机制。详见[协议合同](protocol-v2.md#request-streams)。
+
+## 构建变体与演示注册
+
+默认附加包只注册 `get_player_snapshot` 与 `get_inventory_snapshot`。
+完整演示包额外注册 `demo.echo`、`demo.ticks` 流与受限的 `run_world_command`：
+
+```bash
+cd addon
+npm install
+npm run build:demo
+npm run mcaddon:demo
+```
+
+`--demo` 或 `MCBE_DEMO=1` 选择 `main.demo.ts`；输出路径仍是
+`dist/scripts/main.js`。添加自己的处理器时，在 `main.ts`（或自己的入口）中导入，
+并在 `initializeAfterWorldLoad` 内注册一次。
+
+`run_world_command` 从不属于基础包。注册后，默认允许列表只有 `say`，
+危险命令禁止列表仍然生效。不要在缺少宿主授权时放宽策略。
+
+附加包必须导入目标世界，并开启 **实验 → 测试版 API（Beta APIs）**。
+自动化示例不建立实机支持承诺；请单独验证游戏版本与平台。
+
+## 信任边界
+
+桥接不是安全边界。调用方归属、模拟玩家 `MCBEWS_BRIDGE`、元数据身份与附加包侧命令过滤
+都不能替代宿主认证与授权。请在 Python 能力处理器中执行调用方权限检查。

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from mcbe_ws_sdk.errors import BridgeLimitError, ProtocolError
+from mcbe_ws_sdk.errors import ProtocolError, ReassemblyLimitError
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommand
 from mcbe_ws_sdk.reassembly import ReassemblyCore
 
@@ -242,7 +242,7 @@ class ReassemblyPool:
                 item=content,
                 now=now,
             )
-        except BridgeLimitError:
+        except ReassemblyLimitError:
             self._drop(key, now)
             fail("LIMIT_EXCEEDED")
         except ProtocolError:

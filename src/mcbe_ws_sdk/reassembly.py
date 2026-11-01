@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
-from mcbe_ws_sdk.errors import BridgeLimitError, ProtocolError
+from mcbe_ws_sdk.errors import ProtocolError, ReassemblyLimitError
 
 T = TypeVar("T")
 
@@ -77,12 +77,12 @@ class ReassemblyCore(Generic[T]):
         buffers = self.channel(channel)
         timestamp = self._clock() if now is None else now
         if not 1 <= index <= total <= self._settings.max_chunks_per_message:
-            raise BridgeLimitError("invalid chunk index or total")
+            raise ReassemblyLimitError("invalid chunk index or total")
         encoded_size = len(content.encode("utf-8"))
         current = buffers.get(buffer_id)
         if current is None:
             if self._buffer_count() >= self._settings.max_buffer_ids:
-                raise BridgeLimitError("maximum buffer ids exceeded")
+                raise ReassemblyLimitError("maximum buffer ids exceeded")
             current = ChunkBuffer(total, {}, 0, timestamp)
             buffers[buffer_id] = current
         elif current.total_chunks != total:
@@ -96,10 +96,10 @@ class ReassemblyCore(Generic[T]):
             return current
         if current.byte_size + encoded_size > self._settings.max_message_bytes:
             self._drop_buffer(buffers, buffer_id)
-            raise BridgeLimitError("message byte limit exceeded")
+            raise ReassemblyLimitError("message byte limit exceeded")
         if self._total_buffer_bytes() + encoded_size > self._settings.max_total_buffer_bytes:
             self._drop_buffer(buffers, buffer_id)
-            raise BridgeLimitError("total buffer byte limit exceeded")
+            raise ReassemblyLimitError("total buffer byte limit exceeded")
         current.chunks[index] = item
         current.byte_size += encoded_size
         current.updated_at = timestamp

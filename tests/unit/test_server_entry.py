@@ -1,18 +1,14 @@
-"""Public server defaults and command awaiting work through a live reader."""
+"""The single public ``McbeServer`` entry and its native command client."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 
-import pytest
-
 from mcbe_ws_sdk import (
-    DispatchSettings,
     FlowControlSettings,
     GatewaySettings,
     McbeServer,
-    McbeServerFacade,
     V2Bridge,
     WebsocketTransportConfig,
 )
@@ -26,29 +22,23 @@ from .test_reliable_facade import (
 )
 
 
-def test_new_entry_preserves_settings_and_legacy_defaults() -> None:
+def test_entry_owns_settings_and_bridge() -> None:
     settings = GatewaySettings(
         websocket=WebsocketTransportConfig(port=9999),
         flow=FlowControlSettings(command_line_byte_budget=400),
-        dispatch=DispatchSettings(business_queue_maxsize=17),
     )
     bridge = V2Bridge()
     server = McbeServer(settings=settings, v2=bridge)
     assert server.v2 is bridge
-    assert server.reliable_dispatch
-    assert server.settings.dispatch.business_queue_maxsize == 17
+    assert server.settings is settings
     assert server.settings.flow is settings.flow
     assert server.settings.websocket is settings.websocket
-    assert settings.dispatch.mode == "legacy"
-    assert not McbeServerFacade().reliable_dispatch
     assert McbeServer().settings.flow.command_line_byte_budget == 461
-    assert McbeServer().v2.negotiate
 
 
-@pytest.mark.parametrize("entry", [McbeServer, McbeServerFacade])
-async def test_public_entries_pair_native_response_and_release_connection(entry) -> None:
+async def test_native_response_pairs_and_connection_releases() -> None:
     hook = RecordingHook()
-    server = entry(hook=hook)
+    server = McbeServer(hook=hook)
     websocket = QueueWebSocket()
     connection = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
@@ -67,9 +57,10 @@ async def test_public_entries_pair_native_response_and_release_connection(entry)
         await _stop(websocket, connection)
     assert server.manager.connection_count == 0
     assert hook.state.requests.pending_count == 0
+    assert hook.disconnected.is_set()
 
 
-async def test_new_entry_can_await_native_command_inside_player_callback() -> None:
+async def test_native_command_can_be_awaited_inside_player_callback() -> None:
     hook = RecordingHook()
     done = asyncio.Event()
 

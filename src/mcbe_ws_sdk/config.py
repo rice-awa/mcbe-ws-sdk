@@ -1,3 +1,10 @@
+"""Frozen gateway settings.
+
+The SDK is MCBEWS/2-only: the empirical command budget comes from the v2
+manifest, and there is no dispatch-mode switch because every connection uses
+the reliable business lanes.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -5,15 +12,11 @@ from dataclasses import dataclass, field
 from math import isfinite
 from numbers import Real
 from types import MappingProxyType
-from typing import Literal
 
 from mcbe_ws_sdk.errors import ConfigurationError
-from mcbe_ws_sdk.profiles.mcbews_v1.manifest import MCBEWS_V1_MANIFEST
-from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v2.codec import MANIFEST
 
-_DEFAULT_COMMAND_LINE_BYTE_BUDGET = int(
-    MCBEWS_V1_MANIFEST["limits"]["command_line_byte_budget"]
-)
+_DEFAULT_COMMAND_LINE_BYTE_BUDGET = int(MANIFEST["limits"]["command_bytes"])
 
 
 def _require_positive_int(value: object, field_name: str) -> None:
@@ -41,17 +44,16 @@ class FlowControlSettings:
         default_factory=lambda: {
             "tellraw": 0.05,
             "scriptevent": 0.05,
-            "text_resp": 0.15,
         }
     )
 
-    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent", "text_resp"})
+    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent"})
 
     def __post_init__(self) -> None:
         _require_positive_int(self.command_line_byte_budget, "flow.command_line_byte_budget")
         if self.command_line_byte_budget > _DEFAULT_COMMAND_LINE_BYTE_BUDGET:
             raise ConfigurationError(
-                "flow.command_line_byte_budget may only lower the MCBEWS/1 empirical ceiling "
+                "flow.command_line_byte_budget may only lower the MCBEWS/2 empirical ceiling "
                 f"({_DEFAULT_COMMAND_LINE_BYTE_BUDGET})"
             )
         _require_positive_int(self.max_chunk_content_length, "flow.max_chunk_content_length")
@@ -71,37 +73,8 @@ class FlowControlSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class AddonBridgeSettings:
-    timeout_seconds: float = 5.0
-    buffer_ttl_seconds: float = 30.0
-    max_pending_requests: int = 128
-    max_buffer_ids: int = 128
-    max_chunks_per_message: int = 64
-    max_message_bytes: int = 262_144
-    max_total_buffer_bytes: int = 1_048_576
-    # MCBEWS/1 is the only runtime profile.  The historical
-    # ``AddonBridgeProfile`` name is a deprecated type alias, not a replacement
-    # profile seam.
-    profile: McbewsV1Profile = field(default_factory=McbewsV1Profile)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.profile, McbewsV1Profile):
-            raise ConfigurationError("addon.profile must be a concrete McbewsV1Profile")
-        for name in ("timeout_seconds", "buffer_ttl_seconds"):
-            _require_finite_real(getattr(self, name), f"addon.{name}")
-        for name in (
-            "max_pending_requests",
-            "max_buffer_ids",
-            "max_chunks_per_message",
-            "max_message_bytes",
-            "max_total_buffer_bytes",
-        ):
-            _require_positive_int(getattr(self, name), f"addon.{name}")
-
-
-@dataclass(frozen=True, slots=True)
 class WebsocketTransportConfig:
-    """Transport knobs for the facade's ``websockets.serve`` lifetime."""
+    """Transport knobs for the server's ``websockets.serve`` lifetime."""
 
     host: str = "0.0.0.0"
     port: int = 8080
@@ -127,19 +100,10 @@ class WebsocketTransportConfig:
         _require_positive_int(self.response_queue_maxsize, "websocket.response_queue_maxsize")
 
 
-DispatchMode = Literal["legacy", "reliable"]
-
-
 @dataclass(frozen=True, slots=True)
 class DispatchSettings:
-    """Business-task and request-lifecycle knobs for the opt-in reliable path.
+    """Business-task and request-lifecycle knobs for the reliable path."""
 
-    ``mode="legacy"`` keeps the original serial callback contract. Selecting
-    ``"reliable"`` is explicit; it does not change the wire format and does not
-    affect the legacy entry point.
-    """
-
-    mode: DispatchMode = "legacy"
     business_queue_maxsize: int = 256
     max_concurrent_business_tasks: int = 64
     event_queue_maxsize: int = 256
@@ -147,8 +111,6 @@ class DispatchSettings:
     command_timeout_seconds: float = 5.0
 
     def __post_init__(self) -> None:
-        if self.mode not in ("legacy", "reliable"):
-            raise ConfigurationError("gateway.dispatch.mode must be 'legacy' or 'reliable'")
         for name in (
             "business_queue_maxsize",
             "max_concurrent_business_tasks",
@@ -212,7 +174,6 @@ class SendSchedulerSettings:
 @dataclass(frozen=True, slots=True)
 class GatewaySettings:
     flow: FlowControlSettings = field(default_factory=FlowControlSettings)
-    addon: AddonBridgeSettings = field(default_factory=AddonBridgeSettings)
     websocket: WebsocketTransportConfig = field(default_factory=WebsocketTransportConfig)
     dispatch: DispatchSettings = field(default_factory=DispatchSettings)
     send: SendSchedulerSettings = field(default_factory=SendSchedulerSettings)

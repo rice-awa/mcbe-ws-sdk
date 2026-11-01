@@ -25,8 +25,8 @@ def test_contract_independent_and_all_axes_defined() -> None:
     assert manifest["limits"]["command_bytes"] == 461
     assert manifest["limits"]["upstream_code_points"] == 256
     assert manifest["carrier"]["event"] == "mcbews:packet_v2"
-    old = json.loads((ASSETS.parent / "mcbews_v1/manifest.json").read_text())
-    assert old["protocol_line"] == "MCBEWS/1"
+    assert manifest["negotiation"]["versions"] == ["MCBEWS/2"]
+    assert not (ASSETS.parent / "mcbews_v1").exists()
     vectors = json.loads((ASSETS / "vectors.json").read_text())
     assert [len(vectors[k]) for k in ("valid", "invalid", "raw_invalid")] == [12, 18, 3]
     assert all("expected" in v for group in vectors.values() for v in group)

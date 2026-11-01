@@ -88,7 +88,7 @@ def test_boundaries_nested_metadata_and_parser_agreement() -> None:
     assert copy != original
 
 
-def test_generation_stable_and_old_assets_unchanged() -> None:
+def test_generation_stable() -> None:
     subprocess.run(
         [sys.executable, "tools/generate_v2_assets.py", "--check"],
         check=True,
@@ -100,11 +100,6 @@ def test_generation_stable_and_old_assets_unchanged() -> None:
         [sys.executable, "tools/generate_v2_assets.py"], check=True, cwd=ROOT
     )
     assert path.read_bytes() == before
-    subprocess.run(
-        [sys.executable, "tools/generate_protocol_assets.py", "--check"],
-        check=True,
-        cwd=ROOT,
-    )
 
 
 def test_exact_tokens_reject_trailing_newline_and_huge_integer() -> None:

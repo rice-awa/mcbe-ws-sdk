@@ -36,7 +36,9 @@ docs = [
 ]
 release = [
     "build",
-    "twine",
+    # Twine <7 rejects Metadata-Version 2.5, which hatchling emits for
+    # License-File metadata.
+    "twine>=7.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -46,8 +48,6 @@ force-include = { "src/mcbe_ws_sdk/py.typed" = "mcbe_ws_sdk/py.typed" }
 [tool.hatch.build.targets.sdist]
 include = [
     "src/mcbe_ws_sdk",
-    "src/mcbe_ws_sdk/profiles/mcbews_v1/manifest.json",
-    "src/mcbe_ws_sdk/profiles/mcbews_v1/vectors.json",
     "tests",
     "examples",
     "addon/scripts",

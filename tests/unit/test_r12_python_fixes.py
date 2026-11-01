@@ -33,7 +33,7 @@ class Harness:
         self.state = ConnectionState()
         self.runtime = ConnectionRuntime(
             connection_id=self.state.id,
-            dispatch=DispatchSettings(mode="reliable"),
+            dispatch=DispatchSettings(),
             send=send or SendSchedulerSettings(),
             flow=FlowControlSettings(),
             transport=transport,
@@ -41,8 +41,10 @@ class Harness:
         )
         self.state.runtime = self.runtime
         self.state.requests = self.runtime.requests
-        self.bridge = bridge or V2Bridge(timeout_seconds=timeout, negotiate=False)
-        self.endpoint = self.bridge.activate(self.state, epoch="test")
+        # Private admission seam: unit tests bypass the wire negotiation, but
+        # production only reaches an endpoint through challenge/ready.
+        self.bridge = bridge or V2Bridge(timeout_seconds=timeout)
+        self.endpoint = self.bridge._activate(self.state, epoch="test")
 
     async def close(self) -> None:
         self.bridge.close(self.state.id)

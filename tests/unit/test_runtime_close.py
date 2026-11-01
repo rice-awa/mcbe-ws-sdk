@@ -36,10 +36,7 @@ def _runtime(*, max_concurrent: int = 1) -> ConnectionRuntime:
 
     return ConnectionRuntime(
         connection_id=UUID(int=7),
-        dispatch=DispatchSettings(
-            mode="reliable",
-            max_concurrent_business_tasks=max_concurrent,
-        ),
+        dispatch=DispatchSettings(max_concurrent_business_tasks=max_concurrent),
         send=SendSchedulerSettings(),
         flow=FlowControlSettings(),
         transport=transport,

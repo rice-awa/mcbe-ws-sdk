@@ -11,7 +11,9 @@ from mcbe_ws_sdk.errors import (
     RequestDuplicateError,
     RequestLimitError,
 )
-from mcbe_ws_sdk.requests import CATEGORY_ADDON, CATEGORY_COMMAND, RequestTable
+from mcbe_ws_sdk.requests import CATEGORY_COMMAND, RequestTable
+
+CATEGORY_OTHER = "addon.v2"
 
 
 @pytest.mark.asyncio
@@ -29,10 +31,10 @@ async def test_resolve_before_await_is_visible_to_awaiter() -> None:
 @pytest.mark.asyncio
 async def test_categories_do_not_cross_resolve() -> None:
     table = RequestTable()
-    addon = table.reserve(CATEGORY_ADDON, request_id="shared-id")
+    addon = table.reserve(CATEGORY_OTHER, request_id="shared-id")
     command = table.reserve(CATEGORY_COMMAND, request_id="shared-id")
 
-    assert table.resolve(CATEGORY_ADDON, "shared-id", {"ok": True}) is True
+    assert table.resolve(CATEGORY_OTHER, "shared-id", {"ok": True}) is True
     assert addon.future.done()
     assert not command.future.done()
 
@@ -58,15 +60,15 @@ async def test_tables_are_connection_scoped() -> None:
 @pytest.mark.asyncio
 async def test_duplicate_unknown_and_late_replies_are_ignored() -> None:
     table = RequestTable()
-    entry = table.reserve(CATEGORY_ADDON, request_id="r1")
+    entry = table.reserve(CATEGORY_OTHER, request_id="r1")
 
-    assert table.resolve(CATEGORY_ADDON, "r1", "first") is True
+    assert table.resolve(CATEGORY_OTHER, "r1", "first") is True
     assert await entry.future == "first"
 
     # Duplicate and late replies must not revive the completed request.
-    assert table.resolve(CATEGORY_ADDON, "r1", "again") is False
-    assert table.fail(CATEGORY_ADDON, "r1", RuntimeError("late")) is False
-    assert table.resolve(CATEGORY_ADDON, "never-registered", "x") is False
+    assert table.resolve(CATEGORY_OTHER, "r1", "again") is False
+    assert table.fail(CATEGORY_OTHER, "r1", RuntimeError("late")) is False
+    assert table.resolve(CATEGORY_OTHER, "never-registered", "x") is False
     assert table.pending_count == 0
 
 
@@ -97,7 +99,7 @@ async def test_cancel_removes_entry_and_cancels_future() -> None:
 @pytest.mark.asyncio
 async def test_close_fails_every_pending_entry_once() -> None:
     table = RequestTable()
-    addon = table.reserve(CATEGORY_ADDON, request_id="a1")
+    addon = table.reserve(CATEGORY_OTHER, request_id="a1")
     command = table.reserve(CATEGORY_COMMAND, request_id="c1")
 
     failed = table.close(lambda request_id: RequestClosedError(request_id, "gone"))
@@ -118,16 +120,16 @@ async def test_close_fails_every_pending_entry_once() -> None:
 async def test_duplicate_id_is_rejected_without_losing_the_first_entry() -> None:
     """A repeated id never overwrites the pending entry or double-counts it."""
     table = RequestTable()
-    first = table.reserve(CATEGORY_ADDON, request_id="same")
+    first = table.reserve(CATEGORY_OTHER, request_id="same")
 
     with pytest.raises(RequestDuplicateError) as caught:
-        table.reserve(CATEGORY_ADDON, request_id="same")
+        table.reserve(CATEGORY_OTHER, request_id="same")
     assert caught.value.request_id == "same"
-    assert caught.value.category == CATEGORY_ADDON
+    assert caught.value.category == CATEGORY_OTHER
 
     # Exactly one live entry; closing fails that one and leaves nothing behind.
     assert table.pending_count == 1
-    assert table.get(CATEGORY_ADDON, "same") is first
+    assert table.get(CATEGORY_OTHER, "same") is first
     assert table.close(lambda request_id: RequestClosedError(request_id)) == 1
     with pytest.raises(RequestClosedError):
         await first.future
@@ -155,10 +157,10 @@ async def test_stale_entry_cancel_does_not_remove_reused_id() -> None:
 @pytest.mark.asyncio
 async def test_limit_is_enforced_before_registration() -> None:
     table = RequestTable(max_pending=1)
-    table.reserve(CATEGORY_ADDON, request_id="a1")
+    table.reserve(CATEGORY_OTHER, request_id="a1")
 
     with pytest.raises(RequestLimitError):
-        table.reserve(CATEGORY_ADDON, request_id="a2")
+        table.reserve(CATEGORY_OTHER, request_id="a2")
     assert table.pending_count == 1
 
 

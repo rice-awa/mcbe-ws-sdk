@@ -2,137 +2,180 @@
 
 # MCBE WS Bridge Addon
 
-This checkout includes unreleased v2, metadata and stream support; it is not
-a claim that PyPI `0.2.1` contains those changes. `scripts/bridge/protocol.ts`
-is checked against the Python manifest and vectors; v1 and v2 have separate contracts.
-New hosts use `McbeServer`; `McbeServerFacade` retains its defaults. See
-[extension authors](../docs/extension-authors.md) and [migration](../docs/migration.md).
-Live-game acceptance and the full compatibility matrix remain pending; no new
-platform or game-version support is claimed.
+The TypeScript counterpart of `mcbe-ws-sdk`. It implements the Minecraft side
+of MCBEWS/2: admission, the packet carrier, the capability registry and request
+streams. The Python host implements the other side.
 
-Minimal Minecraft Bedrock WebSocket bridge addon — the TypeScript counterpart of the
-`mcbe-ws-sdk` Python package. This addon handles the protocol layer:
+The addon speaks **MCBEWS/2 only**. It accepts exactly two script event ids:
 
-- `protocol.ts` — manifest/version/limit/error/vector projection from the SDK
-- `constants.ts` — semantic wire constants matching Python `McbewsV1Profile`
-- `chunking.ts` — encode/decode for `MCBEWS|BRIDGE` and `MCBEWS|UI_CHAT` fragments
-- `router.ts` — subscribes to `mcbews:bridge_req` scriptevents, dispatches to the
-  built-in capability registry, and ships the response back
-- `responseSync.ts` — reassembles `mcbews:text_resp` chunks and invokes a callback
-- `toolPlayer.ts` — marks a player as a towered transport per response delivery (tellraw)
-- `bootstrap.ts` — safe init lifecycle (early init → after-world-load)
+- `mcbews:negotiate_v2` — admission control;
+- `mcbews:packet_v2` — logical message carrier.
 
-The addon owns the full capability-handling lifecycle. Capabilities dispatch by
-name through the registry in `capabilities/index.ts`. An opt-in v2 bridge also
-routes addon → Python requests and notifications through the Python registry.
-See the [v2 contract](../docs/protocol-v2.md) for discovery and fallback.
+Retired events (`mcbews:bridge_req`, `mcbews:session_req`, `mcbews:text_resp`)
+are logged and rejected. Nothing is parsed, queued, answered or dispatched for
+them. The addon cannot close a WebSocket owned by an old server; it only refuses
+that server's business frames.
 
-## Usage
+## Requirements
 
-From a Python host, `AddonBridgeService` + `AddonBridgeClient` sends capability
-requests; the addon picks them up and delivers them in-game.
+- Minecraft Bedrock with Script API and the target world's
+  **Experiments → Beta APIs** enabled.
+- Node.js 22 for building the pack.
+- Dependencies pinned in `package.json`:
+  - `@minecraft/server` 2.8.0
+  - `@minecraft/server-ui` 2.1.0
+  - `@minecraft/server-gametest` `1.0.0-beta.1.26.30-stable`
+- Both pack manifests target `min_engine_version` `[1, 26, 30]`.
 
-From the addon side, register a handler by capability name. Custom entries
-coexist with the built-ins; the router dispatches automatically:
-
-```ts
-import { registerCapability } from "./bridge/router";
-
-const handle = registerCapability("echo", (_name, payload) => ({ ok: true, payload }));
-// unregisterCapability(handle)
-```
-
-Registering a duplicate name throws unless `replace: true` is passed. An
-optional `validate(payload)` runs before the handler and returns a message to
-reject the input. Unregistering during an in-flight call does not change that
-call; later calls no longer see the name.
-
-### TypeScript host (override mode)
-
-When a TypeScript host needs full control, it can override the built-in registry:
-
-```ts
-import { setCapabilityHandler } from "./bridge/router";
-
-setCapabilityHandler((capability, payload) => {
-  // dispatch by name; return { ok: true, ... } or { ok: false, error: "..." }
-});
-```
-
-Then in `main.ts`:
-
-```ts
-import { initializeEarly, initializeAfterWorldLoad } from "./bootstrap";
-
-initializeEarly();
-initializeAfterWorldLoad(() => {
-  /* register handlers here */
-});
-```
+Automated builds and tests do not prove live-game support. Verify the game
+version and platform you deploy to.
 
 ## Build
 
 ```bash
 npm install
-npm run build       # tsc type-check gate (intermediate output to lib/) + esbuild bundle
-npm run mcaddon     # assemble .mcaddon on top of build output
+npm run build       # tsc type-check + esbuild bundle
+npm run mcaddon     # assemble the .mcaddon
 ```
 
-The build pipeline has two steps:
+Basic package: exactly the two read-only snapshot capabilities.
 
-1. **`tsc` type-check gate**: type-checks the source, emitting intermediate output to `lib/` (used for type checking only — not the final artifact).
-2. **esbuild `bundle` task**: produces the real final artifact `dist/scripts/main.js`, then `copyArtifacts` copies `dist/scripts` into the behavior pack, matching the manifest `"entry": "scripts/main.js"`.
+Complete demo package: adds `demo.echo`, the `demo.ticks` stream and the
+restricted `run_world_command` handler.
 
-The artifact that loads in-game is `scripts/main.js` — treat that as authoritative, not the intermediate output under `lib/`.
+```bash
+npm run build:demo
+npm run mcaddon:demo
+```
+
+`--demo` or `MCBE_DEMO=1` selects `scripts/main.demo.ts`; both variants write the
+same final artifact, `dist/scripts/main.js`. `lib/` is only intermediate
+type-check output and is not loaded by the game.
+
+The bundle externalizes `@minecraft/server`, `@minecraft/server-ui` and
+`@minecraft/server-gametest`; the pack manifest supplies the module versions.
 
 ## Enable in a world
 
-1. Import the generated `.mcaddon` (or copy the behavior / resource packs) into Minecraft.
-2. Open the **target world** settings (create a new world, or **Edit** an existing one).
-3. Under **Experiments**, turn on **Beta APIs**.
-4. Activate this pack in **Behavior Packs** (and the companion resource pack if prompted).
+1. Import the generated `.mcaddon` into Minecraft, or copy the behavior and
+   resource packs.
+2. Open the **target world** settings (create a world, or **Edit** an existing
+   one).
+3. Under **Experiments**, enable **Beta APIs**.
+4. Activate the behavior pack (and the companion resource pack if prompted).
 5. Enter the world, then connect with `/wsserver <host-ip>:8080`.
 
-> **Required: Beta APIs**  
-> This addon depends on the Minecraft Script API (`@minecraft/server`,
-> `@minecraft/server-ui`, and a beta `@minecraft/server-gametest` module).  
-> If **Experiments → Beta APIs** is off, scripts will not load: capability
-> requests time out, and you will see no bridge activity in-game.  
-> Enabling experiments may make the world ineligible for some achievements /
-> features — use a dedicated test world when possible.
+Without Beta APIs the scripts never load: admission times out and no bridge
+activity appears in-game. Enabling experiments may make the world ineligible
+for some achievements; use a dedicated test world when possible.
 
-## Built-in Capabilities
+## How it works
 
-The addon ships a ready-to-use capability registry
-(`scripts/bridge/capabilities/index.ts`) as a runnable reference example.
+```text
+scriptEventReceive
+├── mcbews:negotiate_v2  → challenge / confirmation / lease / close
+├── mcbews:packet_v2     → reassemble FRAME → V2Endpoint
+└── retired ids          → log rejection only
 
-| Capability               | File                      | Description                                                                   |
-| ------------------------ | ------------------------- | ----------------------------------------------------------------------------- |
-| `get_player_snapshot`    | `getPlayerSnapshot.ts`    | Get a player snapshot (name, health, tags, coordinates, dimension, game mode) |
-| `get_inventory_snapshot` | `getInventorySnapshot.ts` | Get a player inventory snapshot (slots, item ID, count, custom name)          |
-| `run_world_command`      | `runWorldCommand.ts`      | Optional world-command handler; register explicitly, guarded by `commandSafety.ts`  |
+V2Endpoint
+├── CapabilityRegistry   → registerCapability / dispatch by name
+└── stream handlers      → registerV2Stream
+```
 
-Developers add custom capabilities with `registerCapability(name, handler)`.
-They coexist with the built-ins and are looked up by name by `router.ts`.
-Editing the source table in `capabilities/index.ts` remains available for
-compile-time additions; new names added at runtime must use `registerCapability`.
+The router activates only after the world is ready. A hello that arrives before
+activation is retained as one sanitized attempt; other pre-ready business is
+dropped, never replayed. Each admitted peer has its own epoch, fragments and
+pending requests. A new peer never replaces another.
 
-> Note: `find_entities` is not bundled. Transport attribution and metadata
-> identity do not replace player authorization; hosts must define and validate
-> the scope of custom entity queries.
+Downlink uses `scriptevent mcbews:packet_v2`; uplink uses chat frames sent by
+the simulated player `MCBEWS_BRIDGE`. That name is transport attribution, not
+authentication.
 
-## Trust boundary
+## Register a capability
 
-The bridge is **not** a security boundary. The host application must authenticate
-and authorize who can call capabilities — the addon only enforces a defensive
-command filter on the world-command path.
+```typescript
+import { registerCapability } from "./bridge/router";
 
-- `run_world_command` is intentionally **not** in the default Python registry
-  (and not in the addon's default capability registry either). Hosts that need
-  it must register the handler explicitly.
-- When registered, the default allowlist is `["say"]` only. A denylist of
-  dangerous commands (`execute`, `script`, `op`, `setblock`, `fill`, …) is a
-  second line of defense and still applies even if a host widens the allowlist.
+const registration = registerCapability("demo.echo", (_method, payload, context) => ({
+  text: payload.text,
+  metadata: context.metadata,
+}));
+// unregisterCapability(registration)
+```
+
+Handlers receive `(method, payload, context)` and return an object or a Promise.
+Context includes `caller`, `requestVersion`, `metadata`, `client` and
+`cancellation`. An optional validator returns a message to reject the payload.
+
+Duplicate names throw unless `replace: true` is passed. Unregistering during an
+in-flight call does not change that call; later calls no longer see the name.
+There is no aggregate `setCapabilityHandler` entry in this version.
+
+## Register a stream
+
+```typescript
+import { registerV2Stream } from "./bridge/router";
+
+const unregister = registerV2Stream("demo.ticks", async function* (_method, params, context) {
+  for (let index = 0; index < (params.count ?? 5); index += 1) {
+    if (context.cancellation?.cancelled) return;
+    yield { index };
+  }
+});
+```
+
+Producers yield JSON items and do not need to know the total length. Large items
+are fragmented by the SDK and delivered once. Duplicate stream names throw.
+Consumers stop with cancellation; producers must check `context.cancellation`.
+
+The router also exposes `getV2Endpoint(epoch)` for advanced host code that needs
+the per-connection endpoint directly.
+
+## Built-in capabilities
+
+The basic package registers exactly:
+
+| Capability | Description |
+| --- | --- |
+| `get_player_snapshot` | Player name, health, tags, coordinates, dimension and game mode |
+| `get_inventory_snapshot` | Inventory slots, item IDs, counts and custom names |
+
+The demo package additionally registers:
+
+| Capability / stream | Description |
+| --- | --- |
+| `demo.echo` | Echoes the payload with request metadata |
+| `demo.ticks` | Finite or unbounded index stream; cancellation stops production |
+| `run_world_command` | Restricted world-command handler, disabled outside the demo package |
+
+Other capabilities such as `find_entities` are not bundled. Custom entity
+queries are host-defined and must validate their own scope.
+
+## World command safety
+
+`run_world_command` is intentionally absent from the basic package. The demo
+package registers it explicitly, but its policy still applies:
+
+- the default allowlist is `["say"]` only;
+- the denylist of dangerous commands (`execute`, `script`, `op`, `setblock`,
+  `fill`, and others) remains a second line of defense even if a host widens the
+  allowlist;
+- every call must still be authorized by the Python host.
+
+The bridge is **not** a security boundary. Transport attribution, the simulated
+player and metadata identity do not replace authentication or authorization.
+The addon only provides the defensive command filter above.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Admission times out | The pack is not active, the target world is wrong, or **Beta APIs** is off |
+| `UNSUPPORTED_PROTOCOL` in logs | A retired script event reached the addon; update the Python host or the addon so both speak MCBEWS/2 |
+| `UNSUPPORTED_METHOD` for `!echo` or `!stream` | The basic package is installed. Use the demo build |
+| `!cmd` is rejected | `run_world_command` is not registered, or the command is outside the allowlist |
+| No bridge activity in-game | Scripts did not load. Confirm Beta APIs, content log and pack activation |
+| `demo.ticks` stops early | The consumer cancelled or exceeded a stream limit |
 
 ## License
 

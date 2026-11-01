@@ -2,9 +2,13 @@
 
 This example uses the SDK as a transport gateway. It accepts a Bedrock
 ``/wsserver`` connection, subscribes to ``PlayerMessage`` events, and replies
-to chat messages with ``tellraw``. The application-specific behaviour lives in
+to ``!`` commands with ``tellraw``. The application-specific behaviour lives in
 ``ExampleHook`` and ``MinecraftSink``; the SDK owns the WebSocket lifetime and
 packet protocol.
+
+Admission is mandatory: the companion MCBEWS/2 addon must be installed in the
+world. Without it the server logs ``NEGOTIATION_TIMEOUT`` and closes the
+connection; the example itself never calls addon capabilities.
 
 Usage::
 
@@ -42,6 +46,15 @@ from mcbe_ws_sdk import (
     enqueue_response,
     is_external_echo,
 )
+
+_HELP_TEXT = (
+    "基础示例命令：\n"
+    "  !help             显示本帮助\n"
+    "  !wscmd <command>  通过 WS commandRequest 执行命令并等待响应\n"
+    "也支持：!帮助"
+)
+_USAGE_TEXT = "请在消息开头使用 ! 调用命令，例如 !help 或 !wscmd time query daytime。"
+_MAX_REPLY_BYTES = 256
 
 logger = structlog.get_logger("example")
 
@@ -95,7 +108,7 @@ class ExampleHook(NoOpHook):
             state,
             SystemNotification(
                 level="info",
-                message="SDK 示例服务器已连接。聊天可收到回复；!help 查看命令。",
+                message="SDK 示例服务器已连接。发送 !help 查看可用命令。",
             ),
         )
 
@@ -124,7 +137,9 @@ class ExampleHook(NoOpHook):
             return
 
         message = player_event.message.strip()
-        if not message:
+        # Only the ASCII ``!`` prefix dispatches. Ordinary chat, bare ``help``
+        # and full-width ``！`` stay silent, matching the addon example.
+        if not message.startswith("!"):
             return
 
         logger.info(
@@ -135,17 +150,26 @@ class ExampleHook(NoOpHook):
             message_type=player_event.type,
             parsed_type=parsed.type if parsed is not None else None,
         )
-        if message.startswith("!wscmd "):
-            assert state.command_client is not None
-            try:
-                response = await state.command_client.run(message.partition(" ")[2])
-                reply = str(response.body)
-            except Exception as exc:
-                reply = f"命令失败：{exc}"
-        elif message.lower() in {"!help", "帮助"}:
-            reply = "直接聊天可收到回复；!wscmd <command> 等待游戏命令结果。"
+        command, _, argument = message.partition(" ")
+        command_key = command.lower()
+        argument = argument.strip()
+        if message == "!":
+            reply = _USAGE_TEXT
+        elif command_key in {"!help", "!帮助"}:
+            reply = _HELP_TEXT
+        elif command_key == "!wscmd":
+            if not argument:
+                reply = "用法：!wscmd <command>  例如：!wscmd time query daytime"
+            elif state.command_client is None:
+                reply = "命令失败 [NO_COMMAND_CLIENT] 连接没有命令客户端。"
+            else:
+                try:
+                    response = await state.command_client.run(argument)
+                    reply = str(response.body)
+                except Exception as exc:
+                    reply = f"命令失败 [{type(exc).__name__}] {_bounded_text(str(exc))}"
         else:
-            reply = f"收到 {player_event.sender} 的消息：{message}"
+            reply = f"未知命令：{_bounded_text(message, 96)}\n发送 !help 查看可用命令。"
 
         # Use event.sender as the authoritative player identity. Do not use
         # ConnectionState.player_name: one WS connection can carry many players.
@@ -185,6 +209,15 @@ class ExampleHook(NoOpHook):
             request_id=error.request_id,
             body=error.body,
         )
+
+
+def _bounded_text(text: object, limit: int = _MAX_REPLY_BYTES) -> str:
+    """Truncate to ``limit`` UTF-8 bytes without splitting a scalar value."""
+    value = str(text)
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    return encoded[:limit].decode("utf-8", errors="ignore")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

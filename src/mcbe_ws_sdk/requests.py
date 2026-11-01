@@ -1,9 +1,9 @@
 """Shared request/response lifecycle for the SDK.
 
-Both the addon bridge session and the native MCBE command client register a
-pending request *before* the outbound frame is sent, then resolve it exactly
-once. A :class:`RequestTable` is scoped to one connection and partitions entries
-by category, so an id reused across connections, categories or directions can
+MCBEWS/2 capability calls and the native MCBE command client register a pending
+request *before* the outbound frame is sent, then resolve it exactly once. A
+:class:`RequestTable` is scoped to one connection and partitions entries by
+category, so an id reused across connections, categories or directions can
 never resolve the wrong waiting call.
 
 The table deliberately keeps the lifecycle small: it owns registration,
@@ -30,9 +30,8 @@ from mcbe_ws_sdk.tracing import TraceContext, current_trace
 
 logger = structlog.get_logger(__name__)
 
-# Request categories.  Addon bridge requests and native command requests share
-# one table but must never resolve each other, even if both use the same id.
-CATEGORY_ADDON = "addon.bridge"
+# Request categories. MCBEWS/2 and native command requests share one table but
+# must never resolve each other, even if both use the same id.
 CATEGORY_COMMAND = "command.native"
 
 _DEFAULT_MAX_PENDING = 128
@@ -260,7 +259,6 @@ class RequestTable:
 
 
 __all__ = [
-    "CATEGORY_ADDON",
     "CATEGORY_COMMAND",
     "PendingRequest",
     "RequestTable",

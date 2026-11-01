@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -100,7 +98,9 @@ async def test_addon_example_inventory_uses_negotiated_public_request() -> None:
 async def test_addon_example_reports_stream_unavailable_without_retry() -> None:
     module = _example("addon-server")
     bridge = AsyncMock()
-    bridge.stream.side_effect = NegotiationError("unsupported required features: stream/1")
+    bridge.stream.side_effect = NegotiationError(
+        "UNSUPPORTED_PROTOCOL", "unsupported required features: stream/1"
+    )
     hook = module.AddonDemoHook(bridge)
     state = ConnectionState(response_queue=asyncio.Queue())
     await hook._dispatch_command(state, "Alex", "!stream 2")
@@ -108,33 +108,6 @@ async def test_addon_example_reports_stream_unavailable_without_retry() -> None:
     reply = state.response_queue.get_nowait()
     assert "流失败" in reply.content and "stream/1" in reply.content
     assert state.response_queue.empty()
-
-
-def test_addon_extension_typechecks_in_its_documented_install_location(tmp_path: Path) -> None:
-    typescript([])
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    (scripts / "bridge").symlink_to(ROOT / "addon/scripts/bridge", target_is_directory=True)
-    (tmp_path / "node_modules").symlink_to(ROOT / "addon/node_modules", target_is_directory=True)
-    installed = scripts / "demoCapabilities.ts"
-    installed.write_text((ROOT / "examples/addon-server/capabilities.ts").read_text())
-    result = subprocess.run(
-        [
-            "node",
-            str(ROOT / "addon/node_modules/typescript/bin/tsc"),
-            "--noEmit",
-            "--strict",
-            "--skipLibCheck",
-            "--target",
-            "ES2020",
-            "--moduleResolution",
-            "node",
-            str(installed),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 async def test_addon_example_custom_metadata_stream_completion_and_cancel() -> None:
@@ -150,7 +123,7 @@ async def test_addon_example_custom_metadata_stream_completion_and_cancel() -> N
     assert process.stdin is not None and process.stdout is not None
     assert json.loads(await asyncio.wait_for(process.stdout.readline(), 5))["type"] == "ready"
     module = _example("addon-server")
-    bridge = V2Bridge(negotiate=False)
+    bridge = V2Bridge()
     connected = asyncio.Event()
 
     class Hook(module.AddonDemoHook):
@@ -162,10 +135,7 @@ async def test_addon_example_custom_metadata_stream_completion_and_cancel() -> N
     hook = Hook(bridge)
     sink = ReplySink()
     server = McbeServer(hook=hook, sink=sink, v2=bridge)
-    websocket = QueueWebSocket()
-    connection = asyncio.create_task(server._on_connection(websocket))
-    await asyncio.wait_for(connected.wait(), 2)
-    bridge.activate(hook.state, epoch="test")
+    websocket = QueueWebSocket(auto_negotiate=False)
     events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
     async def write(item):
@@ -174,7 +144,10 @@ async def test_addon_example_custom_metadata_stream_completion_and_cancel() -> N
 
     async def send(payload):
         command = json.loads(payload).get("body", {}).get("commandLine", "")
-        if command.startswith(COMMAND_PREFIX):
+        hello = "scriptevent mcbews:negotiate_v2 "
+        if command.startswith(hello):
+            await write({"op": "hello", "frame": command[len(hello) :]})
+        elif command.startswith(COMMAND_PREFIX):
             await write({"op": "frame", "frame": command[len(COMMAND_PREFIX) :]})
 
     async def read():
@@ -185,9 +158,13 @@ async def test_addon_example_custom_metadata_stream_completion_and_cancel() -> N
             else:
                 await events.put(event)
 
+    # Install the bridge before the connection starts: the SDK sends the
+    # negotiation hello immediately after handshake + subscribe.
     websocket.on_send = send
     reader = asyncio.create_task(read())
+    connection = asyncio.create_task(server._on_connection(websocket))
     try:
+        await asyncio.wait_for(connected.wait(), 5)
         await websocket.push(_player_frame("Alex", "!echo hello"))
         replies = await sink.until('"text": "hello"')
         assert any("返回元数据" in reply and "example.label" in reply for reply in replies)

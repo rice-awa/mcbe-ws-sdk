@@ -141,7 +141,9 @@ def test_wheel_contains_py_typed(built_wheel: Path) -> None:
 def test_wheel_contains_canonical_protocol_assets(built_wheel: Path) -> None:
     with zipfile.ZipFile(built_wheel) as archive:
         names = set(archive.namelist())
-        assert "mcbe_ws_sdk/profiles/mcbews_v1/manifest.json" in names
+        assert "mcbe_ws_sdk/profiles/mcbews_v2/manifest.json" in names
+        assert "mcbe_ws_sdk/profiles/mcbews_v2/vectors.json" in names
+        assert not any("mcbews_v1" in name for name in names)
         assert set(_check_dist.REQUIRED_WHEEL_ASSETS) <= names
 
 

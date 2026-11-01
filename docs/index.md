@@ -1,33 +1,49 @@
 # mcbe-ws-sdk
 
-A WebSocket communication SDK for Minecraft Bedrock. Start new hosts with
-`McbeServer` and await commands or capabilities directly; the SDK owns request
-correlation, tasks and fragments. Model services, brokers, authentication and
-business history stay in the host.
+A generic WebSocket gateway SDK for Minecraft Bedrock Edition. `McbeServer` owns
+the transport, mandatory MCBEWS/2 admission, request correlation, byte-safe
+command chunking, capabilities and request streams. Model services, message
+brokers, authentication and business history stay in your host.
 
-> **Version scope:** the current PyPI release is `0.2.1`. The new entry point,
-> v2, metadata and continuous streams on this site describe the unreleased
-> checkout and require an editable install. PyPI `0.2.1` does not contain them.
+```text
+Minecraft client  ←── /wsserver IP:port ──→  Python host
+                                              ├── ConnectionHook / ResponseSink
+                                              └── V2Bridge ←→ companion addon
+```
 
-## Choose an entry
+## Quickstart
 
-| Need | Entry |
-| --- | --- |
-| New host, await replies in callbacks | `McbeServer`, reliable dispatch and v2 discovery by default |
-| Preserve serial callback ordering | `McbeServerFacade`, defaults unchanged |
-| Custom capabilities and metadata | Bidirectional registry and negotiated v2 requests |
-| Continuous data | Async streams after negotiating `stream/1` |
-| Native events | `state.native_events` subscriptions and interception |
+```bash
+pip install -e ".[dev,docs]"                 # from this checkout
+python examples/basic-server/server.py       # command demo, tellraw replies
+```
 
-Old addons fall back only to known v1 methods; metadata and streams never
-silently downgrade. Addon worlds must enable **Experiments → Beta APIs**.
-Automated coverage does not imply completed live-game acceptance, the full
-version matrix, or new platform support.
+In Minecraft: `/wsserver <host-ip>:8080`, then send `!help` or
+`!wscmd time query daytime`.
 
-## Start here
+The example handles only trimmed messages that start with ASCII `!`. Ordinary
+chat, bare `help` / `帮助`, mid-sentence `!` and full-width `！` are silent with
+no reply and no capability call. A bare `!` returns one usage hint; an unknown
+`!command` returns one hint.
 
-- [Getting started](getting-started.md): install the checkout, connect, run commands and query inventory.
-- [Migration](migration.md): old interfaces, callback ordering, defaults and failures.
-- [Extension authors](extension-authors.md): capabilities, metadata, subscriptions and streams.
-- [Architecture](architecture.md), [v1 protocol](addon-bridge-protocol.md), [v2 contract](protocol-v2.md).
-- [API reference](reference.md): generated from the English source documentation.
+Addon capabilities need the companion pack and **Experiments → Beta APIs** in
+the target world. Without Beta APIs the scripts do not load and admission times
+out.
+
+## Where to go next
+
+- [Getting started](getting-started.md): install, addon, first server, commands
+  and troubleshooting.
+- [Architecture](architecture.md): admission state machine, runtime and bridge
+  layers.
+- [Extension authors](extension-authors.md): capabilities, notifications,
+  metadata, events and streams.
+- [Protocol (MCBEWS/2)](protocol-v2.md): required admission, carrier, limits and
+  streams.
+- [Diagnostics](diagnostics.md): lifecycle logs, `--log-raw`, redaction.
+- [Native events](native-events.md): observers, interceptors and subscriptions.
+- [Migration](migration.md): breaking changes from the dual-protocol release.
+- [API reference](reference.md): generated from the public source.
+
+Automated protocol coverage does not by itself prove live-game support. Verify
+your game version, platform and addon loading before relying on a deployment.

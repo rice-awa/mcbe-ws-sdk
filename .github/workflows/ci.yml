@@ -12,11 +12,10 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: pip}
       - run: python -m pip install -e ".[dev]"
-      - run: ruff check --no-cache src tests examples
+      - run: ruff check --no-cache src tests examples tools
       - run: mypy --no-incremental src
-      - run: python tools/generate_protocol_assets.py --check
-      - run: python tools/check_protocol_names.py
       - run: python tools/generate_v2_assets.py --check
+      - run: python tools/check_protocol_names.py
   python:
     runs-on: ubuntu-latest
     strategy:
@@ -72,6 +71,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build:production
+      - run: npm run build:demo
+      - run: npm run mcaddon:demo
   docs:
     runs-on: ubuntu-latest
     steps:

@@ -1,4 +1,4 @@
-"""MCBEWS/2 messages cross the facade's live connection boundary."""
+"""MCBEWS/2 messages cross the server's live connection boundary."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from mcbe_ws_sdk.config import DispatchSettings, GatewaySettings
+from mcbe_ws_sdk.config import GatewaySettings
 from mcbe_ws_sdk.errors import (
     RemoteCallError,
     RequestClosedError,
@@ -16,26 +16,26 @@ from mcbe_ws_sdk.errors import (
     SendClosedError,
 )
 from mcbe_ws_sdk.gateway.connection import ConnectionState
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.profiles.mcbews_v2.runtime import V2Bridge
 from mcbe_ws_sdk.profiles.mcbews_v2.transport import COMMAND_PREFIX, ReassemblyPool, fragment
+from mcbe_ws_sdk.server import McbeServer
 
 from .test_reliable_facade import QueueWebSocket, RecordingHook, _player_frame, _stop
 from .test_v2_codec import ROOT, typescript
 
 
 @pytest.mark.asyncio
-async def test_facade_pairs_v2_reply_and_dispatches_reverse_request() -> None:
-    bridge = V2Bridge(negotiate=False)
+async def test_server_pairs_v2_reply_and_dispatches_reverse_request() -> None:
+    bridge = V2Bridge()
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
+    server = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
+    task = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
     assert hook.state is not None
-    endpoint = bridge.activate(hook.state, epoch="test")
+    endpoint = bridge.connection(hook.state.id)
+    assert endpoint is not None
+    epoch = endpoint.epoch
     received: list[dict[str, Any]] = []
     downlink = ReassemblyPool()
     done = asyncio.Event()
@@ -65,7 +65,7 @@ async def test_facade_pairs_v2_reply_and_dispatches_reverse_request() -> None:
                 "result": message["params"],
                 "meta": message["meta"],
             }
-            for frame in fragment(response, "a.test.1", "up"):
+            for frame in fragment(response, f"a.{epoch}.1", "up"):
                 await websocket.push(_player_frame("MCBEWS_BRIDGE", frame))
         else:
             done.set()
@@ -80,12 +80,12 @@ async def test_facade_pairs_v2_reply_and_dispatches_reverse_request() -> None:
         request = {
             "v": "MCBEWS/2",
             "kind": "request",
-            "id": "a.test.2",
+            "id": f"a.{epoch}.2",
             "method": "reverse",
             "params": {"value": 7},
             "meta": metadata,
         }
-        for frame in fragment(request, "a.test.3", "up"):
+        for frame in fragment(request, f"a.{epoch}.3", "up"):
             await websocket.push(_player_frame("MCBEWS_BRIDGE", frame))
         await asyncio.wait_for(done.wait(), 2)
         assert received[-1]["result"] == {"echo": {"value": 7}}
@@ -95,7 +95,7 @@ async def test_facade_pairs_v2_reply_and_dispatches_reverse_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_node_addon_router_and_facade_exchange_nested_calls_and_notifications() -> None:
+async def test_node_addon_router_and_server_exchange_nested_calls_and_notifications() -> None:
     typescript([])
     process = await asyncio.create_subprocess_exec(
         "node",
@@ -107,16 +107,11 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
     )
     assert process.stdin is not None and process.stdout is not None
     assert json.loads(await asyncio.wait_for(process.stdout.readline(), 5))["type"] == "ready"
-    bridge = V2Bridge(timeout_seconds=2, negotiate=False)
+    bridge = V2Bridge(timeout_seconds=2)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
-    websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
-    await asyncio.wait_for(hook.connected.wait(), 2)
-    assert hook.state is not None
-    endpoint = bridge.activate(hook.state, epoch="test")
+    server = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
+    websocket = QueueWebSocket(auto_negotiate=False)
+    task = asyncio.create_task(server._on_connection(websocket))
     events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     notices: asyncio.Queue[tuple[dict[str, Any], dict[str, Any]]] = asyncio.Queue()
 
@@ -127,7 +122,10 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
 
     async def send(payload: str) -> None:
         command = json.loads(payload).get("body", {}).get("commandLine", "")
-        if command.startswith(COMMAND_PREFIX):
+        hello = "scriptevent mcbews:negotiate_v2 "
+        if command.startswith(hello):
+            await write({"op": "hello", "frame": command[len(hello) :]})
+        elif command.startswith(COMMAND_PREFIX):
             await write({"op": "frame", "frame": command[len(COMMAND_PREFIX) :]})
 
     async def read_node() -> None:
@@ -158,6 +156,10 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
     bridge.registry.register("py.notice", notice)
     websocket.on_send = send
     reader = asyncio.create_task(read_node())
+    await asyncio.wait_for(hook.connected.wait(), 2)
+    assert hook.state is not None
+    endpoint = bridge.connection(hook.state.id)
+    assert endpoint is not None
     meta = {"custom": {"nested": ["玩家", None, True]}}
     try:
         await write(
@@ -187,8 +189,12 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
             await asyncio.wait_for(endpoint.request("ts.cycle", {}), 5)
         assert failure.value.code == "HANDLER_FAILED"
         await endpoint.notify("ts.notice", {"hello": "world"}, metadata=meta)
-        notice = await asyncio.wait_for(events.get(), 5)
-        assert notice == {"type": "notification", "payload": {"hello": "world"}, "metadata": meta}
+        notice_event = await asyncio.wait_for(events.get(), 5)
+        assert notice_event == {
+            "type": "notification",
+            "payload": {"hello": "world"},
+            "metadata": meta,
+        }
         await write(
             {
                 "op": "notify",
@@ -211,16 +217,15 @@ async def test_node_addon_router_and_facade_exchange_nested_calls_and_notificati
 
 @pytest.mark.asyncio
 async def test_pending_cleanup_on_encode_timeout_cancel_and_disconnect() -> None:
-    bridge = V2Bridge(timeout_seconds=0.05, negotiate=False)
+    bridge = V2Bridge(timeout_seconds=0.05)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
+    server = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
+    task = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
     assert hook.state is not None and hook.state.requests is not None
-    endpoint = bridge.activate(hook.state, epoch="cleanup")
+    endpoint = bridge.connection(hook.state.id)
+    assert endpoint is not None
     try:
         with pytest.raises(ValueError, match="reserved"):
             await endpoint.request("echo", {}, metadata={"sdk.identity": {"admin": True}})
@@ -248,35 +253,34 @@ async def test_pending_cleanup_on_encode_timeout_cancel_and_disconnect() -> None
 
 
 @pytest.mark.asyncio
-async def test_facade_connections_share_pool_and_release_independently() -> None:
-    bridge = V2Bridge(negotiate=False)
+async def test_connections_share_pool_and_release_independently() -> None:
+    bridge = V2Bridge()
     connected: asyncio.Queue[ConnectionState] = asyncio.Queue()
 
     class Hook(RecordingHook):
         async def on_connected(self, state: ConnectionState) -> None:
             await connected.put(state)
 
-    facade = McbeServerFacade(
-        v2=bridge, hook=Hook(), settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
+    server = McbeServer(v2=bridge, hook=Hook(), settings=GatewaySettings())
     first_socket, second_socket = QueueWebSocket(), QueueWebSocket()
-    first_task = asyncio.create_task(facade._on_connection(first_socket))
+    first_task = asyncio.create_task(server._on_connection(first_socket))
     first = await asyncio.wait_for(connected.get(), 2)
-    second_task = asyncio.create_task(facade._on_connection(second_socket))
+    second_task = asyncio.create_task(server._on_connection(second_socket))
     second = await asyncio.wait_for(connected.get(), 2)
-    bridge.activate(first, epoch="first")
-    bridge.activate(second, epoch="second")
+    first_peer = bridge.connection(first.id)
+    second_peer = bridge.connection(second.id)
+    assert first_peer is not None and second_peer is not None
     message = {
         "v": "MCBEWS/2", "kind": "notification", "method": "notice",
         "params": {"text": "long" * 200},
     }
     try:
-        spoofed = fragment(message, "a.first.1", "up")[0]
+        spoofed = fragment(message, f"a.{first_peer.epoch}.1", "up")[0]
         await first_socket.push(_player_frame("Alice", spoofed))
         for index in range(1, 18):
-            frame = fragment(message, f"a.first.{index}", "up")[0]
+            frame = fragment(message, f"a.{first_peer.epoch}.{index}", "up")[0]
             await first_socket.push(_player_frame("MCBEWS_BRIDGE", frame))
-        frame = fragment(message, "a.second.1", "up")[0]
+        frame = fragment(message, f"a.{second_peer.epoch}.1", "up")[0]
         await second_socket.push(_player_frame("MCBEWS_BRIDGE", frame))
         async with asyncio.timeout(2):
             while bridge.pool.stats["buffers"] != 17:

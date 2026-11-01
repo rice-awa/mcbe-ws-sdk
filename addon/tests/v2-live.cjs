@@ -66,11 +66,22 @@ router.registerV2Stream("ts.stream", async function* (_name, payload, context) {
 });
 router.registerV2Stream("ts.empty", async function* () {});
 
+let readyEpoch = null;
+
+function endpointFor(item) {
+  const epoch = item.epoch ?? readyEpoch;
+  const endpoint = epoch ? router.getV2Endpoint(epoch) : null;
+  if (!endpoint) throw new Error(`no admitted peer for epoch ${epoch ?? "<none>"}`);
+  return endpoint;
+}
+
 async function main() {
-  const automatic = process.argv.includes("--negotiate");
-  const send = async (frame) => emit({ type: "frame", frame });
-  await router.activateBridge(async () => {}, automatic ? send : undefined);
-  if (!automatic) router.activateV2Bridge("test", send);
+  const send = async (frame) => {
+    const ready = /^MCBEWS2N\|[^|]+\|([A-Za-z0-9_-]{1,24})\|ready$/.exec(frame);
+    if (ready) readyEpoch = ready[1];
+    emit({ type: "frame", frame });
+  };
+  await router.activateBridge(send);
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   lines.on("line", (line) => {
     const item = JSON.parse(line);
@@ -79,22 +90,18 @@ async function main() {
     } else if (item.op === "hello") {
       router.enqueueOrHandle({ id: "mcbews:negotiate_v2", message: item.frame, sourceType: "Entity" });
     } else if (item.op === "request") {
-      void router
-        .getV2Endpoint(item.epoch ?? "test")
+      void endpointFor(item)
         .request(item.method, item.params, item.options)
         .then((message) => emit({ type: "result", key: item.key, message }))
         .catch((error) => emit({ type: "error", key: item.key, message: error.message }));
     } else if (item.op === "notify") {
-      void router
-        .getV2Endpoint(item.epoch ?? "test")
+      void endpointFor(item)
         .notify(item.method, item.params, item.options)
         .catch((error) => emit({ type: "fatal", error: error.message }));
     } else if (item.op === "stream") {
       void (async () => {
         try {
-          const stream = await router
-            .getV2Endpoint(item.epoch ?? "test")
-            .stream(item.method, item.params, item.options);
+          const stream = await endpointFor(item).stream(item.method, item.params, item.options);
           incomingStreams.set(item.key, stream);
           for await (const value of stream) emit({ type: "stream-item", key: item.key, value });
           emit({ type: "stream-end", key: item.key });
@@ -119,3 +126,7 @@ void main().catch((error) => {
   emit({ type: "fatal", error: error.message });
   process.exitCode = 1;
 });
+
+// Cross-language smoke runners reuse this exact router instance instead of
+// re-resolving the module through a loader hook.
+module.exports = { router, getReadyEpoch: () => readyEpoch };

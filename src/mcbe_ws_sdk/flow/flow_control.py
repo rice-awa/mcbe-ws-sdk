@@ -10,8 +10,12 @@ from mcbe_ws_sdk.config import FlowControlSettings
 from mcbe_ws_sdk.errors import FrameTooLargeError, ProtocolError
 from mcbe_ws_sdk.protocol.minecraft import MinecraftCommand
 
-# Sentence delimiters: CJK and Latin period/question/exclamation plus newline.
-_SENTENCE_DELIMITER_RE = re.compile(r"([。！？.!?\n])")
+# Punctuation is a *fallback* split for an overlong single token. ASCII ``!``
+# is deliberately absent: it introduces example commands such as ``!stream``
+# and must stay attached to the token that follows it.
+_SENTENCE_DELIMITER_RE = re.compile(r"([。！？.?;\n])")
+# Split on whitespace first so help lines keep whole command tokens.
+_WHITESPACE_TOKEN_RE = re.compile(r"\s+|\S+")
 
 
 class FlowControlMiddleware:
@@ -218,43 +222,120 @@ class FlowControlMiddleware:
         *,
         error_message: str = "command wrapper exceeds byte budget; no room for content",
     ) -> list[str]:
-        """Split text by sentence candidates while probing final commandLine bytes."""
+        """Pack atomic units while probing the final ``commandLine`` bytes.
+
+        Units are complete lines, whitespace-separated tokens and their
+        separators. An oversized single token falls back to punctuation or
+        character splitting; normal help text never loses a command token such
+        as ``!stream`` at a chunk boundary.
+        """
         if not text:
             return [""]
 
         chunks: list[str] = []
         buffer = ""
-        for part in self._semantic_parts(text):
-            tentative = buffer + part
+        for unit in self._fit_units(
+            text,
+            max_length,
+            command_line_for,
+            error_message=error_message,
+        ):
+            tentative = buffer + unit
             if self._command_part_fits(tentative, max_length, command_line_for):
                 buffer = tentative
                 continue
-
             if buffer:
                 chunks.append(buffer)
                 buffer = ""
-
-            if self._command_part_fits(part, max_length, command_line_for):
-                buffer = part
-                continue
-
-            chunks.extend(
-                self._split_by_command_fit_chars(
-                    part,
-                    max_length,
-                    command_line_for,
-                    error_message=error_message,
-                )
-            )
+            buffer = unit
 
         if buffer:
             chunks.append(buffer)
         return chunks if chunks else [""]
 
-    def _semantic_parts(self, text: str) -> list[str]:
-        if not self.settings.chunk_sentence_mode:
-            return list(text)
+    def _fit_units(
+        self,
+        text: str,
+        max_length: int,
+        command_line_for: Callable[[str], str],
+        *,
+        error_message: str,
+    ) -> list[str]:
+        """Return units that each fit the content and byte limits.
 
+        With sentence mode enabled a complete line is an atomic unit whenever
+        it fits, so help text breaks between lines rather than inside one. An
+        overlong line falls back to whitespace tokens, then punctuation, then
+        characters.
+        """
+        if not self.settings.chunk_sentence_mode:
+            return [
+                unit
+                for piece in list(text)
+                for unit in self._fit_piece(
+                    piece,
+                    max_length,
+                    command_line_for,
+                    error_message=error_message,
+                )
+            ]
+
+        units: list[str] = []
+        for line in text.splitlines(keepends=True):
+            if self._command_part_fits(line, max_length, command_line_for):
+                units.append(line)
+                continue
+            tokens = _WHITESPACE_TOKEN_RE.findall(line)
+            pieces = tokens if len(tokens) > 1 else [line]
+            for piece in pieces:
+                units.extend(
+                    self._fit_piece(
+                        piece,
+                        max_length,
+                        command_line_for,
+                        error_message=error_message,
+                    )
+                )
+        return units
+
+    def _fit_piece(
+        self,
+        piece: str,
+        max_length: int,
+        command_line_for: Callable[[str], str],
+        *,
+        error_message: str,
+    ) -> list[str]:
+        """Fit one atomic piece, falling back to punctuation and characters."""
+        if self._command_part_fits(piece, max_length, command_line_for):
+            return [piece]
+        punctuation = self._punctuation_parts(piece)
+        if len(punctuation) > 1:
+            units: list[str] = []
+            for part in punctuation:
+                if self._command_part_fits(part, max_length, command_line_for):
+                    units.append(part)
+                else:
+                    units.extend(
+                        self._split_by_command_fit_chars(
+                            part,
+                            max_length,
+                            command_line_for,
+                            error_message=error_message,
+                        )
+                    )
+            return units
+        return self._split_by_command_fit_chars(
+            piece,
+            max_length,
+            command_line_for,
+            error_message=error_message,
+        )
+
+    def _punctuation_parts(self, text: str) -> list[str]:
+        """Split an oversized token after sentence punctuation, preserving it."""
+        if not self.settings.chunk_sentence_mode:
+            return [text]
         parts = _SENTENCE_DELIMITER_RE.split(text)
         sentences: list[str] = []
         i = 0
@@ -269,7 +350,7 @@ class FlowControlMiddleware:
             i += 2 if delimiter else 1
             if combined:
                 sentences.append(combined)
-        return sentences if sentences else [""]
+        return sentences if sentences else [text]
 
     def _split_by_command_fit_chars(
         self,
@@ -281,12 +362,17 @@ class FlowControlMiddleware:
     ) -> list[str]:
         chunks: list[str] = []
         buffer = ""
-        for ch in text:
+        for index, ch in enumerate(text):
             tentative = buffer + ch
             if self._command_part_fits(tentative, max_length, command_line_for):
                 buffer = tentative
                 continue
             if buffer:
+                if buffer == "!" and ch != " " and index < len(text):
+                    # Never break a command token between ``!`` and its name.
+                    # A budget that cannot hold even two characters is invalid
+                    # for command text rather than a reason to split.
+                    raise FrameTooLargeError(error_message)
                 chunks.append(buffer)
                 buffer = ch
                 if self._command_part_fits(buffer, max_length, command_line_for):

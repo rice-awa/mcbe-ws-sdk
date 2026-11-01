@@ -1,40 +1,121 @@
-# MCBEWS/2 合同
+# MCBEWS/2 协议（必需）
 
-本文描述尚未发布的当前源码；PyPI `0.2.1` 不包含本轮新增接口。
-安装与兼容说明见[迁移指南](migration.md)。
+MCBEWS/2 是 SDK 唯一的线协议。每条 WebSocket 连接都必须先完成准入，才会执行业务。
+没有协商开关、没有 MCBEWS/1 回退，也不会在准入前缓存业务。
 
-权威来源是安装包内的 `profiles/mcbews_v2/manifest.json` 与 `vectors.json`。
-MCBEWS/2 使用独立协议标识，借鉴 JSON-RPC 的交互模型，但不兼容 JSON-RPC。
-MCBEWS/1 的资产、标识、导入、构造参数及旧入口默认值保持不变。
-新入口 `McbeServer` 默认启用可靠调度和 v2 探测；旧入口须显式接入。
-持续流要求协商出 `stream/1`。
+安装包内的 `profiles/mcbews_v2/manifest.json` 与 `vectors.json` 是标识、字段规则、
+错误、限制与协商帧的权威来源。本页解释合同，不覆盖清单。
+
+MCBEWS/2 借鉴 JSON-RPC 的请求/响应形状，但不兼容 JSON-RPC。
+
+## 准入
+
+```text
+WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
+                              └────────→ REJECTED ────────→ CLOSED
+```
+
+| 状态 | 行为 |
+| --- | --- |
+| `WS_TRANSPORT_CONNECTED` | 仅传输建立，不表示业务就绪 |
+| `NEGOTIATING` | 接受协商、必要控制帧，以及已关联的原生 `commandResponse` / `error`；业务帧丢弃，不缓存 |
+| `READY_V2` | 发布业务 `CONNECTED`，调用 `on_connected`，路由玩家消息与载体帧 |
+| `REJECTED` | 记录原因，最多发送一次有界提示，然后关闭 |
+| `CLOSING` / `CLOSED` | 释放请求、队列、任务、租约与分片 |
+
+准入失败以 `1008` 关闭 WebSocket。关闭原因是有界标识，最多 123 个 UTF-8 字节。
+稳定原因：
+
+| 原因 | 含义 |
+| --- | --- |
+| `UNSUPPORTED_PROTOCOL` | 对端使用已退休协议或不支持的版本 |
+| `NEGOTIATION_TIMEOUT` | 没有附加包、没有回复，或脚本未加载 |
+| `NEGOTIATION_CONFIRMATION_TIMEOUT` | 已应答挑战，但最终确认未完成 |
+| `NEGOTIATION_BUSY` | 准入容量或临时挑战名额已满 |
+| `INVALID_NEGOTIATION` | 控制帧格式错误、不匹配或已过期 |
+| `SESSION_INVALID` | 已准入会话被撤销或过期 |
+
+被拒绝的连接不会产生业务 `on_connected`，也不会产生无配对的业务 `on_disconnected`。
+重连会建立新尝试与新代次；已关闭尝试的迟到帧不能重新打开准入。
+
+### 控制帧
+
+附加包只接受两个 scriptevent 标识：`mcbews:negotiate_v2` 与 `mcbews:packet_v2`。
+
+```text
+Python → 附加包   MCBEWS2H|attempt
+附加包 → Python   MCBEWS2N|attempt|epoch|2|逗号分隔的功能
+Python → 附加包   MCBEWS2C|attempt|epoch
+附加包 → Python   MCBEWS2N|attempt|epoch|ready
+附加包 → Python   MCBEWS2N|attempt|-|busy
+Python → 附加包   MCBEWS2R|epoch          （租约续期）
+附加包 → Python   MCBEWS2N|epoch|lease
+Python → 附加包   MCBEWS2X|epoch          （关闭）
+```
+
+`attempt` 与 `epoch` 是新的 1–24 字符 ASCII 路由令牌。代次标识会话，不是认证。
+每条连接只准入一个未完成尝试，且挑战必须匹配后才能激活。繁忙或过期的尝试会被终止，
+重试次数有界。
+
+### 已退休路由
+
+`mcbews:bridge_req`、`mcbews:session_req` 与 `mcbews:text_resp` 已退休。
+附加包只记录并拒绝，零业务副作用：不解析、不排队、不回复、不分发。
+`MCBEWS|BRIDGE`、`MCBEWS|UI_CHAT`、`MCBEWS|SESSION` 与 `MCBEWS|TOOL_APPROVE`
+不再产出或接受。
+
+附加包无法关闭旧服务持有的 WebSocket，只拒绝其业务帧。
+新服务对旧附加包或缺失附加包按超时拒绝，并关闭自己持有的传输。
+
+原生基岩 WebSocket 的 `header.version = 1` 属于游戏协议，与 MCBEWS/1 无关，
+不能用来识别旧客户端。
 
 ## 逻辑消息
 
-消息是严格校验的 JSON 对象。清单分别规定 `request`、`response`、`notification`
-及下文流消息的必需、可选和禁止字段，未知核心字段会被拒绝。
+每条消息都是严格校验的 JSON 对象：
 
-- `v` 必须为 `MCBEWS/2`；`method` 遵守清单中的 ASCII 名称模式。
+```json
+{"v": "MCBEWS/2", "kind": "request", "id": "p.session.1", "method": "demo.echo", "params": {}}
+```
+
+- `v` 必须为 `MCBEWS/2`。
+- `kind` 为 `request`、`response`、`notification`、`stream_open`、
+  `stream_item`、`stream_end`、`stream_error` 或 `stream_cancel`。
+- 每种消息规定必需、可选与禁止字段；未知核心字段会被拒绝。
+- `method` 遵守清单中的 ASCII 名称模式。
 - `params` 与 `result` 可以是任意合法 JSON 值，包括 `null`。
 - 回复必须且只能包含 `result`、`error` 之一。
-  `error` 必须含清单允许的 `code` 和最多 256 个 UTF-8 字节的字符串 `message`，
+- `error` 必须含清单允许的 `code` 和最多 256 个 UTF-8 字节的字符串 `message`，
   可选 `data` 接受任意合法 JSON 值，其他字段拒绝。
-- 数字必须是 ±9007199254740991 内的有限安全整数，布尔值保持布尔类型。
-  可接受以科学记数法表示的安全整数。数值按与 `JSON.parse` 一致的 IEEE-754 解析结果校验：
-  `1.0000000000000001` 变为 `1`，`1e-4000` 变为 `0`。
-  超长整数归为 `INVALID_MESSAGE`，不会关闭进程级解析保护。
-- 字符串必须由 Unicode 标量组成，拒绝孤立代理项。对象字段重复时取最后一个值，
-  与两端原生解析器一致。
-- 根深度为 0，最大深度为 16。整条紧凑 JSON 编码后最多 65536 个 UTF-8 字节。
 
-编号格式为 `origin.session.sequence`：`p` 表示 Python 发起，`a` 表示附加包发起。
-每条连接新建 1 至 24 个 ASCII 字符的会话令牌，序号为 1 至 10 位正十进制数。
+### 编号
+
+逻辑编号格式为 `origin.session.sequence`：
+
+- `p` 表示 Python 发起，`a` 表示附加包发起。
+- `session` 是每条连接代次新建的 1–24 个 ASCII 字符令牌。
+- `sequence` 是 1–10 位正十进制数。
+
 回复沿用请求编号，双方同时发起不会冲突。通知没有逻辑编号，也不创建回复等待项。
 每条载体消息另用实际发送方的新传输编号，包括回复和通知；因此回复的逻辑编号可属于对端。
 重连不恢复编号或片段，不自动重放副作用。
 
+### JSON 规则
+
+- 数字必须是 ±9007199254740991 内的有限安全整数，布尔值保持布尔类型。
+  可接受以科学记数法表示的安全整数。
+- 数值按与 `JSON.parse` 一致的 IEEE-754 解析结果校验：
+  `1.0000000000000001` 变为 `1`，`1e-4000` 变为 `0`。
+  超长整数归为 `INVALID_MESSAGE`，不会关闭进程级解析保护。
+- 字符串必须由 Unicode 标量组成，拒绝孤立代理项。
+- 对象字段重复时取最后一个值。
+- 根深度为 0，最大深度为 16。
+- 整条紧凑 JSON 编码后最多 65536 个 UTF-8 字节。
+
+### 元数据
+
 `meta` 必须是对象，紧凑 JSON 编码后最多 4096 个 UTF-8 字节。
-未知可选键及其嵌套值保留。`sdk.` 是核心保留前缀，只允许以下字段：
+未知可选键及其嵌套值保留。`sdk.` 是核心保留前缀：
 
 | 字段 | 约束 |
 | --- | --- |
@@ -43,120 +124,99 @@ MCBEWS/1 的资产、标识、导入、构造参数及旧入口默认值保持�
 | `sdk.capabilities` | 最多 16 个不重复的清单令牌，`stream/1` 启用流消息 |
 
 未知保留字段会被拒绝，深度与数值规则同上。
+调用方不能设置保留字段；追踪编号通过专用参数传入。
 
 ## 双向载体与资源
 
-下行通过 `scriptevent mcbews:packet_v2 FRAME`，上行聊天内容为 `FRAME`。
-载体格式如下：
+下行通过 `scriptevent mcbews:packet_v2 FRAME`，上行由模拟玩家 `MCBEWS_BRIDGE`
+发送聊天内容 `FRAME`：
 
 ```text
 MCBEWS2|sender.session.sequence|index/total|content
 ```
 
-仅在 Unicode 标量边界切分，内容可包含竖线和换行。
-片号与总数必须是规范正十进制数，从 1 开始，最多 1024 片；收齐后才拼接解码。
-相同重复片忽略且不刷新空闲期限；冲突重复或总数变化会释放消息并拒绝该传输编号。
-同一连接、来源和编号在终止编号保留期内只完成一次。
-重组不执行业务，缺片不交付部分消息；原生命令仍保持原子，超长即拒绝。
+- `MCBEWS_BRIDGE` 只是传输归属，不是认证。
+- 仅在 Unicode 标量边界切分，内容可包含竖线和换行。
+- `index` 与 `total` 必须是规范正十进制数，从 1 开始，最多 1024 片。
+- 收齐后才拼接解码。相同重复片忽略且不刷新空闲期限；冲突重复或总数变化会释放消息并拒绝该传输编号。
+- 同一连接、来源和编号在终止编号保留期内只完成一次。
 
-清单规定硬上限，只能降低。下调 `metadata_bytes` 或深度后，发送前和接收重组后的校验均生效。
+清单限制是硬上限，只能降低：
 
-| 范围 | 默认硬上限 |
+| 范围 | 默认值 |
 | --- | --- |
-| 下行最终 `commandLine` | 461 个 UTF-8 字节，不能提高 |
-| 上行完整载体帧 | 256 个 Unicode 码点且不超过 1024 个 UTF-8 字节，不套用下行预算 |
+| 下行最终 `commandLine` | 461 个 UTF-8 字节 |
+| 上行完整载体帧 | 256 个 Unicode 码点且不超过 1024 个 UTF-8 字节 |
 | 单条逻辑消息 | 65536 字节 |
-| 单来源未完成消息 | 16 个传输编号、131072 字节 |
-| 单连接未完成消息 | 64 个传输编号、262144 字节 |
-| 进程或世界共享池 | 256 个传输编号、1048576 字节，运行时所有连接共享 |
-| 活动编号与终止编号记录总数 | 2048，满时拒绝新编号，不提前淘汰旧记录 |
+| 单来源未完成消息 | 16 个传输编号 / 131072 字节 |
+| 单连接未完成消息 | 64 个传输编号 / 262144 字节 |
+| 进程或世界共享池 | 256 个传输编号 / 1048576 字节 |
+| 活动编号与终止编号记录总数 | 2048 |
 
-来源由传输归属确定，不能使用元数据身份替代。
+下行预算是经验值，部署可以降低。上行独立测量完整帧，不继承 461 字节预算。
+
 空闲期限为 30000 毫秒，每次接收只采样一次毫秒时钟，恰好到期即过期。
-完成、冲突、容量拒绝、过期、取消都会释放字节，并保留终止编号 30000 毫秒，避免迟到片重新建表。
-具有合法前缀及可归属发送方编号的超预算或非标量帧，也会释放活动传输并记录该编号；
-无法归属的输入不分配状态。
+完成、冲突、容量拒绝、过期、取消都会释放字节，并保留终止编号 30000 毫秒。
+活动编号加终止记录达到上限时，新编号被拒绝，不提前淘汰旧记录。
+断连清除该连接的缓存与终止编号。
 
-断连清除该连接的缓存与终止编号；调用方必须建立新的会话代次并拒绝旧帧。
-接收与生命周期定时任务均清理过期状态，显式取消或关闭立即释放。
-这是有界重复抑制，不是重传，也不保证恰好执行一次。
+缺片不交付部分消息。这是有界重复抑制，不是重传，也不保证恰好执行一次。
+重组不执行业务；原生命令保持原子，超长即拒绝。
 
-## 格式选择与兼容
+## 格式选择
 
-`python tools/compare_v2_formats.py` 使用相同七组样本、同一最坏载体头部比较最终命令字节：
+在相同样本、同一最坏载体头部和最终命令字节统计下比较后，选择对象 JSON，
+而非八位置数组。数组在这些样本中没有减少命令数，还需要存在位掩码来区分字段缺失与
+`null`，验证和扩展更复杂。这是确定性的字节比较，不代表时延或实机性能。
 
-| 样本 | 对象 JSON | 八位置数组 | 命令数 |
-| --- | --- | --- | --- |
-| 中文请求 | 292 | 261 | 各 1 |
-| 空值回复 | 151 | 146 | 各 1 |
-| 反向请求 | 205 | 186 | 各 1 |
-| 通知 | 238 | 217 | 各 1 |
-| 错误 | 217 | 213 | 各 1 |
-| 最长编号 | 250 | 231 | 各 1 |
-| 4096 字节元数据 | 5189 | 5168 | 各 12 |
+当前对照表由 `python tools/compare_v2_formats.py` 生成。
 
-选择对象 JSON：数组没有减少命令数，还需要存在位掩码来区分字段缺失与 `null`，
-验证和扩展更复杂。这是确定性的字节比较，不代表时延或实机性能；实际分片器可使用更短头部。
-旧入口默认仍使用 v1。v2 桥接要求可靠调度，不会通过丢弃必需元数据回退。
+## 接入点
 
-## 公共入口与独立接入
+Python：
 
-新宿主使用根导出的 `McbeServer`，通过 `server.v2` 访问桥接。
-也可创建 `V2Bridge`，作为 `v2` 参数传给可靠模式的 `McbeServerFacade`。
-每条连接在后台启动一次探测：
+```python
+server = McbeServer()
+bridge = server.v2
 
-- `await bridge.ready(state.id)` 返回协商版本、功能集合与可选的 v2 端点。
-- `bridge.request(state.id, ...)` 发起协商调用；成功返回响应信封，v2 远端错误抛出 `RemoteCallError`。
-- Python 处理器注册到 `bridge.registry`。附加包路由器提供 `getV2Endpoint(epoch)` 与能力注册表。
+response = await bridge.request(connection_id, "demo.echo", {"text": "hi"})
+await bridge.notify(connection_id, "demo.event", {"value": 1})
+stream = await bridge.stream(connection_id, "demo.ticks", {"count": 3})
+```
 
-底层 Python 编解码位于 `profiles.mcbews_v2.codec`；传输模块提供 `fragment`、
-`downstream_payloads`、`send_downstream` 与 `ReassemblyPool`。
-TypeScript 的 `bridge/v2/codec`、`bridge/v2/transport` 提供对应编解码、分片、
-`sendUpstream` 与重组池。发送循环每次等待一片，失败或取消后停止剩余片段，不创建无界任务链。
+`bridge.ready(connection_id)` 等待准入并返回协商连接（版本、功能与端点）。
+钩子已经运行在 `READY_V2` 之后，通常不需要再调用。
 
-同一方法的顺序组正在执行时，新调用会被拒绝；业务容量耗尽时也会拒绝。
-不同组允许反向调用，不等待祖先已经占用的组。通知不产生错误回复。
-处理器分别接收传输归属与元数据；元数据身份不可信。
-调用方不能设置保留的 `sdk.*` 字段，追踪编号通过专用参数传入。回复保留元数据。
-断连使所有等待请求失败，释放连接分片；空闲未完成消息按期限过期。
+底层仍可使用 `profiles.mcbews_v2.codec` 编解码、`transport` 分片、下行载荷与
+`ReassemblyPool`。附加包对应模块位于 `bridge/v2/codec` 与 `bridge/v2/transport`。
+发送循环每次等待一片，保持顺序，失败或取消后停止。
+
+附加包路由器提供 `getV2Endpoint(epoch)`、`registerCapability` 与
+`registerV2Stream`。同一方法的顺序组不能重入；组执行期间的普通调用以
+`LIMIT_EXCEEDED` 拒绝，但发往其他组的反向调用仍允许。通知不产生错误回复。
 
 Python 的 `V2Bridge(timeout_seconds=...)` 对调度器准入、分片发送和等待回复设置一个总期限，
-探测使用独立期限。超时、关闭、取消会停止未发送片段；已经交给传输层的帧可能继续完成，无法撤回。
+协商使用独立期限。超时、关闭、取消会停止未发送片段；已经交给传输层的帧可能继续完成，
+无法撤回。
 
-## 探测与回退
-
-v2 清单定义 `mcbews:negotiate_v2` 控制事件。
-Python 发送 `MCBEWS2H|attempt`，附加包返回新路由会话代次与功能集合；
-Python 确认挑战后，附加包准入并回复 `ready`。
-入口在读取下一帧前安装匹配的端点与功能集合。完整控制帧和限制见清单。
-
-一次探测的期限覆盖发送和等待回复。没有响应时选择 v1；版本不支持、容量繁忙或确认未完成时明确失败。
-普通聊天与原生命令不被探测阻塞。v1 回退只允许清单中的已知方法；
-必需元数据和功能不会静默丢弃，流式必须协商出 `stream/1`。
-
-世界共享池最多容纳 32 个活动对端和 32 个临时挑战。
-每个对端的端点、分片与等待项独立，新对端不替换其他对端。
-60 秒租约每 20 秒续期；断连时入口尝试在有界期限内发送关闭消息，失联对端依靠租约过期。
-旧帧和旧确认不能重新激活旧会话代次。已开始的处理器可能在关闭后结束，未发送回复会被抑制。
-请求与世界修改不自动重放。
-
-载体来源类型与路由令牌不能证明 WebSocket 身份，也不授予权限，宿主须独立认证与授权。
-关闭消息丢失时依赖租约清理；已经交给传输层的命令不能撤回。
+处理器分别接收传输归属与元数据；元数据身份不可信。断连使所有等待请求失败，
+释放连接分片；空闲未完成消息按期限过期。
 
 ## 持续请求流 {#request-streams}
 
 Python 用 `bridge.streams.register(name, handler)` 注册异步生成器，
 接收 `(name, params, CapabilityContext)` 并逐项产生 JSON。
-`await bridge.stream(connection_id, name, params)` 或 `await endpoint.stream(name, params)`
-返回异步迭代器。可能提前退出时，用 `async with stream:` 包住消费过程，
-或调用 `await stream.aclose()`；取消正在等待下一项的任务也会取消该流。
-流注册与原子能力注册独立。
 
-附加包通过路由器的 `registerV2Stream(name, handler)` 或端点的 `registerStream`
-注册返回 `AsyncIterable` 的生产者。
-`await endpoint.stream(name, params, options)` 返回异步迭代器；
-提前退出 `for await` 会调用 `return()` 并取消。
-也可通过 `V2RequestCancellation` 取消单条流，注销只影响后续调用。
+```python
+stream = await server.v2.stream(state.id, "demo.ticks", {"count": 3})
+async with stream:
+    async for item in stream:
+        print(item)
+```
+
+附加包通过路由器的 `registerV2Stream(name, handler)` 注册返回 `AsyncIterable`
+的生产者。`await endpoint.stream(name, params, options)` 返回异步迭代器；
+提前退出 `for await` 会调用 `return()` 并取消。注销只影响后续调用。
 
 | 消息种类 | `v`、`kind` 以外的必需字段 | 方向 |
 | --- | --- | --- |
@@ -170,15 +230,14 @@ Python 用 `bridge.streams.register(name, handler)` 注册异步生成器，
 每条逻辑消息另用发送方的新传输编号，可经通用分片层拆成多片。
 逻辑项序号 `seq` 与片段序号独立，第一项从 0 开始；结束或失败消息携带下一项预期序号。
 空流以序号 0 结束，不需要预先提供总长度。
+
 乱序、重复逻辑项或结束时缺项会以 `INVALID_MESSAGE` 失败，并取消生产者。
 未知、迟到消息不创建新流；终止编号保留期内，重复开流不会重启生产者。
-终止编号表已满时，新开流明确拒绝但不再存储编号，因此重复抑制受与分片层相同的容量边界约束。
+终止编号表已满时，新开流明确拒绝但不再存储编号。
 
 正常结束保留已缓存项供消费。失败、取消或超载清空缓存，终止结果只确定一次。
 生产异常映射为 `HANDLER_FAILED`，空闲超时映射为 `TIMEOUT`。
 取消停止后续发送并关闭生产迭代器，不撤销已经执行的世界修改。
-Python 生产者必须允许任务取消；JavaScript 生产者应响应 `context.cancellation`，
-任意永不完成的 Promise 无法被强制解除。
 
 | 流资源 | 默认上限 |
 | --- | --- |
@@ -186,7 +245,7 @@ Python 生产者必须允许任务取消；JavaScript 生产者应响应 `contex
 | 单消费者缓存 | 32 项，且逻辑项紧凑 JSON 合计不超过 131072 个 UTF-8 字节 |
 | 单端点缓存 | 262144 字节 |
 | 活动生产者与重复开流终止记录 | 合计 2048，终止记录保留 30000 毫秒 |
-| 开流、产生下一项、发送单条逻辑消息 | 各有 30000 毫秒空闲期限 |
+| 空闲期限 | 开流、产生下一项、发送单条逻辑消息各 30000 毫秒 |
 
 生产者逐项等待发送，收到一项会刷新消费者计时；这不是整条流的总时长限制。
 Python 的 `V2Bridge(stream_limits=...)` 与 TypeScript 的 `V2EndpointOptions.streamLimits`
@@ -196,5 +255,9 @@ Python 的 `V2Bridge(stream_limits=...)` 与 TypeScript 的 `V2EndpointOptions.s
 固定发送间隔与传输节奏不等于接收方背压，当前没有接收额度机制。
 控制发送同样有容量上限；控制容量或传输耗尽时，对端空闲超时仍会限制生命周期。
 未完成的传输分片继续受通用分片层的空闲期限与配额约束，逻辑流取消无需先解码不完整分片；
-断连清理连接资源。旧端不支持流式时明确失败，不缓存完整结果伪装成持续流。
-接收额度测量与决定见[第四阶段记录](https://github.com/Rice-awa/mcbe-ws-sdk/blob/main/docs/plans/ws-sdk-refactor/records/R16.zh.md)。
+断连清理连接资源。
+
+## 信任边界
+
+载体来源类型与路由令牌不能证明 WebSocket 身份，也不授予权限，宿主须独立认证与授权。
+关闭消息丢失时依赖租约清理；已经交给传输层的命令不能撤回。

@@ -1,22 +1,21 @@
-"""Repeatable pre-refactor baseline measurements for R00.
+#!/usr/bin/env python3
+"""Repeatable V2-only measurements for the current SDK.
 
-This tool intentionally measures the *current* implementation so later tasks
-can compare equal workloads on equal environments. It does not assert that any
-result is good; it records numbers.
+This tool records numbers; it does not assert that any result is good. There
+is no MCBEWS/1 path and no warmup that assumes the retired profile.
 
 Scenarios
 ---------
-``chunking``
-    Encode one large CJK/emoji text response into ``mcbews:text_resp`` command
-    frames with :class:`FlowControlMiddleware`. Reports command packets, bytes
-    and per-call latency for the configured 461-byte empirical budget.
-``inbound``
-    Drive N ``PlayerMessage`` frames through the facade's real ``_handle_raw``
-    routing path on a simulated connection with a no-op hook. Reports
-    throughput, per-message latency (p50/p95) and memory peak.
-``outbound``
-    Enqueue N ``OutboundText`` messages on a real ``ConnectionManager`` and
-    measure queue-to-sink dispatch latency, throughput and memory peak.
+``fragment``
+    Encode one large CJK/emoji request and split it into bounded
+    ``MCBEWS2|...`` carrier frames with :func:`fragment`. Reports frames,
+    bytes and per-call latency for the configured command budget.
+``reassembly``
+    Feed those frames through a fresh :class:`ReassemblyPool` per iteration
+    and report the latency until the logical message is recovered.
+``codec``
+    Encode and decode the same logical message per iteration with the public
+    v2 codec alone.
 
 Every scenario is repeated ``--runs`` times; the report includes each run plus
 the median and p95 of the aggregate metrics, and the observed run-to-run
@@ -25,105 +24,56 @@ numbers.
 
 Usage::
 
-    python tools/benchmark_baseline.py --runs 5 --out /tmp/r00-baseline.json
+    python tools/benchmark_baseline.py --runs 5 --out /tmp/v2-baseline.json
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import platform
 import statistics
 import sys
 import time
 import tracemalloc
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pydantic
 import structlog
 import websockets
 
 import mcbe_ws_sdk
-from mcbe_ws_sdk.config import (
-    AddonBridgeSettings,
-    FlowControlSettings,
-    GatewaySettings,
-    WebsocketTransportConfig,
-)
-from mcbe_ws_sdk.flow import FlowControlMiddleware
-from mcbe_ws_sdk.gateway.connection import ConnectionManager, ConnectionState, enqueue_response
-from mcbe_ws_sdk.gateway.hook import NoOpHook
-from mcbe_ws_sdk.gateway.messages import OutboundText
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
-from mcbe_ws_sdk.gateway.sink import DefaultResponseSink
-from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1
+from mcbe_ws_sdk.profiles.mcbews_v2.codec import LIMITS, decode, encode
+from mcbe_ws_sdk.profiles.mcbews_v2.transport import ReassemblyPool, fragment
 
 _SAMPLE_GLYPH = "重构基线🙂"
+_TRANSPORT_ID = "p.bench.1"
+_CONNECTION = "bench"
+_SOURCE = "server"
 
 
 # --------------------------------------------------------------------------- #
-# Reusable simulated connection / load samples
+# Reusable samples
 # --------------------------------------------------------------------------- #
-
-
-def player_message_frame(sender: str, message: str, *, request_id: str = "bench-1") -> str:
-    """Build a ``PlayerMessage`` event frame accepted by the facade."""
-
-    return json.dumps(
-        {
-            "header": {"eventName": "PlayerMessage", "requestId": request_id},
-            "body": {"sender": sender, "message": message},
-        }
-    )
 
 
 def sample_text(target_utf8_bytes: int) -> str:
     """Return a CJK + emoji sample whose UTF-8 encoding is >= ``target_utf8_bytes``."""
-
-    unit = _SAMPLE_GLYPH * max(1, target_utf8_bytes // len(_SAMPLE_GLYPH.encode("utf-8")))
-    return unit
+    return _SAMPLE_GLYPH * max(1, target_utf8_bytes // len(_SAMPLE_GLYPH.encode("utf-8")))
 
 
-class SimulatedConnection:
-    """A reusable in-memory connection for inbound load measurement."""
-
-    def __init__(self, facade: McbeServerFacade) -> None:
-        self.facade = facade
-        self.state: ConnectionState | None = None
-
-    async def open(self) -> ConnectionState:
-        async def _noop_send(_payload: str) -> None:
-            return None
-
-        self.state = await self.facade.manager.create_connection(
-            connection_id=uuid4(),
-            send_payload=_noop_send,
-        )
-        return self.state
-
-    async def close(self) -> None:
-        if self.state is not None:
-            await self.facade.manager.drop_connection(self.state.id)
-
-
-class _CountingSink(DefaultResponseSink):
-    def __init__(self) -> None:
-        self.received_at: list[float] = []
-        self.done = asyncio.Event()
-        self._expected = 0
-
-    async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
-        self.received_at.append(time.perf_counter())
-        if len(self.received_at) >= self._expected:
-            self.done.set()
-
-    def expect(self, count: int) -> None:
-        self._expected = count
+def sample_message(text: str) -> dict[str, Any]:
+    """Build one valid MCBEWS/2 request around *text*."""
+    return {
+        "v": "MCBEWS/2",
+        "kind": "request",
+        "id": _TRANSPORT_ID,
+        "method": "bench.echo",
+        "params": {"text": text},
+    }
 
 
 @dataclass(frozen=True)
@@ -141,7 +91,6 @@ class Observation:
 
 def percentile(values: list[float], fraction: float) -> float:
     """Linear-interpolated percentile for a non-empty sample."""
-
     if not values:
         return float("nan")
     ordered = sorted(values)
@@ -159,53 +108,28 @@ def percentile(values: list[float], fraction: float) -> float:
 # --------------------------------------------------------------------------- #
 
 
-def _encode_frame(content: str, index: int, total: int) -> str:
-    return json.dumps(
-        {
-            "id": "bench-msg",
-            "i": index,
-            "n": total,
-            "p": "Steve",
-            "r": "assistant",
-            "c": content,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def measure_chunking(
-    *,
-    text_bytes: int,
-    iterations: int,
-    command_budget: int,
-) -> Observation:
-    flow = FlowControlMiddleware(FlowControlSettings(command_line_byte_budget=command_budget))
-    text = sample_text(text_bytes)
+def measure_fragmentation(*, text_bytes: int, iterations: int, command_budget: int) -> Observation:
+    message = sample_message(sample_text(text_bytes))
+    overrides = {"command_bytes": command_budget}
     latencies: list[float] = []
-    commands = 0
+    frames = 0
     total_bytes = 0
     for _ in range(iterations):
         started = time.perf_counter()
-        payloads = flow.chunk_framed_scriptevent(
-            text,
-            message_id=MCBEWS_V1.text_response_script_event_id,
-            encode_frame=_encode_frame,
-            emit_empty=False,
-        )
+        payloads = fragment(message, _TRANSPORT_ID, "down", overrides=overrides)
         latencies.append((time.perf_counter() - started) * 1000.0)
-        commands += len(payloads)
+        frames += len(payloads)
         total_bytes += sum(len(payload.encode("utf-8")) for payload in payloads)
     elapsed = sum(latencies) / 1000.0
     return Observation(
-        name="chunking",
+        name="fragment",
         count=iterations,
         elapsed_s=elapsed,
         latency_ms=latencies,
         extra={
-            "input_utf8_bytes": len(text.encode("utf-8")),
-            "commands_total": commands,
-            "commands_per_message": commands / iterations,
+            "input_utf8_bytes": len(encode(message).encode("utf-8")),
+            "frames_total": frames,
+            "frames_per_message": frames / iterations,
             "output_utf8_bytes": total_bytes,
             "bytes_per_message": total_bytes / iterations,
             "command_line_byte_budget": command_budget,
@@ -213,69 +137,43 @@ def measure_chunking(
     )
 
 
-async def measure_inbound(*, messages: int, text_bytes: int) -> Observation:
-    facade = McbeServerFacade(
-        settings=GatewaySettings(
-            addon=AddonBridgeSettings(),
-            websocket=WebsocketTransportConfig(response_queue_maxsize=256),
-        ),
-        hook=NoOpHook(),
-    )
-    connection = SimulatedConnection(facade)
-    state = await connection.open()
-    frame = player_message_frame("Steve", sample_text(text_bytes))
+def measure_reassembly(*, text_bytes: int, iterations: int, command_budget: int) -> Observation:
+    message = sample_message(sample_text(text_bytes))
+    frames = fragment(message, _TRANSPORT_ID, "down", overrides={"command_bytes": command_budget})
     latencies: list[float] = []
-    started = time.perf_counter()
-    try:
-        for _ in range(messages):
-            frame_started = time.perf_counter()
-            await facade._handle_raw(state, frame)
-            latencies.append((time.perf_counter() - frame_started) * 1000.0)
-    finally:
-        await connection.close()
-    elapsed = time.perf_counter() - started
+    for _ in range(iterations):
+        pool = ReassemblyPool()
+        started = time.perf_counter()
+        decoded = None
+        for frame in frames:
+            decoded = pool.receive(_CONNECTION, _SOURCE, frame, "down")
+        assert decoded == message
+        latencies.append((time.perf_counter() - started) * 1000.0)
+    elapsed = sum(latencies) / 1000.0
     return Observation(
-        name="inbound",
-        count=messages,
+        name="reassembly",
+        count=iterations,
         elapsed_s=elapsed,
         latency_ms=latencies,
-        extra={"payload_utf8_bytes": len(frame.encode("utf-8"))},
+        extra={"frames_per_message": len(frames)},
     )
 
 
-async def measure_outbound(*, messages: int) -> Observation:
-    sink = _CountingSink()
-    sink.expect(messages)
-    manager = ConnectionManager(sink=sink, response_queue_maxsize=messages + 1)
-
-    async def _noop_send(_payload: str) -> None:
-        return None
-
-    state = await manager.create_connection(send_payload=_noop_send)
-    enqueued_at: list[float] = []
-    started = time.perf_counter()
-    for index in range(messages):
-        enqueued_at.append(time.perf_counter())
-        enqueue_response(
-            state,
-            OutboundText(content=f"baseline message {index}", player_name="Steve"),
-        )
-    await asyncio.wait_for(sink.done.wait(), timeout=30)
-    finished = time.perf_counter()
-    # Dispatch latency pairs each message's enqueue timestamp with the sink's
-    # receive timestamp in the same (FIFO) order.
-    dispatch_ms = [
-        (received - sent) * 1000.0
-        for sent, received in zip(enqueued_at, sink.received_at, strict=True)
-    ]
-    elapsed = finished - started
-    await manager.drop_connection(state.id)
+def measure_codec(*, text_bytes: int, iterations: int) -> Observation:
+    message = sample_message(sample_text(text_bytes))
+    latencies: list[float] = []
+    for _ in range(iterations):
+        started = time.perf_counter()
+        wire = encode(message)
+        assert decode(wire) == message
+        latencies.append((time.perf_counter() - started) * 1000.0)
+    elapsed = sum(latencies) / 1000.0
     return Observation(
-        name="outbound",
-        count=messages,
+        name="codec",
+        count=iterations,
         elapsed_s=elapsed,
-        latency_ms=dispatch_ms,
-        extra={"response_queue_maxsize": messages + 1},
+        latency_ms=latencies,
+        extra={"wire_utf8_bytes": len(encode(message).encode("utf-8"))},
     )
 
 
@@ -284,26 +182,29 @@ async def measure_outbound(*, messages: int) -> Observation:
 # --------------------------------------------------------------------------- #
 
 
-async def measure_memory(
+def measure_memory(
     scenario: str,
     *,
-    messages: int,
     text_bytes: int,
     iterations: int,
     command_budget: int,
 ) -> int:
     tracemalloc.start()
     try:
-        if scenario == "chunking":
-            measure_chunking(
+        if scenario == "fragment":
+            measure_fragmentation(
                 text_bytes=text_bytes,
                 iterations=iterations,
                 command_budget=command_budget,
             )
-        elif scenario == "inbound":
-            await measure_inbound(messages=messages, text_bytes=text_bytes)
-        elif scenario == "outbound":
-            await measure_outbound(messages=messages)
+        elif scenario == "reassembly":
+            measure_reassembly(
+                text_bytes=text_bytes,
+                iterations=iterations,
+                command_budget=command_budget,
+            )
+        elif scenario == "codec":
+            measure_codec(text_bytes=text_bytes, iterations=iterations)
         else:  # pragma: no cover - argparse constrains the choice
             raise ValueError(scenario)
         _, peak = tracemalloc.get_traced_memory()
@@ -327,7 +228,8 @@ def _summarise(observations: list[Observation]) -> dict[str, Any]:
         "throughput_per_s_max": max(throughputs),
         "throughput_run_to_run_variation_pct": (
             (max(throughputs) - min(throughputs)) / statistics.median(throughputs) * 100.0
-            if statistics.median(throughputs) else float("nan")
+            if statistics.median(throughputs)
+            else float("nan")
         ),
         "latency_ms_median": percentile(latencies, 0.5),
         "latency_ms_p95": percentile(latencies, 0.95),
@@ -335,18 +237,22 @@ def _summarise(observations: list[Observation]) -> dict[str, Any]:
     }
 
 
-async def run(args: argparse.Namespace) -> dict[str, Any]:
-    scenario_runners: dict[str, Callable[[], Awaitable[Observation] | Observation]] = {
-        "chunking": lambda: measure_chunking(
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    scenarios: dict[str, Callable[[], Observation]] = {
+        "fragment": lambda: measure_fragmentation(
             text_bytes=args.payload_bytes,
             iterations=args.messages,
             command_budget=args.command_budget,
         ),
-        "inbound": lambda: measure_inbound(
-            messages=args.messages,
+        "reassembly": lambda: measure_reassembly(
             text_bytes=args.payload_bytes,
+            iterations=args.messages,
+            command_budget=args.command_budget,
         ),
-        "outbound": lambda: measure_outbound(messages=args.messages),
+        "codec": lambda: measure_codec(
+            text_bytes=args.payload_bytes,
+            iterations=args.messages,
+        ),
     }
 
     report: dict[str, Any] = {
@@ -368,14 +274,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "scenarios": {},
     }
 
-    for name, runner in scenario_runners.items():
-        observations: list[Observation] = []
-        for _ in range(args.runs):
-            result = runner()
-            observations.append(await result if asyncio.iscoroutine(result) else result)
-        peak = await measure_memory(
+    for name, runner in scenarios.items():
+        observations = [runner() for _ in range(args.runs)]
+        peak = measure_memory(
             name,
-            messages=args.messages,
             text_bytes=args.payload_bytes,
             iterations=args.messages,
             command_budget=args.command_budget,
@@ -398,23 +300,37 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     return report
 
 
+def _positive(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def _command_budget(value: str) -> int:
+    parsed = _positive(value)
+    if parsed > LIMITS["command_bytes"]:
+        raise argparse.ArgumentTypeError(
+            f"command budget cannot exceed the MCBEWS/2 limit ({LIMITS['command_bytes']})"
+        )
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runs", type=int, default=5, help="repetitions per scenario")
-    parser.add_argument("--messages", type=int, default=200, help="load items per run")
-    parser.add_argument("--payload-bytes", type=int, default=4096, help="sample UTF-8 size")
+    parser.add_argument("--runs", type=_positive, default=5, help="repetitions per scenario")
+    parser.add_argument("--messages", type=_positive, default=200, help="load items per run")
+    parser.add_argument("--payload-bytes", type=_positive, default=4096, help="sample UTF-8 size")
     parser.add_argument(
         "--command-budget",
-        type=int,
-        default=461,
-        help="commandLine byte budget (461 is the empirical default)",
+        type=_command_budget,
+        default=LIMITS["command_bytes"],
+        help="commandLine byte budget (461 is the MCBEWS/2 empirical default)",
     )
     parser.add_argument("--out", type=Path, default=None, help="write the JSON report here")
     args = parser.parse_args(argv)
-    if args.runs < 1 or args.messages < 1 or args.payload_bytes < 1:
-        parser.error("--runs, --messages and --payload-bytes must be positive")
 
-    report = asyncio.run(run(args))
+    report = run(args)
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)

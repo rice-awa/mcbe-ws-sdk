@@ -94,19 +94,25 @@ class ConnectionState:
     id: UUID = field(default_factory=uuid4)
     _player_name: str | None = field(default=None, repr=False)
     send_payload: SendPayload | None = None
-    # Optional bulk adapter installed by the reliable runtime. It takes the same
-    # single argument as ``send_payload``; hosts that build
-    # ``McbeOutboundDelivery`` can pass it as ``send_bulk`` to keep long text off
-    # the request queue. The legacy path leaves it ``None``.
+    # Optional bulk adapter installed by the runtime. It takes the same single
+    # argument as ``send_payload``; hosts that build ``McbeOutboundDelivery``
+    # can pass it as ``send_bulk`` to keep long text off the request queue.
     send_bulk: SendPayload | None = field(default=None, kw_only=True)
     response_queue: asyncio.Queue[object] | None = None
-    # The reliable path attaches an SDK-owned runtime. The legacy path leaves
-    # ``runtime`` as ``None``; ``requests`` / ``command_client`` are still
-    # installed so native command awaiting works without changing callback
-    # ordering.
+    # Every connection owns a runtime with business/observation lanes, request
+    # tracking and the outbound scheduler.
     runtime: ConnectionRuntime | None = field(default=None, repr=False)
     requests: RequestTable | None = field(default=None, repr=False)
     command_client: NativeCommandClient | None = field(default=None, repr=False)
+
+    # Admission state machine. Business frames are only routed once ``ready``
+    # is true; ``pre_ready_dropped`` counts frames discarded before then so the
+    # close log can summarise them without replaying anything.
+    admission_state: str = field(
+        default="WS_TRANSPORT_CONNECTED", kw_only=True, repr=False
+    )
+    ready: bool = field(default=False, kw_only=True)
+    pre_ready_dropped: int = field(default=0, kw_only=True)
 
     _response_traces: deque[tuple[object, TraceContext]] = field(
         default_factory=lambda: deque(maxlen=256), repr=False, kw_only=True
@@ -115,9 +121,9 @@ class ConnectionState:
 
     @property
     def native_events(self) -> NativeEventSubscriptions:
-        """Connection-local native subscriptions; requires reliable dispatch mode."""
+        """Connection-local native subscriptions."""
         if self.runtime is None:
-            raise RuntimeError("native events require reliable dispatch mode")
+            raise RuntimeError("connection runtime is not installed")
         return self.runtime.native_events
 
     @property
@@ -194,9 +200,14 @@ class ConnectionManager:
         logger.info("connection_created", connection_id=str(state.id))
         return state
 
-    async def drop_connection(self, connection_id: UUID) -> None:
+    async def drop_connection(
+        self, connection_id: UUID, *, notify: bool | None = None
+    ) -> None:
         """Cancel the sender, release the runtime, drop, emit DISCONNECTED.
 
+        ``notify=None`` emits ``DISCONNECTED`` only for a connection that reached
+        ``READY_V2``. A connection rejected during admission has no paired
+        ``CONNECTED`` event and must not produce a business ``DISCONNECTED``.
         Remove the connection from routing immediately. Concurrent callers await
         the same cleanup, which continues even if a caller is cancelled.
         """
@@ -205,8 +216,11 @@ class ConnectionManager:
             state = self._connections.pop(connection_id, None)
             if state is None:
                 return
+            if notify is None:
+                notify = state.ready
             task = asyncio.create_task(
-                self._drop_connection(state), name=f"connection-drop:{connection_id}"
+                self._drop_connection(state, notify=notify),
+                name=f"connection-drop:{connection_id}",
             )
             self._drop_tasks[connection_id] = task
             task.add_done_callback(lambda completed: self._drop_finished(connection_id, completed))
@@ -225,7 +239,7 @@ class ConnectionManager:
                 exc_info=task.exception(),
             )
 
-    async def _drop_connection(self, state: ConnectionState) -> None:
+    async def _drop_connection(self, state: ConnectionState, *, notify: bool) -> None:
         connection_id = state.id
         await self._cancel_sender(connection_id)
         if state.runtime is not None:
@@ -237,8 +251,6 @@ class ConnectionManager:
                     connection_id=str(connection_id),
                 )
         elif state.requests is not None:
-            # Legacy path: fail SDK-tracked native command waiters so host
-            # tasks do not hang after disconnect.
             state.requests.close()
         if state.diagnostics is not None:
             await state.diagnostics.close()
@@ -251,8 +263,15 @@ class ConnectionManager:
                     discarded=discarded,
                 )
         state._response_traces.clear()
-        await self._bus.emit(WsEventType.DISCONNECTED, state)
-        logger.info("connection_dropped", connection_id=str(connection_id))
+        if notify:
+            await self._bus.emit(WsEventType.DISCONNECTED, state)
+        logger.info(
+            "connection_dropped",
+            connection_id=str(connection_id),
+            admission_state=state.admission_state,
+            ready=state.ready,
+            pre_ready_dropped=state.pre_ready_dropped,
+        )
 
     def get_connection(self, connection_id: UUID) -> ConnectionState | None:
         return self._connections.get(connection_id)

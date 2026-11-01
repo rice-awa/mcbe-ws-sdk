@@ -17,6 +17,10 @@ class FrameTooLargeError(ProtocolError):
     """Raised when a frame cannot fit within its configured byte budget."""
 
 
+class ReassemblyLimitError(ProtocolError):
+    """Raised when chunk reassembly exceeds a configured limit."""
+
+
 class CapabilityError(McbeWsSdkError):
     """Base class for capability registry errors."""
 
@@ -31,32 +35,8 @@ class CapabilityAlreadyRegisteredError(CapabilityError, ValueError):
         self.name = name
 
 
-class BridgeError(McbeWsSdkError):
-    """Base class for add-on bridge errors."""
-
-
-class BridgeTimeoutError(BridgeError):
-    """Raised when an add-on bridge request times out."""
-
-    def __init__(self, request_id: str) -> None:
-        super().__init__(f"Bridge request timed out: {request_id}")
-        self.request_id = request_id
-
-
-class BridgeClosedError(BridgeError):
-    """Raised when an add-on bridge is closed."""
-
-    def __init__(self, request_id: str) -> None:
-        super().__init__(f"Bridge connection closed: {request_id}")
-        self.request_id = request_id
-
-
-class BridgeLimitError(BridgeError, ProtocolError):
-    """Raised when an add-on bridge protocol limit is exceeded."""
-
-
-class FacadeLifecycleError(McbeWsSdkError, RuntimeError):
-    """Raised for invalid server facade lifecycle transitions."""
+class ServerLifecycleError(McbeWsSdkError, RuntimeError):
+    """Raised for invalid server lifecycle transitions."""
 
 
 class RequestError(McbeWsSdkError):
@@ -138,7 +118,8 @@ class RemoteCallError(McbeWsSdkError):
         code: object | None = None,
         message: str = "remote call failed",
     ) -> None:
-        super().__init__(f"Remote call failed ({request_id}): {message}")
+        code_text = code if isinstance(code, str) and code else "ERROR"
+        super().__init__(f"Remote call failed ({request_id}): [{code_text}] {message}")
         self.request_id = request_id
         self.code = code
         self.message = message

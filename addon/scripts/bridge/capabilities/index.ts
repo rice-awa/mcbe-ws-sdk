@@ -9,8 +9,8 @@ import { handleRunWorldCommand } from "./runWorldCommand";
 const validateTarget: CapabilityValidator = (payload) =>
   payload.target === undefined || typeof payload.target === "string" ? null : "payload.target must be a string";
 
-// 默认能力表（旧入口，形状与语义保持不变）。注册表按本表当前的键注册，
-// 并在每次分发时从本表读取处理器；新增代码请优先使用 registerCapability。
+// 默认能力表：注册表按本表当前的键注册，并在每次分发时从本表读取处理器。
+// 新增代码请优先使用 registerCapability。
 export const defaultCapabilityRegistry: Record<string, CapabilityHandler> = {
   get_player_snapshot: (_capability, payload, _context) => handleGetPlayerSnapshot(payload),
   get_inventory_snapshot: (_capability, payload, _context) => handleGetInventorySnapshot(payload),

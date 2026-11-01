@@ -149,7 +149,7 @@ async def test_response_sender_routes_duck_typed_sink_without_dispatch(bus: Even
 def _install_runtime(state: ConnectionState) -> ConnectionRuntime:
     runtime = ConnectionRuntime(
         connection_id=state.id,
-        dispatch=DispatchSettings(mode="reliable"),
+        dispatch=DispatchSettings(),
         send=SendSchedulerSettings(),
         flow=FlowControlSettings(),
         transport=_send_noop,
@@ -164,6 +164,7 @@ async def test_disconnected_observer_can_repeat_drop_without_changing_order(
     manager: ConnectionManager, bus: EventBus
 ) -> None:
     state = await manager.create_connection(send_payload=_send_noop)
+    state.ready = True
     state.requests = RequestTable()
     order: list[str] = []
 
@@ -186,6 +187,7 @@ async def test_concurrent_manager_drops_wait_for_runtime_cleanup(
     manager: ConnectionManager, bus: EventBus, cancel_first: bool
 ) -> None:
     state = await manager.create_connection(send_payload=_send_noop)
+    state.ready = True
     runtime = _install_runtime(state)
     started, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     disconnected: list[ConnectionState] = []
@@ -256,12 +258,14 @@ async def test_cancelled_drop_during_sender_cleanup_is_joined_by_shutdown(
 
     manager = ConnectionManager(sink=SlowSink(), event_bus=bus)
     state = await manager.create_connection(send_payload=_send_noop)
+    state.ready = True
     runtime = _install_runtime(state) if reliable else None
     if not reliable:
         state.requests = RequestTable()
     assert state.requests is not None
     pending = state.requests.reserve(CATEGORY_COMMAND, request_id="pending")
     other = await manager.create_connection(send_payload=_send_noop)
+    other.ready = True
     other_runtime = _install_runtime(other)
     disconnected: list[ConnectionState] = []
     cleanup_observed: list[tuple[bool, bool, list[str]]] = []
@@ -334,6 +338,7 @@ async def test_drop_connection_awaits_sender_task_cleanup(
     manager: ConnectionManager, bus: EventBus
 ) -> None:
     state = await manager.create_connection(connection_id=UUID(int=41), send_payload=_send_noop)
+    state.ready = True
     disconnected: list[ConnectionState] = []
     bus.subscribe(WsEventType.DISCONNECTED, lambda s: disconnected.append(s), weak=False)
     task = manager._sender_tasks[state.id]

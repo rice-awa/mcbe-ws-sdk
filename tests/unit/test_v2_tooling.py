@@ -49,6 +49,6 @@ def test_generation_uses_active_interpreter(
     monkeypatch.setattr(codec_tests, "ROOT", tmp_path)
     run = Mock()
     monkeypatch.setattr(codec_tests.subprocess, "run", run)
-    codec_tests.test_generation_stable_and_old_assets_unchanged()
-    assert run.call_count == 3
+    codec_tests.test_generation_stable()
+    assert run.call_count == 2
     assert all(call.args[0][0] == sys.executable for call in run.call_args_list)

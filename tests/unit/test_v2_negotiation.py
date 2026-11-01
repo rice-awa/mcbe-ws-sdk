@@ -1,4 +1,4 @@
-"""Version discovery across the facade's actual connection lifecycle."""
+"""Version discovery across the server's actual connection lifecycle."""
 
 from __future__ import annotations
 
@@ -8,103 +8,98 @@ from typing import Any
 
 import pytest
 
-from mcbe_ws_sdk.config import DispatchSettings, FlowControlSettings, GatewaySettings
-from mcbe_ws_sdk.errors import FrameTooLargeError, RequestClosedError
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
+from mcbe_ws_sdk.config import FlowControlSettings, GatewaySettings
+from mcbe_ws_sdk.errors import RequestClosedError
+from mcbe_ws_sdk.gateway.connection import ConnectionState
 from mcbe_ws_sdk.profiles.mcbews_v2.runtime import NegotiationError, V2Bridge
 from mcbe_ws_sdk.profiles.mcbews_v2.transport import COMMAND_PREFIX, ReassemblyPool, fragment
+from mcbe_ws_sdk.server import McbeServer
 
 from .test_reliable_facade import QueueWebSocket, RecordingHook, _player_frame, _stop
 from .test_v2_codec import ROOT, typescript
+
+
+def _server(hook: RecordingHook, bridge: V2Bridge, **settings: FlowControlSettings) -> McbeServer:
+    return McbeServer(
+        v2=bridge,
+        hook=hook,
+        settings=GatewaySettings(**settings),
+    )
+
+
+async def _wait_for_state(server: McbeServer) -> ConnectionState:
+    async with asyncio.timeout(2):
+        while True:
+            states = list(server.manager._connections.values())
+            if states:
+                return states[0]
+            await asyncio.sleep(0.005)
 
 
 @pytest.mark.asyncio
 async def test_new_peers_negotiate_and_reconnect_with_fresh_epoch() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.2)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
+    server = _server(hook, bridge)
     epochs: list[str] = []
 
-    async def connect() -> tuple[QueueWebSocket, asyncio.Task[None], Any]:
+    async def connect() -> tuple[QueueWebSocket, asyncio.Task[None], str]:
         hook.connected.clear()
         websocket = QueueWebSocket()
 
-        async def answer(payload: str) -> None:
+        async def capture(payload: str) -> None:
             command = json.loads(payload).get("body", {}).get("commandLine", "")
             prefix = "scriptevent mcbews:negotiate_v2 "
             if command.startswith(prefix):
                 parts = command[len(prefix) :].split("|")
                 if parts[0] == "MCBEWS2H":
-                    attempt = parts[1]
-                    epoch = "e" + attempt[:23]
-                    epochs.append(epoch)
-                    await websocket.push(
-                        _player_frame(
-                            "MCBEWS_BRIDGE",
-                            f"MCBEWS2N|{attempt}|{epoch}|2|metadata/1,notifications/1,reverse/1",
-                        )
-                    )
-                elif parts[0] == "MCBEWS2C":
-                    await websocket.push(
-                        _player_frame("MCBEWS_BRIDGE", f"MCBEWS2N|{parts[1]}|{parts[2]}|ready")
-                    )
+                    epochs.append(f"e{parts[1][:22]}")
 
-        websocket.on_send = answer
-        task = asyncio.create_task(facade._on_connection(websocket))
+        websocket.on_send = capture
+        task = asyncio.create_task(server._on_connection(websocket))
         await asyncio.wait_for(hook.connected.wait(), 2)
         assert hook.state is not None
         selection = await asyncio.wait_for(bridge.ready(hook.state.id), 2)
-        return websocket, task, selection
-
-    websocket, task, selection = await connect()
-    assert selection.version == "MCBEWS/2"
-    assert "metadata/1" in selection.features
-    await _stop(websocket, task)
-    websocket, task, selection = await connect()
-    try:
         assert selection.version == "MCBEWS/2"
+        assert selection.endpoint is not None
+        return websocket, task, selection.endpoint.epoch
+
+    websocket, task, first_epoch = await connect()
+    await _stop(websocket, task)
+    websocket, task, second_epoch = await connect()
+    try:
         assert len(epochs) == 2 and epochs[0] != epochs[1]
-        assert selection.endpoint is not None and selection.endpoint.epoch == epochs[1]
+        assert first_epoch != second_epoch
+        assert second_epoch == epochs[1]
     finally:
         await _stop(websocket, task)
 
 
 @pytest.mark.asyncio
-async def test_old_addon_fallback_calls_only_legacy_capabilities() -> None:
+async def test_old_addon_never_downgrades_and_times_out() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.05)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
-    websocket = QueueWebSocket()
+    server = _server(hook, bridge)
+    websocket = QueueWebSocket(auto_negotiate=False)
+    business_calls: list[str] = []
 
     async def answer(payload: str) -> None:
         command = json.loads(payload).get("body", {}).get("commandLine", "")
-        prefix = "scriptevent mcbews:bridge_req "
+        prefix = "scriptevent mcbews:negotiate_v2 "
         if command.startswith(prefix):
-            request = json.loads(command[len(prefix) :])
-            content = json.dumps({"ok": True, "players": ["Alice"]}, separators=(",", ":"))
-            await websocket.push(
-                _player_frame(
-                    "MCBEWS_BRIDGE", f"MCBEWS|BRIDGE|{request['request_id']}|1/1|{content}"
-                )
-            )
+            parts = command[len(prefix) :].split("|")
+            if parts[0] == "MCBEWS2H":
+                # An MCBEWS/1 addon would answer the v1 bridge event, never this.
+                business_calls.append(parts[1])
 
     websocket.on_send = answer
-    task = asyncio.create_task(facade._on_connection(websocket))
-    await asyncio.wait_for(hook.connected.wait(), 2)
-    assert hook.state is not None
-    try:
-        selection = await bridge.ready(hook.state.id)
-        assert selection.version == "MCBEWS/1"
-        result = await bridge.request(hook.state.id, "get_player_snapshot", {"target": "Alice"})
-        assert result["result"] == {"ok": True, "players": ["Alice"]}
-        with pytest.raises(NegotiationError, match="unsupported v1 capability"):
-            await bridge.request(hook.state.id, "unknown", {})
-    finally:
-        await _stop(websocket, task)
+    task = asyncio.create_task(server._on_connection(websocket))
+    await asyncio.wait_for(task, 2)
+
+    assert len(business_calls) == 1
+    assert websocket.close_code == 1008
+    assert websocket.close_reason == "NEGOTIATION_TIMEOUT"
+    assert not hook.connected.is_set()
 
 
 @pytest.mark.asyncio
@@ -123,10 +118,8 @@ async def test_real_node_addon_negotiates_and_exchanges_v2() -> None:
     assert json.loads(await asyncio.wait_for(process.stdout.readline(), 5))["type"] == "ready"
     bridge = V2Bridge(negotiation_timeout_seconds=2)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
-    websocket = QueueWebSocket()
+    server = _server(hook, bridge)
+    websocket = QueueWebSocket(auto_negotiate=False)
 
     async def write(item: dict[str, Any]) -> None:
         assert process.stdin is not None
@@ -150,7 +143,7 @@ async def test_real_node_addon_negotiates_and_exchanges_v2() -> None:
 
     websocket.on_send = send
     reader = asyncio.create_task(read_node())
-    task = asyncio.create_task(facade._on_connection(websocket))
+    task = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
     assert hook.state is not None
     try:
@@ -173,59 +166,27 @@ async def test_real_node_addon_negotiates_and_exchanges_v2() -> None:
 
 
 @pytest.mark.asyncio
-async def test_absent_addon_does_not_block_chat_and_required_features_fail() -> None:
-    bridge = V2Bridge(negotiation_timeout_seconds=0.05)
-    hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
-    websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
-    await asyncio.wait_for(hook.connected.wait(), 2)
-    assert hook.state is not None
-    try:
-        await websocket.push(_player_frame("Alice", "ordinary chat"))
-        async with asyncio.timeout(1):
-            while not hook.messages:
-                await asyncio.sleep(0)
-        assert hook.messages[0].message == "ordinary chat"
-        selected = await bridge.ready(hook.state.id)
-        assert selected.version == "MCBEWS/1"
-        with pytest.raises(NegotiationError, match="metadata"):
-            await bridge.request(hook.state.id, "get_player_snapshot", {}, metadata={"x": 1})
-        with pytest.raises(NegotiationError, match="stream"):
-            await bridge.request(hook.state.id, "get_player_snapshot", {}, require={"stream/1"})
-    finally:
-        await _stop(websocket, task)
-
-
-@pytest.mark.asyncio
 async def test_unsupported_version_is_an_error_not_a_legacy_downgrade() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.2)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
-    websocket = QueueWebSocket()
+    server = _server(hook, bridge)
+    websocket = QueueWebSocket(auto_negotiate=False)
 
     async def answer(payload: str) -> None:
         command = json.loads(payload).get("body", {}).get("commandLine", "")
         prefix = "scriptevent mcbews:negotiate_v2 MCBEWS2H|"
         if command.startswith(prefix):
-            epoch = command[len(prefix) :]
+            attempt = command[len(prefix) :]
             await websocket.push(
-                _player_frame("MCBEWS_BRIDGE", f"MCBEWS2N|{epoch}|challenge|3|metadata/1")
+                _player_frame("MCBEWS_BRIDGE", f"MCBEWS2N|{attempt}|challenge|3|metadata/1")
             )
 
     websocket.on_send = answer
-    task = asyncio.create_task(facade._on_connection(websocket))
-    await asyncio.wait_for(hook.connected.wait(), 2)
-    assert hook.state is not None
-    try:
-        with pytest.raises(NegotiationError, match="unsupported protocol"):
-            await bridge.ready(hook.state.id)
-    finally:
-        await _stop(websocket, task)
+    task = asyncio.create_task(server._on_connection(websocket))
+    await asyncio.wait_for(task, 2)
+    assert websocket.close_code == 1008
+    assert websocket.close_reason == "UNSUPPORTED_PROTOCOL"
+    assert not hook.connected.is_set()
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
@@ -238,35 +199,31 @@ def test_negotiation_timeout_must_be_finite_and_positive(timeout: float) -> None
 async def test_discovery_respects_lower_command_budget() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.1)
     hook = RecordingHook()
-    settings = GatewaySettings(
-        dispatch=DispatchSettings(mode="reliable"),
+    server = _server(
+        hook,
+        bridge,
         flow=FlowControlSettings(command_line_byte_budget=30),
     )
-    facade = McbeServerFacade(v2=bridge, hook=hook, settings=settings)
-    websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
-    await asyncio.wait_for(hook.connected.wait(), 2)
-    assert hook.state is not None
-    try:
-        with pytest.raises(FrameTooLargeError):
-            await bridge.ready(hook.state.id)
-        assert all("mcbews:negotiate_v2" not in payload for payload in websocket.sent)
-    finally:
-        await _stop(websocket, task)
+    websocket = QueueWebSocket(auto_negotiate=False)
+    task = asyncio.create_task(server._on_connection(websocket))
+    await asyncio.wait_for(task, 2)
+    assert websocket.close_reason == "INVALID_NEGOTIATION"
+    assert not hook.connected.is_set()
+    assert all("mcbews:negotiate_v2" not in payload for payload in websocket.sent)
 
 
 @pytest.mark.asyncio
 async def test_stale_responses_unsolicited_and_fragments_are_ignored() -> None:
-    bridge = V2Bridge(negotiate=False, timeout_seconds=1)
+    bridge = V2Bridge(timeout_seconds=1)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
+    server = _server(hook, bridge)
     websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
+    task = asyncio.create_task(server._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)
     assert hook.state is not None
-    endpoint = bridge.activate(hook.state, epoch="current")
+    endpoint = bridge.connection(hook.state.id)
+    assert endpoint is not None
+    epoch = endpoint.epoch
     calls: list[str] = []
     delivered = asyncio.Event()
     outgoing: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -306,12 +263,12 @@ async def test_stale_responses_unsolicited_and_fragments_are_ignored() -> None:
             await websocket.push(_player_frame("MCBEWS_BRIDGE", frame))
         for frame in fragment(stale_notice, "a.previous.2", "up"):
             await websocket.push(_player_frame("MCBEWS_BRIDGE", frame))
-        for frame in fragment(fresh_notice, "a.current.3", "up"):
+        for frame in fragment(fresh_notice, f"a.{epoch}.3", "up"):
             await websocket.push(_player_frame("MCBEWS_BRIDGE", frame))
         await asyncio.wait_for(delivered.wait(), 2)
         assert calls == ["fresh"] and not pending.done()
         fresh_reply = {**stale_reply, "result": "fresh"}
-        for frame in fragment(fresh_reply, "a.current.4", "up"):
+        for frame in fragment(fresh_reply, f"a.{epoch}.4", "up"):
             await websocket.push(_player_frame("MCBEWS_BRIDGE", frame))
         assert (await asyncio.wait_for(pending, 2))["result"] == "fresh"
         assert bridge.pool.stats["buffers"] == 0
@@ -323,16 +280,14 @@ async def test_stale_responses_unsolicited_and_fragments_are_ignored() -> None:
 async def test_close_during_discovery_fails_waiter_and_clears_pending() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=1)
     hook = RecordingHook()
-    facade = McbeServerFacade(
-        v2=bridge, hook=hook, settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable"))
-    )
-    websocket = QueueWebSocket()
-    task = asyncio.create_task(facade._on_connection(websocket))
-    await asyncio.wait_for(hook.connected.wait(), 2)
-    assert hook.state is not None and hook.state.requests is not None
-    waiter = asyncio.create_task(bridge.ready(hook.state.id))
+    server = _server(hook, bridge)
+    websocket = QueueWebSocket(auto_negotiate=False)
+    task = asyncio.create_task(server._on_connection(websocket))
+    state = await _wait_for_state(server)
+    assert state.requests is not None
+    waiter = asyncio.create_task(bridge.ready(state.id))
     await asyncio.sleep(0)
     await _stop(websocket, task)
     with pytest.raises(RequestClosedError, match="closed"):
         await waiter
-    assert hook.state.requests.pending_count == 0
+    assert state.requests.pending_count == 0

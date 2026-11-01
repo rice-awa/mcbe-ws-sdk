@@ -1,7 +1,6 @@
 import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import { system } from "@minecraft/server";
 
-import { CAPABILITY_REQUEST_SCRIPT_EVENT_ID, MCBEWS_V1_ERROR_CODES } from "./protocol";
 import { createDefaultCapabilityRegistry, registerDefaultCapabilities } from "./capabilities";
 import type {
   CapabilityContext,
@@ -9,12 +8,11 @@ import type {
   CapabilityRegistration,
   RegisterCapabilityOptions,
 } from "./capabilityRegistry";
-import { utf8ByteLength } from "./chunking";
 import { MANIFEST as V2_MANIFEST } from "./v2/assets";
+import { matches } from "./v2/codec";
 import { V2Endpoint } from "./v2/runtime";
 import type { StreamHandler } from "./v2/streams";
 import { ReassemblyPool } from "./v2/transport";
-import { matches } from "./v2/codec";
 
 export type {
   CapabilityContext,
@@ -24,59 +22,15 @@ export type {
   RegisterCapabilityOptions,
 } from "./capabilityRegistry";
 
-// ---------------------------------------------------------------------------
-// Structured types
-// ---------------------------------------------------------------------------
-
-export type BridgeErrorCode = (typeof MCBEWS_V1_ERROR_CODES)[number];
-
-export type BridgeErrorResponse = {
-  ok: false;
-  error: { code: BridgeErrorCode; message: string };
-};
-
-export type BridgeSuccessResponse = {
-  ok: true;
-  result: Record<string, unknown>;
-};
-
-export type BridgeRequest = {
-  v: 1 | 2;
-  request_id: string;
-  capability: string;
-  payload: Record<string, unknown>;
-};
-
-export type ResponseSender = (requestId: string, jsonBody: string) => Promise<void>;
-
-export type ResponseSendOutcome =
-  | { requestId: string; ok: true; delivered: true }
-  | {
-      requestId: string;
-      ok: false;
-      delivered: false;
-      error: { code: "RESPONSE_SEND_FAILED"; message: string; errorType: string };
-    };
-
-type RouterEvent = Pick<ScriptEventCommandMessageAfterEvent, "id" | "message" | "sourceType">;
-
-type ParseResult =
-  { ok: true; request: BridgeRequest } | { ok: false; requestId?: string; response: BridgeErrorResponse };
-
-// ---------------------------------------------------------------------------
-// Module state
-// ---------------------------------------------------------------------------
+/** Script-event namespace owned by this bridge; anything else is not ours. */
+const PROTOCOL_EVENT_NAMESPACE = "mcbews:";
 
 let isBridgeRouterRegistered = false;
-let capabilityHandler: CapabilityHandler | null = null;
 const capabilityRegistry = createDefaultCapabilityRegistry();
-let responseSender: ResponseSender | null = null;
 let bridgeActive = false;
-const preReadyQueue: RouterEvent[] = [];
-let processingTail: Promise<void> = Promise.resolve();
-let lastResponseSendOutcome: ResponseSendOutcome | null = null;
-let activePending = 0;
-let droppedActiveRequests = 0;
+let v2Sender: ((frame: string) => Promise<void>) | null = null;
+let pendingV2Hello: string | null = null;
+
 const v2Pool = new ReassemblyPool();
 const v2StreamHandlers = new Map<string, StreamHandler>();
 type V2Peer = { endpoint: V2Endpoint; expires: number };
@@ -93,157 +47,43 @@ const v2TokenSeed =
 let v2TokenSequence = 0;
 let v2ControlSends = 0;
 let v2Pruner: number | null = null;
-let v2Sender: ((frame: string) => Promise<void>) | null = null;
-let pendingV2Hello: string | null = null;
 
 export const V2_MAX_PEERS = V2_MANIFEST.negotiation.max_peers;
 export const V2_MAX_CHALLENGES = V2_MANIFEST.negotiation.max_challenges;
 export const V2_LEASE_MS = V2_MANIFEST.negotiation.lease_ms;
 const V2_CHALLENGE_MS = V2_MANIFEST.negotiation.challenge_ms;
 const V2_MAX_CONTROL_SENDS = V2_MANIFEST.negotiation.max_control_sends;
-
-export const MAX_PRE_READY_REQUESTS = 64;
-export const MAX_ACTIVE_REQUESTS = 64;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-function invalidRequest(requestId?: string): ParseResult {
-  return {
-    ok: false,
-    requestId,
-    response: { ok: false, error: { code: "INVALID_REQUEST", message: "invalid bridge request" } },
-  };
-}
+const V2_HELLO_PATTERN = /^MCBEWS2H\|([A-Za-z0-9_-]{1,24})$/;
 
 function logUnexpectedRouterFailure(error: unknown): void {
   console.error("[bridge] unexpected router failure", error instanceof Error ? error.constructor.name : typeof error);
 }
 
-function recordResponseSendFailure(requestId: string, errorType = "send_failure"): ResponseSendOutcome {
-  const outcome: ResponseSendOutcome = {
-    requestId,
-    ok: false,
-    delivered: false,
-    error: {
-      code: "RESPONSE_SEND_FAILED",
-      message: "bridge response sender failed",
-      errorType,
-    },
-  };
-  lastResponseSendOutcome = outcome;
-  return outcome;
+function logUnsupportedEvent(event: ScriptEventCommandMessageAfterEvent): void {
+  console.warn(
+    `[bridge] rejected unsupported protocol event: expected=MCBEWS/2, reason=UNSUPPORTED_PROTOCOL, event=${event.id}`
+  );
 }
 
-function recordResponseSent(requestId: string): ResponseSendOutcome {
-  const outcome: ResponseSendOutcome = { requestId, ok: true, delivered: true };
-  lastResponseSendOutcome = outcome;
-  return outcome;
-}
-
-// ---------------------------------------------------------------------------
-// shouldHandleScriptEvent
-// ---------------------------------------------------------------------------
-
-export function shouldHandleScriptEvent(messageId: string): boolean {
-  return messageId === CAPABILITY_REQUEST_SCRIPT_EVENT_ID;
-}
-
-// ---------------------------------------------------------------------------
-// parseBridgeRequest
-// ---------------------------------------------------------------------------
-
-export function parseBridgeRequest(message: string): ParseResult {
-  let value: unknown;
-  try {
-    value = JSON.parse(message);
-  } catch {
-    return {
-      ok: false,
-      response: { ok: false, error: { code: "MALFORMED_JSON", message: "invalid JSON" } },
-    };
-  }
-  const requestId =
-    isRecord(value) && typeof value.request_id === "string" && value.request_id.trim() ? value.request_id : undefined;
-  if (!isRecord(value)) {
-    return invalidRequest(requestId);
-  }
-  const rawVersion = value.v ?? 1;
-  if (rawVersion !== 1 && rawVersion !== 2) {
-    return {
-      ok: false,
-      requestId,
-      response: {
-        ok: false,
-        error: { code: "UNSUPPORTED_VERSION", message: "unsupported bridge version" },
-      },
-    };
-  }
-  if (
-    !requestId ||
-    typeof value.capability !== "string" ||
-    !value.capability.trim() ||
-    (value.payload !== undefined && !isRecord(value.payload))
-  ) {
-    return invalidRequest(requestId);
-  }
-  return {
-    ok: true,
-    request: {
-      v: rawVersion,
-      request_id: requestId,
-      capability: value.capability,
-      payload: value.payload ?? {},
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Pre-ready state machine
-// ---------------------------------------------------------------------------
-
-function extractRequestId(message: string): string | undefined {
-  const parsed = parseBridgeRequest(message);
-  return parsed.ok ? parsed.request.request_id : parsed.requestId;
-}
-
-function schedule(event: RouterEvent): void {
-  if (activePending >= MAX_ACTIVE_REQUESTS) {
-    droppedActiveRequests += 1;
-    const requestId = extractRequestId(event.message);
-    console.warn(
-      `[bridge] active queue full: code=BRIDGE_ACTIVE_QUEUE_FULL, requestId=${requestId ?? "unknown"}, ` +
-        `activePending=${activePending}`
-    );
-    return;
-  }
-  activePending += 1;
-  processingTail = processingTail
-    .then(async () => {
-      try {
-        await handleBridgeScriptEvent(event);
-      } finally {
-        activePending -= 1;
-      }
-    })
-    .catch(logUnexpectedRouterFailure);
-}
-
+/**
+ * Accept the transport's script events.
+ *
+ * Before {@link activateBridge} only one sanitized hello is retained; business
+ * frames are dropped without buffering. After activation, control frames drive
+ * MCBEWS/2 negotiation and carrier frames route to an admitted peer by epoch.
+ */
 export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): void {
   if (event.id === V2_MANIFEST.negotiation.event) {
     if (event.message.length > 100) return;
     if (!bridgeActive) {
-      const match = /^MCBEWS2H\|([A-Za-z0-9_-]{1,24})$/.exec(event.message);
+      const match = V2_HELLO_PATTERN.exec(event.message);
       if (match) pendingV2Hello = match[1];
-    } else {
-      handleV2Control(event.message);
+      return;
     }
+    handleV2Control(event.message);
     return;
   }
+
   if (event.id === V2_MANIFEST.carrier.event) {
     if (!bridgeActive) return;
     pruneV2Peers();
@@ -255,63 +95,33 @@ export function enqueueOrHandle(event: ScriptEventCommandMessageAfterEvent): voi
     }
     return;
   }
-  if (!shouldHandleScriptEvent(event.id)) return;
 
-  // IMPORTANT: /wsserver commandRequest-scriptevent does NOT always arrive as
-  // sourceType === "Server". In practice Bedrock may tag it as Entity (bound to
-  // the connecting player). The parent MCBE-AI-Agent-addon accepts any source;
-  // filtering Server-only causes silent drops → Python 5s bridge timeout even
-  // though statusMessage says "Script event ... has been sent".
-  //
-  // We still log non-Server sources so real player-typed /scriptevent spam is
-  // visible, but we do not drop them — the request carries a random request_id
-  // and only resolves a pending Python future if it matches.
-  if (event.sourceType !== "Server") {
-    console.warn(
-      `[bridge] accepting non-Server scriptevent: channel=capability, sourceType=${event.sourceType}, ` +
-        `bytes=${utf8ByteLength(event.message)}`
-    );
-  }
-
-  const snapshot: RouterEvent = {
-    id: event.id,
-    message: event.message,
-    sourceType: event.sourceType,
-  };
-  if (!bridgeActive) {
-    if (preReadyQueue.length >= MAX_PRE_READY_REQUESTS) {
-      console.warn("[bridge] pre-ready queue full: code=BRIDGE_NOT_READY_QUEUE_FULL");
-      return;
-    }
-    console.warn(
-      `[bridge] queue pre-ready request: channel=capability, queueSize=${preReadyQueue.length + 1}, ` +
-        `sourceType=${event.sourceType}, bytes=${utf8ByteLength(event.message)}`
-    );
-    preReadyQueue.push(snapshot);
+  if (event.id === V2_MANIFEST.admission.reject_notice) {
+    // The server classified this session as unusable. The reason is the
+    // manifest's admission token; never echo it back.
+    console.warn(`[bridge] admission rejected by server: reason=${event.message} expected=MCBEWS/2`);
     return;
   }
-  console.log(
-    `[bridge] accept scriptevent: channel=capability, sourceType=${event.sourceType}, ` +
-      `bytes=${utf8ByteLength(event.message)}`
-  );
-  schedule(snapshot);
+
+  // Any other event in the bridge namespace is a retired or unknown protocol
+  // message. Log it by id without decoding, answering, or dispatching it.
+  if (event.id.startsWith(PROTOCOL_EVENT_NAMESPACE)) {
+    logUnsupportedEvent(event);
+  }
 }
 
-export async function activateBridge(sender: ResponseSender, sendV2?: (frame: string) => Promise<void>): Promise<void> {
+/**
+ * Open the world-ready gate and adopt the retained hello, if any.
+ *
+ * No business event is replayed: anything that arrived earlier was dropped.
+ */
+export async function activateBridge(sendV2Frame: (frame: string) => Promise<void>): Promise<void> {
   if (bridgeActive) return;
-  responseSender = sender;
-  v2Sender = sendV2 ?? null;
+  v2Sender = sendV2Frame;
   bridgeActive = true;
-  if (pendingV2Hello) {
-    const epoch = pendingV2Hello;
-    pendingV2Hello = null;
-    handleV2Control(`${V2_MANIFEST.negotiation.hello_prefix}|${epoch}`);
-  }
-  while (preReadyQueue.length > 0) {
-    const event = preReadyQueue.shift();
-    if (event) schedule(event);
-  }
-  await processingTail;
+  const attempt = pendingV2Hello;
+  pendingV2Hello = null;
+  if (attempt) handleV2Control(`${V2_MANIFEST.negotiation.hello_prefix}|${attempt}`);
 }
 
 function sendV2Control(frame: string, onFailure?: () => void): boolean {
@@ -400,7 +210,7 @@ function handleV2Control(frame: string): void {
     const epoch = challenge.epoch;
     const send = v2Sender;
     if (!send) return;
-    activateV2Bridge(epoch, send);
+    createV2Peer(epoch, send);
     if (!sendV2Control(`MCBEWS2N|${attempt}|${epoch}|ready`, () => retireV2Peer(epoch))) retireV2Peer(epoch);
     return;
   }
@@ -431,8 +241,13 @@ export function registerV2Stream(name: string, handler: StreamHandler): () => vo
   };
 }
 
-/** Activate an explicitly agreed v2 epoch without changing the legacy router. */
-export function activateV2Bridge(epoch: string, send: (frame: string) => Promise<void>): V2Endpoint {
+/**
+ * Create and admit a negotiated peer.
+ *
+ * Callers reach this only through a fresh challenge/confirmation pair; there is
+ * no exported manual-activation path.
+ */
+function createV2Peer(epoch: string, send: (frame: string) => Promise<void>): V2Endpoint {
   pruneV2Peers();
   if (v2Peers.has(epoch) || v2Peers.size >= V2_MAX_PEERS) throw new Error("v2 peer limit or duplicate epoch");
   const endpoint = new V2Endpoint({
@@ -448,32 +263,10 @@ export function activateV2Bridge(epoch: string, send: (frame: string) => Promise
       const handle = system.runTimeout(callback, Math.max(1, Math.ceil(milliseconds / 50)));
       return () => system.clearRun(handle);
     },
-    dispatch: async (method, payload, context) => {
-      if (!capabilityHandler) return capabilityRegistry.dispatch(method, payload, context);
-      try {
-        return await capabilityHandler(method, payload, context);
-      } catch {
-        return { ok: false, error: { code: "CAPABILITY_FAILED", message: "capability handler failed" } };
-      }
-    },
   });
   v2Peers.set(epoch, { endpoint, expires: Date.now() + V2_LEASE_MS });
   if (v2Pruner === null) v2Pruner = system.runInterval(pruneV2Peers, 100);
   return endpoint;
-}
-
-// ---------------------------------------------------------------------------
-// setCapabilityHandler
-// ---------------------------------------------------------------------------
-
-/**
- * Replace the built-in registry with one aggregate handler (legacy entry).
- *
- * While set, every capability goes to this handler and the built-in defaults
- * are not consulted. Call with a fresh reset to return to the registry path.
- */
-export function setCapabilityHandler(fn: CapabilityHandler): void {
-  capabilityHandler = fn;
 }
 
 /** Register a capability alongside the built-ins without editing the router. */
@@ -490,85 +283,7 @@ export function unregisterCapability(registration: CapabilityRegistration): bool
   return capabilityRegistry.unregister(registration);
 }
 
-// ---------------------------------------------------------------------------
-// handleBridgeScriptEvent
-// ---------------------------------------------------------------------------
-
-export async function handleBridgeScriptEvent(event: RouterEvent): Promise<ResponseSendOutcome | null> {
-  // Do not re-filter sourceType here — enqueueOrHandle already decided to accept.
-  // A second Server-only gate would drop WS-originated Entity events after queueing.
-
-  const parsed = parseBridgeRequest(event.message);
-  if (!parsed.ok) {
-    if (parsed.requestId && responseSender) {
-      try {
-        await responseSender(parsed.requestId, JSON.stringify(parsed.response));
-        return recordResponseSent(parsed.requestId);
-      } catch (error) {
-        console.error(
-          `[bridge] response sender failed: channel=capability, requestId=${parsed.requestId}, ` +
-            `errorType=${error instanceof Error ? error.constructor.name : typeof error}`
-        );
-        return recordResponseSendFailure(
-          parsed.requestId,
-          error instanceof Error ? error.constructor.name : typeof error
-        );
-      }
-    }
-    return null;
-  }
-
-  const { request } = parsed;
-
-  let resultPayload: Record<string, unknown>;
-  const context: CapabilityContext = {
-    caller: { kind: "server" },
-    requestVersion: request.v,
-  };
-
-  if (capabilityHandler) {
-    try {
-      resultPayload = await capabilityHandler(request.capability, request.payload, context);
-    } catch {
-      resultPayload = {
-        ok: false,
-        error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
-      };
-    }
-  } else {
-    resultPayload = await capabilityRegistry.dispatch(request.capability, request.payload, context);
-  }
-
-  if (responseSender) {
-    try {
-      const body = JSON.stringify(resultPayload);
-      console.log(
-        `[bridge] send response: channel=capability, requestId=${request.request_id}, ` +
-          `bytes=${utf8ByteLength(body)}`
-      );
-      await responseSender(request.request_id, body);
-      console.log(`[bridge] response sent: channel=capability, requestId=${request.request_id}`);
-      return recordResponseSent(request.request_id);
-    } catch (error) {
-      console.error(
-        `[bridge] response sender failed: channel=capability, requestId=${request.request_id}, ` +
-          `errorType=${error instanceof Error ? error.constructor.name : typeof error}`
-      );
-      return recordResponseSendFailure(
-        request.request_id,
-        error instanceof Error ? error.constructor.name : typeof error
-      );
-    }
-  } else {
-    console.warn(`[bridge] no responseSender: channel=capability, requestId=${request.request_id}`);
-    return recordResponseSendFailure(request.request_id, "missing_response_sender");
-  }
-}
-
-// ---------------------------------------------------------------------------
-// registerBridgeRouter
-// ---------------------------------------------------------------------------
-
+/** Subscribe the script-event router once per Bedrock script host. */
 export function registerBridgeRouter(): void {
   if (isBridgeRouterRegistered) return;
   isBridgeRouterRegistered = true;
@@ -582,48 +297,31 @@ export function registerBridgeRouter(): void {
 // ---------------------------------------------------------------------------
 
 /** @internal */
-export function _testingGetQueueSize(): number {
-  return preReadyQueue.length;
+export function _testingGetPendingHello(): string | null {
+  return pendingV2Hello;
 }
 
 /** @internal */
-export function _testingGetActiveQueueSize(): number {
-  return activePending;
+export function _testingGetPeerCount(): number {
+  return v2Peers.size;
 }
 
 /** @internal */
-export function _testingGetDroppedCount(): number {
-  return droppedActiveRequests;
-}
-
-/** @internal */
-export function _testingFlush(): Promise<void> {
-  return processingTail;
-}
-
-/** @internal */
-export function _testingGetLastResponseSendOutcome(): ResponseSendOutcome | null {
-  return lastResponseSendOutcome;
+export async function _testingFlush(): Promise<void> {
+  await Promise.allSettled([...v2Peers.values()].map((peer) => peer.endpoint.drain()));
 }
 
 /** @internal */
 export function _testingReset(): void {
-  for (const epoch of v2Peers.keys()) retireV2Peer(epoch);
+  for (const epoch of [...v2Peers.keys()]) retireV2Peer(epoch);
   v2Challenges.clear();
   v2StreamHandlers.clear();
   if (v2Pruner !== null) system.clearRun(v2Pruner);
   v2Pruner = null;
   v2Sender = null;
   pendingV2Hello = null;
-  preReadyQueue.length = 0;
-  responseSender = null;
-  capabilityHandler = null;
   capabilityRegistry.clear();
   registerDefaultCapabilities(capabilityRegistry);
   bridgeActive = false;
   isBridgeRouterRegistered = false;
-  processingTail = Promise.resolve();
-  lastResponseSendOutcome = null;
-  activePending = 0;
-  droppedActiveRequests = 0;
 }

@@ -19,12 +19,13 @@ jobs:
       - run: npm ci
         working-directory: addon
       - run: pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q
-      - run: python tools/generate_protocol_assets.py --check
-      - run: python tools/check_protocol_names.py
       - run: python tools/generate_v2_assets.py --check
-      - run: ruff check --no-cache src tests examples
+      - run: python tools/check_protocol_names.py
+      - run: ruff check --no-cache src tests examples tools
       - run: mypy --no-incremental src
-      - run: cp .env.example .env && npm test && npm run lint && npm run typecheck && npm run build:production
+      - run: >-
+          cp .env.example .env && npm test && npm run lint && npm run typecheck
+          && npm run build:production && npm run build:demo && npm run mcaddon:demo
         working-directory: addon
       - name: Verify tag matches package version
         env: {TAG: "${{ github.ref_name }}"}

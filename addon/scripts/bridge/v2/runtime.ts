@@ -5,6 +5,8 @@ import type {
   V2CapabilityClient,
   V2RequestOptions,
 } from "../capabilityRegistry";
+import { utf8ByteLength } from "../chunking";
+import { MAX_ERROR_MESSAGE_BYTES } from "../constants";
 import { isObject, Message, V2ProtocolError } from "./codec";
 import { fragment, ReassemblyPool } from "./transport";
 import { MANIFEST } from "./assets";
@@ -12,6 +14,31 @@ import { IncomingStream, StreamHandler, StreamLimits, StreamManager } from "./st
 
 type Timeout = (callback: () => void, milliseconds?: number) => () => void;
 type Pending = { resolve: (value: Message) => void; reject: (reason: unknown) => void };
+
+const FAILURE_CODES: Record<string, { code: string; fallback: string }> = {
+  UNSUPPORTED_CAPABILITY: { code: "UNSUPPORTED_METHOD", fallback: "unsupported capability" },
+  INVALID_REQUEST: { code: "INVALID_PARAMS", fallback: "invalid parameters" },
+  CAPABILITY_FAILED: { code: "HANDLER_FAILED", fallback: "capability failed" },
+};
+
+/**
+ * Keep a handler-supplied detail within the wire limit without splitting a
+ * Unicode scalar value or leaking a lone surrogate.
+ */
+function boundedErrorDetail(value: unknown, fallback: string): string {
+  if (typeof value !== "string" || !value) return fallback;
+  let detail = "";
+  let bytes = 0;
+  for (const symbol of value) {
+    const codePoint = symbol.codePointAt(0)!;
+    const safe = codePoint >= 0xd800 && codePoint <= 0xdfff ? "\uFFFD" : symbol;
+    const size = utf8ByteLength(safe);
+    if (bytes + size > MAX_ERROR_MESSAGE_BYTES) break;
+    detail += safe;
+    bytes += size;
+  }
+  return detail || fallback;
+}
 
 export type V2EndpointOptions = {
   epoch: string;
@@ -209,14 +236,9 @@ export class V2Endpoint implements V2CapabilityClient {
       : await this.options.registry.dispatch(message.method as string, message.params, context);
     if (message.kind === "notification" || this.closed) return;
     if (result.ok === false && isObject(result.error)) {
-      const codes: Record<string, string> = {
-        UNSUPPORTED_CAPABILITY: "UNSUPPORTED_METHOD",
-        INVALID_REQUEST: "INVALID_PARAMS",
-        CAPABILITY_FAILED: "HANDLER_FAILED",
-      };
-      const code = codes[String(result.error.code)];
-      if (code) {
-        await this.replyError(message, code, "capability failed");
+      const failure = FAILURE_CODES[String(result.error.code)];
+      if (failure) {
+        await this.replyError(message, failure.code, boundedErrorDetail(result.error.message, failure.fallback));
         return;
       }
     }

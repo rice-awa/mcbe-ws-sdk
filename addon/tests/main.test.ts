@@ -1,7 +1,13 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { BRIDGE_REQUEST_MESSAGE_ID } from "../scripts/bridge/constants";
-import { MAX_PRE_READY_REQUESTS } from "../scripts/bridge/router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MANIFEST } from "../scripts/bridge/v2/assets";
+import { fragment, ReassemblyPool } from "../scripts/bridge/v2/transport";
 
+type RouterHarness = {
+  _testingReset: () => void;
+  _testingFlush: () => Promise<void>;
+  _testingGetPendingHello: () => string | null;
+  registerCapability: (name: string, handler: () => Record<string, unknown>) => unknown;
+};
 type MainHarness = Awaited<ReturnType<typeof loadMainHarness>>;
 let harness: MainHarness;
 
@@ -10,14 +16,14 @@ async function loadMainHarness() {
   const minecraft = await import("@minecraft/server");
   const gametest = await import("@minecraft/server-gametest");
   minecraft.resetMinecraftMocks();
-  const testing = await import("../scripts/bridge/testing");
-  await testing.resetBridgeRouterForTests();
+  const router = (await import("../scripts/bridge/router")) as unknown as RouterHarness;
+  router._testingReset();
   await import("../scripts/main");
   const runCommand = vi.fn(async () => undefined);
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   minecraft.world.getAllPlayers.mockReturnValue([
     {
-      name: "MCBEWS_BRIDGE",
+      name: MANIFEST.carrier.trusted_player,
       runCommand,
       id: "tool1",
       location: { x: 0, y: 0, z: 0 },
@@ -27,15 +33,40 @@ async function loadMainHarness() {
       getGameMode: vi.fn(),
     },
   ]);
-  return { minecraft, gametest, testing, runCommand, warnSpy };
+  return { minecraft, gametest, router, runCommand, warnSpy };
 }
 
-function serverEvent(message: string) {
-  return { id: BRIDGE_REQUEST_MESSAGE_ID, sourceType: "Server", message };
+function emittedFrames(runCommand: ReturnType<typeof vi.fn>): string[] {
+  return runCommand.mock.calls
+    .map((call) => String(call[0]))
+    .filter((command) => command.startsWith("tell @s "))
+    .map((command) => command.slice("tell @s ".length));
 }
 
-function v2Request(id: string): string {
-  return JSON.stringify({ v: 2, request_id: id, capability: "missing", payload: {} });
+function controlFrame(frame: string, message: string): void {
+  harness.minecraft.system.afterEvents.scriptEventReceive.emit({
+    id: frame,
+    sourceType: "Server",
+    message,
+  });
+}
+
+async function negotiate(attempt = "first"): Promise<string> {
+  controlFrame(MANIFEST.negotiation.event, `MCBEWS2H|${attempt}`);
+  const challenge = emittedFrames(harness.runCommand)
+    .filter((frame) => frame.startsWith(`MCBEWS2N|${attempt}|`))
+    .pop();
+  expect(challenge).toBeDefined();
+  const epoch = challenge!.split("|")[2];
+  controlFrame(MANIFEST.negotiation.event, `MCBEWS2C|${attempt}|${epoch}`);
+  expect(emittedFrames(harness.runCommand).pop()).toBe(`MCBEWS2N|${attempt}|${epoch}|ready`);
+  return epoch;
+}
+
+function sendV2(epoch: string, message: Record<string, unknown>, tid: string): void {
+  for (const frame of fragment(message, tid, "down")) {
+    controlFrame(MANIFEST.carrier.event, frame);
+  }
 }
 
 beforeEach(async () => {
@@ -43,54 +74,65 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await harness.testing.flushRouter();
-  await harness.testing.resetBridgeRouterForTests();
+  await harness.router._testingFlush();
+  harness.router._testingReset();
   harness.minecraft.resetMinecraftMocks();
   harness.warnSpy.mockRestore();
 });
 
-it("turns an unsupported Server request into a response tell", async () => {
-  harness.minecraft.world.afterEvents.worldLoad.emit({});
-  harness.minecraft.system.afterEvents.scriptEventReceive.emit({
-    id: BRIDGE_REQUEST_MESSAGE_ID,
-    sourceType: "Server",
-    message: JSON.stringify({ v: 2, request_id: "r1", capability: "missing", payload: {} }),
+describe("addon entry", () => {
+  it("holds an early hello, then negotiates and answers a capability request", async () => {
+    controlFrame(MANIFEST.negotiation.event, "MCBEWS2H|first");
+    expect(harness.router._testingGetPendingHello()).toBe("first");
+    expect(harness.runCommand).not.toHaveBeenCalled();
+
+    harness.minecraft.world.afterEvents.worldLoad.emit({});
+    const epoch = await negotiate();
+    harness.router.registerCapability("main_probe", () => ({ wired: true }));
+
+    sendV2(
+      epoch,
+      { v: "MCBEWS/2", kind: "request", id: `p.${epoch}.1`, method: "main_probe", params: {} },
+      `p.${epoch}.1`
+    );
+    await harness.router._testingFlush();
+
+    const pool = new ReassemblyPool();
+    const response = emittedFrames(harness.runCommand)
+      .filter((frame) => frame.startsWith("MCBEWS2|"))
+      .map((frame) => pool.receive("c", "s", frame, "up"))
+      .find((message) => message !== null);
+    expect(response).toEqual({
+      v: "MCBEWS/2",
+      kind: "response",
+      id: `p.${epoch}.1`,
+      result: { wired: true },
+      meta: {},
+    });
   });
-  await harness.testing.flushRouter();
-  expect(harness.runCommand).toHaveBeenCalledWith(expect.stringContaining("tell @s MCBEWS|BRIDGE|r1|"));
-});
 
-it("queues a pre-ready request and responds after activation", async () => {
-  harness.minecraft.system.afterEvents.scriptEventReceive.emit(serverEvent(v2Request("early")));
-  expect(harness.runCommand).not.toHaveBeenCalled();
-  expect(harness.testing.getPreReadyQueueSize()).toBe(1);
-  harness.minecraft.world.afterEvents.worldLoad.emit({});
-  await harness.testing.flushRouter();
-  expect(harness.runCommand).toHaveBeenCalledWith(expect.stringContaining("tell @s MCBEWS|BRIDGE|early|"));
-  expect(harness.testing.getPreReadyQueueSize()).toBe(0);
-});
+  it("drops a pre-activation business frame instead of buffering it", async () => {
+    const epoch = "early";
+    sendV2(epoch, { v: "MCBEWS/2", kind: "notification", method: "get_player_snapshot", params: {} }, `p.${epoch}.1`);
+    expect(harness.router._testingGetPendingHello()).toBeNull();
 
-it("bounds the pre-ready queue", async () => {
-  for (let index = 0; index < MAX_PRE_READY_REQUESTS + 10; index += 1) {
-    harness.minecraft.system.afterEvents.scriptEventReceive.emit(serverEvent(v2Request(`r-${index}`)));
-  }
-  expect(harness.testing.getPreReadyQueueSize()).toBe(MAX_PRE_READY_REQUESTS);
-  expect(harness.runCommand).not.toHaveBeenCalled();
-  expect(harness.warnSpy).toHaveBeenCalledWith(expect.stringContaining("BRIDGE_NOT_READY_QUEUE_FULL"));
-  harness.minecraft.world.afterEvents.worldLoad.emit({});
-  await harness.testing.flushRouter();
-  expect(harness.runCommand).toHaveBeenCalledTimes(MAX_PRE_READY_REQUESTS);
-  expect(harness.runCommand).not.toHaveBeenCalledWith(expect.stringContaining("MCBEWS|BRIDGE|r-64|"));
-});
+    harness.minecraft.world.afterEvents.worldLoad.emit({});
+    await harness.router._testingFlush();
 
-it("does not activate or execute handlers when tool initialization fails", async () => {
-  harness.minecraft.world.getAllPlayers.mockReturnValue([]);
-  harness.gametest.spawnSimulatedPlayer.mockImplementationOnce(() => {
-    throw new Error("world not ready");
+    expect(emittedFrames(harness.runCommand).some((frame) => frame.startsWith("MCBEWS2|"))).toBe(false);
+    expect(harness.runCommand).not.toHaveBeenCalled();
   });
-  harness.minecraft.system.afterEvents.scriptEventReceive.emit(serverEvent(v2Request("retry")));
-  harness.minecraft.world.afterEvents.worldLoad.emit({});
-  await Promise.resolve();
-  expect(harness.runCommand).not.toHaveBeenCalled();
-  expect(harness.testing.getPreReadyQueueSize()).toBe(1);
+
+  it("keeps the gate closed when tool initialization fails", async () => {
+    harness.minecraft.world.getAllPlayers.mockReturnValue([]);
+    harness.gametest.spawnSimulatedPlayer.mockImplementationOnce(() => {
+      throw new Error("world not ready");
+    });
+    controlFrame(MANIFEST.negotiation.event, "MCBEWS2H|retry");
+    harness.minecraft.world.afterEvents.worldLoad.emit({});
+    await Promise.resolve();
+
+    expect(harness.runCommand).not.toHaveBeenCalled();
+    expect(harness.router._testingGetPendingHello()).toBe("retry");
+  });
 });

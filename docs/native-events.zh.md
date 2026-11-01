@@ -1,18 +1,16 @@
 # 原生事件与业务拦截
 
-本文描述尚未发布的当前源码；PyPI `0.2.1` 不包含本轮新增接口。
-安装与兼容说明见[迁移指南](migration.md)。
-
-新入口 `McbeServer` 默认启用可靠调度。旧入口需要显式设置
-`DispatchSettings(mode="reliable")`，其默认构造与串行回调顺序不变。
-`PlayerMessage` 继续使用类型化钩子；其他原生事件按名称透传，无需向 `WsEventType` 添加成员。
+`McbeServer` 为每条连接使用受管理业务队列，因此原生事件订阅始终可用。
+`PlayerMessage` 继续使用类型化钩子；其他原生事件按名称透传，无需向 `WsEventType`
+添加成员。
 
 ## 连接内订阅
 
 在 `on_connected` 等受管理回调中注册观察者与拦截器：
 
 ```python
-from mcbe_ws_sdk import McbeServer, NoOpHook, NativeEvent, InterceptResult
+from mcbe_ws_sdk import InterceptResult, McbeServer, NativeEvent, NoOpHook
+
 
 class Hook(NoOpHook):
     async def on_connected(self, state):
@@ -25,13 +23,17 @@ class Hook(NoOpHook):
     def filter_message(self, event: NativeEvent):
         return InterceptResult("allow")
 
+
 server = McbeServer(hook=Hook())
 ```
 
-其他事件传入精确的原生名称，可实现可选的 `NativeEventHook.on_native_event(state, event)`
+其他事件传入精确的原生名称，也可实现可选的 `NativeEventHook.on_native_event(state, event)`
 作为业务入口。`NativeEvent.packet` 保留完整的 `header`、`body` 与扩展字段；
 每个回调收到独立副本。`PlayerMessage` 的 `parsed` 参数基于最终放行的消息计算。
-现有类型化钩子无需适配；旧 UI 三参数回调仍须显式使用 `LegacyUiChatHookAdapter`。
+五个生命周期钩子分别是 `on_connected`、`on_disconnected`、`on_player_message`、
+`on_command_response`、`on_error`。
+
+## 生命周期与顺序
 
 - 每次注册返回独立令牌，同一函数重复注册也分别计数。
   `await state.native_events.unsubscribe(token)` 仅移除该次注册。

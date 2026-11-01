@@ -1,98 +1,101 @@
 # Addon capability server
 
-This example uses `McbeServer` from the **unreleased checkout**, not PyPI
-`0.2.1`. The SDK manages callbacks, request waiters, timeouts and fragments;
-hooks await command/capability calls directly.
+A `McbeServer` host that calls the companion addon through `V2Bridge`. It shows
+capability requests, metadata, notifications and streams while the SDK owns
+admission, callbacks, request waiters, timeouts and fragments.
 
-## Run
+## Build the addon
 
-From the repository root:
+Basic package, with the two read-only snapshots:
 
 ```bash
-pip install -e ".[dev]"
 cd addon
 npm install
 npm run build
 npm run mcaddon
 ```
 
+Complete demo package, required for `!echo`, `!stream`, `!stream-cancel` and
+`!cmd`:
+
+```bash
+npm run build:demo
+npm run mcaddon:demo
+```
+
 Import the generated `.mcaddon`. In the target world's settings enable
 **Experiments → Beta APIs** and activate its behavior pack. Without Beta APIs,
-scripts do not load and capability requests time out. See
+scripts do not load and admission times out. See
 [addon setup](../../addon/README.md#enable-in-a-world).
 
-From the repository root, start Python:
+The demo build bundles `addon/scripts/main.demo.ts` and calls
+`registerDemoCapabilities()`; you do not copy files into the addon by hand.
+`demoCapabilities.ts` is the shared registration source for `demo.echo`, the
+`demo.ticks` stream and the restricted `run_world_command` handler.
+
+## Run
+
+From the repository root:
 
 ```bash
 python examples/addon-server/server.py
 python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DEBUG
 ```
 
-In game: `/wsserver <python-host-ip>:8080`. Use a LAN IP for another device,
+In game, run `/wsserver <python-host-ip>:8080`. Use a LAN IP for another device,
 allow the listening port through the firewall, and stop Python with `Ctrl+C`.
+Add `--log-raw` only when you deliberately want full packet payloads in logs.
 
-| Chat command | Action |
-| --- | --- |
-| `!player [target]` | `get_player_snapshot`, current player by default |
-| `!inv [target]` | `get_inventory_snapshot` |
-| `!wscmd <command>` | Native `state.command_client.run`, no addon needed |
-| `!cmd <command>` | Addon `run_world_command`, separately enabled handler required |
-| `!echo <text>` | Custom `demo.echo`, with custom metadata |
-| `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) |
-| `!stream-cancel [count]` | Consume an unbounded producer, then cancel after count items (default 3) |
-| `!help` | Show command help |
+## Input rule
 
-## Install the optional demo handlers
+Only messages whose trimmed text starts with ASCII `!` are handled. Empty or
+whitespace input, ordinary chat, bare `help` / `帮助`, mid-sentence `!` and
+full-width `！` are silent: no reply, no command, no capability or stream call.
+A bare `!` returns one usage hint; an unknown `!command` returns one hint.
+Prefixed Chinese aliases remain. SDK protocol frames and native events are not
+filtered by this rule.
 
-Inventory and player snapshots use the built-ins. Custom echo and streams need
-the included registration module in your addon composition:
+## Commands
 
-1. Copy `examples/addon-server/capabilities.ts` to `addon/scripts/demoCapabilities.ts`.
-2. In `addon/scripts/main.ts`, import and call the registration once during setup:
+| Chat command | Action | Package |
+| --- | --- | --- |
+| `!player [target]` / `!玩家` | `get_player_snapshot`, current player by default | Basic |
+| `!inv [target]` / `!背包` | `get_inventory_snapshot` | Basic |
+| `!wscmd <command>` / `!ws命令` | Native `command_client.run`, no addon capability needed | Basic |
+| `!cmd <command>` / `!命令` | `run_world_command`, restricted | Demo |
+| `!echo <text>` | `demo.echo`, with `example.label` and `example.player` metadata | Demo |
+| `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) | Demo |
+| `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) | Demo |
+| `!help` / `!帮助` | Show command help | Basic |
 
-   ```typescript
-   import { registerDemoCapabilities } from "./demoCapabilities";
-   registerDemoCapabilities();
-   ```
-
-3. Rebuild with `npm run build` and `npm run mcaddon` in `addon/`, reimport the
-   generated pack, and activate it in the target world with **Experiments →
-   Beta APIs** enabled. Reconnect to negotiate a fresh session.
-
-This registers `demo.echo` and `demo.ticks` without editing SDK protocol or
-fragment logic. Do not register twice: duplicate names are rejected.
-`!echo` sends `example.label` and `example.player` metadata; these values are
-application context, not proof of player identity or authorization.
-
-`run_world_command` is disabled by default. If needed, register its existing
-handler explicitly through the addon router; its default allowlist is `say`
-and its denylist still applies. See the [trust boundary](../../addon/README.md#trust-boundary).
+With the basic package, demo commands return a readable `UNSUPPORTED_METHOD`
+error and a hint to use the demo build. `run_world_command` remains restricted
+even in the demo build: its default allowlist is `say`, and the dangerous-command
+denylist still applies.
 
 ## Ordering, failures and cancellation
 
-`McbeServer` enables reliable dispatch and creates a negotiated `V2Bridge`.
-Same-player callbacks remain FIFO; other players can progress independently.
-The reader continues receiving replies while a hook awaits work. The example
-keeps no request wait table, manual fragment state or background request tasks.
+`McbeServer` requires MCBEWS/2 admission. Same-player callbacks remain FIFO;
+other players can progress independently. The reader continues receiving replies
+while a hook awaits work. The example keeps no request wait table, manual
+fragment state or background request tasks.
 
 Negotiated requests return a response envelope; successful data is in `result`.
-V2 remote errors raise `RemoteCallError`. V1 fallback keeps capability-level
-`ok: false` inside `result`. Native replies carry `statusCode`. Timeouts,
-unsupported features and transport failures end the call explicitly.
+Remote protocol errors raise `RemoteCallError` with `code`. Native replies carry
+`statusCode`. Timeouts, unsupported features and transport failures end the call
+explicitly. Player-facing failures show the capability, error code, a bounded
+message (at most 256 UTF-8 bytes) and an action hint; internal request IDs and
+stack traces stay in logs.
 
-Custom metadata and streams require v2 features. An old addon only supports
-known v1 methods; it cannot silently accept metadata or pretend to stream.
 Streams use `async with stream` so early exit cancels the producer. Cancellation
-does not undo already executed world changes. Slow consumers terminate with
+does not undo already executed world changes. Slow consumers terminate under
 bounded buffers; receiver credits are not implemented.
 
-The old `McbeServerFacade` serial default remains unchanged. Its inline hooks
-cannot await replies received by that same reader; see the [migration table](../../docs/migration.md).
-That legacy limitation does not require new hosts to start their own tasks.
-
 Use `event.sender`, not the connection's deprecated last-player pointer. The
-example filters external tellraw echoes. It has no authentication: use a
-trusted local/LAN environment and add host authorization for production.
-Automated examples do not establish new Minecraft platform/version support;
-live-game acceptance is still pending. See [extension authors](../../docs/extension-authors.md)
-for registration, event subscriptions and protocol limits.
+example filters external tellraw echoes.
+
+This example has no authentication: use a trusted local/LAN environment and add
+host authorization for production. Automated examples do not establish new
+Minecraft platform or version support. See
+[extension authors](../../docs/extension-authors.md) for registration, event
+subscriptions and protocol limits.

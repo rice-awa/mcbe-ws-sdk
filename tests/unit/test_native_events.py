@@ -17,9 +17,9 @@ from mcbe_ws_sdk.gateway.native_events import (
     NativeEvent,
     NativeEventSubscriptions,
 )
-from mcbe_ws_sdk.gateway.server_facade import McbeServerFacade
 from mcbe_ws_sdk.protocol.minecraft import PlayerMessageEvent
 from mcbe_ws_sdk.requests import CATEGORY_COMMAND
+from mcbe_ws_sdk.server import McbeServer
 
 
 def packet(
@@ -46,22 +46,23 @@ class Hook(NoOpHook):
         self.native.put_nowait(event)
 
 
-async def start() -> tuple[McbeServerFacade, ConnectionState, Hook, list[dict[str, Any]]]:
+async def start() -> tuple[McbeServer, ConnectionState, Hook, list[dict[str, Any]]]:
     hook = Hook()
     sent: list[dict[str, Any]] = []
 
     async def send(raw: str) -> None:
         sent.append(json.loads(raw))
 
-    facade = McbeServerFacade(
-        settings=GatewaySettings(dispatch=DispatchSettings(mode="reliable")), hook=hook
-    )
+    facade = McbeServer(settings=GatewaySettings(), hook=hook)
     state = await facade.manager.create_connection(send_payload=send)
     facade._install_tracking(state, send)
+    # These tests drive the post-admission routing surface directly.
+    state.ready = True
+    state.admission_state = McbeServer.READY_V2
     return facade, state, hook, sent
 
 
-async def feed(facade: McbeServerFacade, state: ConnectionState, value: dict[str, Any]) -> None:
+async def feed(facade: McbeServer, state: ConnectionState, value: dict[str, Any]) -> None:
     await facade._handle_raw(state, json.dumps(value))
 
 
@@ -244,7 +245,7 @@ async def test_reserved_bridge_frames_bypass_interceptors_including_wrong_sender
         await facade.manager.drop_connection(state.id)
 
 
-async def test_limits_failure_and_legacy_mode() -> None:
+async def test_limits_failure_and_missing_runtime() -> None:
     sent: list[str] = []
 
     async def send(raw: str) -> None:
@@ -258,7 +259,7 @@ async def test_limits_failure_and_legacy_mode() -> None:
         with pytest.raises(ValueError, match="event name"):
             await registry.subscribe(name, lambda event: None)
     assert sent == []
-    with pytest.raises(RuntimeError, match="reliable"):
+    with pytest.raises(RuntimeError, match="runtime"):
         _ = ConnectionState().native_events
 
     async def fail(raw: str) -> None:
@@ -269,54 +270,6 @@ async def test_limits_failure_and_legacy_mode() -> None:
         await failed.subscribe("Other", lambda event: None)
     with pytest.raises(RuntimeError, match="closed"):
         await failed.subscribe("Other", lambda event: None)
-
-
-async def test_addon_reply_correlates_before_blocked_observer_and_interceptor() -> None:
-    from mcbe_ws_sdk.profiles.mcbews_v1.profile import MCBEWS_V1
-
-    facade, state, hook, _ = await start()
-    observed, intercepted = asyncio.Event(), asyncio.Event()
-    observer_cancelled, interceptor_cancelled = asyncio.Event(), asyncio.Event()
-
-    async def observer(event: NativeEvent) -> None:
-        observed.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            observer_cancelled.set()
-
-    async def interceptor(event: NativeEvent) -> InterceptResult:
-        intercepted.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            interceptor_cancelled.set()
-        return InterceptResult("reject")
-
-    try:
-        await state.native_events.subscribe("PlayerMessage", observer)
-        await state.native_events.intercept("PlayerMessage", interceptor)
-        await feed(facade, state, packet())
-        await asyncio.wait_for(observed.wait(), 2)
-        await asyncio.wait_for(intercepted.wait(), 2)
-        request = facade.addon._session_for(state.id).create_request("demo", {})
-        await feed(
-            facade,
-            state,
-            packet(
-                message=f"{MCBEWS_V1.capability_response_chat_prefix}|{request.request_id}|1/1|"
-                + json.dumps({"ok": True}),
-                sender=MCBEWS_V1.trusted_bridge_player_name,
-            ),
-        )
-        assert request.future.done()
-        assert request.future.result() == {"ok": True}
-        assert hook.players.empty()
-    finally:
-        facade.addon.close_connection(state.id)
-        await facade.manager.drop_connection(state.id)
-    assert observer_cancelled.is_set()
-    assert interceptor_cancelled.is_set()
 
 
 async def test_concurrent_registrations_and_unregister_share_single_wire_pair() -> None:
@@ -392,10 +345,9 @@ async def test_observation_and_business_overflow_remain_bounded() -> None:
     async def send(raw: str) -> None:
         pass
 
-    facade = McbeServerFacade(
+    facade = McbeServer(
         settings=GatewaySettings(
             dispatch=DispatchSettings(
-                mode="reliable",
                 event_queue_maxsize=1,
                 business_queue_maxsize=1,
                 max_concurrent_business_tasks=1,

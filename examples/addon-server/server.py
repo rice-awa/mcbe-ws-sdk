@@ -14,8 +14,10 @@ SDK-owned awaitable ``commandRequest`` / ``commandResponse`` client
 * ``!stream-cancel [count]`` → early consumer exit cancels an unlimited producer
 * ``!help`` → list available commands
 
-The last three capability commands need ``capabilities.ts`` installed in the
-addon. Enable the world's Beta APIs experiment before loading the addon.
+Only messages that start with ASCII ``!`` after trimming are dispatched;
+ordinary chat is silent. The last three capability commands need
+``capabilities.ts`` installed in the addon. Enable the world's Beta APIs
+experiment before loading the addon.
 
 Usage::
 
@@ -36,7 +38,6 @@ from typing import Any
 import structlog
 
 from mcbe_ws_sdk import (
-    BridgeError,
     ConnectionState,
     DefaultResponseSink,
     FlowControlSettings,
@@ -46,10 +47,12 @@ from mcbe_ws_sdk import (
     MinecraftCommandResponse,
     MinecraftErrorFrame,
     NativeEvent,
+    NegotiationError,
     NoOpHook,
     OutboundText,
     ParsedCommand,
     PlayerMessageEvent,
+    RemoteCallError,
     SystemNotification,
     V2Bridge,
     WebsocketTransportConfig,
@@ -68,8 +71,10 @@ _HELP_TEXT = (
     "  !stream [count]   持续流直到正常结束（默认5项）\n"
     "  !stream-cancel [count]  消费后取消无限流（默认3项）\n"
     "  !help             显示本帮助\n"
-    "也支持：!玩家 / !背包 / !命令 / !ws命令 / 帮助"
+    "也支持：!玩家 / !背包 / !命令 / !ws命令 / !帮助"
 )
+_USAGE_TEXT = "请在消息开头使用 ! 调用命令，例如 !help 或 !player。"
+_MAX_ERROR_BYTES = 256
 
 logger = structlog.get_logger("example")
 
@@ -166,7 +171,9 @@ class AddonDemoHook(NoOpHook):
             return
 
         message = player_event.message.strip()
-        if not message:
+        # Chat without the ASCII command prefix is never dispatched: ordinary
+        # conversation, bare ``help`` and full-width ``！`` stay silent.
+        if not message.startswith("!"):
             return
 
         logger.info(
@@ -186,8 +193,11 @@ class AddonDemoHook(NoOpHook):
         message: str,
     ) -> bool:
         lower = message.lower()
-        if lower in {"!help", "帮助", "help"}:
+        if lower in {"!help", "!帮助"}:
             self._reply(state, sender, _HELP_TEXT)
+            return True
+        if message == "!":
+            self._reply(state, sender, _USAGE_TEXT)
             return True
 
         command, _, rest = message.partition(" ")
@@ -269,7 +279,7 @@ class AddonDemoHook(NoOpHook):
         self._reply(
             state,
             sender,
-            f"未知命令：{message}\n发送 !help 查看可用命令。",
+            f"未知命令：{_bounded_text(message, 96)}\n发送 !help 查看可用命令。",
         )
         return True
 
@@ -297,22 +307,44 @@ class AddonDemoHook(NoOpHook):
             result = response["result"]
             if metadata is not None:
                 self._reply(state, sender, f"返回元数据：{response.get('meta', {})}")
-        except BridgeError as exc:
+        except RemoteCallError as exc:
             logger.warning(
-                "addon_bridge_error",
+                "addon_remote_error",
                 connection_id=str(state.id),
                 capability=capability,
-                error=str(exc),
+                request_id=exc.request_id,
+                code=exc.code,
+                message=exc.message,
             )
-            self._reply(state, sender, f"{label} 失败：{exc}")
+            self._reply(state, sender, _format_remote_error(label, capability, exc))
             return
-        except Exception as exc:
+        except NegotiationError as exc:
+            logger.warning(
+                "addon_negotiation_error",
+                connection_id=str(state.id),
+                capability=capability,
+                reason=exc.reason,
+                detail=str(exc),
+            )
+            self._reply(
+                state,
+                sender,
+                f"{label} 失败 [{exc.reason}] {_bounded_text(str(exc))}"
+                f"{_action_hint(capability)}",
+            )
+            return
+        except Exception:
             logger.exception(
                 "addon_request_failed",
                 connection_id=str(state.id),
                 capability=capability,
             )
-            self._reply(state, sender, f"{label} 异常：{exc}")
+            self._reply(
+                state,
+                sender,
+                f"{label} 失败 [INTERNAL_ERROR] 服务器内部错误，请查看服务器日志。"
+                f"{_action_hint(capability)}",
+            )
             return
 
         logger.info(
@@ -338,8 +370,42 @@ class AddonDemoHook(NoOpHook):
                     if cancel and received == count:
                         break
             self._reply(state, sender, "流已取消。" if cancel else "流已结束。")
-        except Exception as exc:
-            self._reply(state, sender, f"流失败：{exc}")
+        except RemoteCallError as exc:
+            logger.warning(
+                "addon_stream_remote_error",
+                connection_id=str(state.id),
+                method="demo.ticks",
+                request_id=exc.request_id,
+                code=exc.code,
+                message=exc.message,
+            )
+            self._reply(state, sender, _format_remote_error("流 demo.ticks", "demo.ticks", exc))
+        except NegotiationError as exc:
+            logger.warning(
+                "addon_stream_negotiation_error",
+                connection_id=str(state.id),
+                method="demo.ticks",
+                reason=exc.reason,
+                detail=str(exc),
+            )
+            self._reply(
+                state,
+                sender,
+                f"流失败 [{exc.reason}] {_bounded_text(str(exc))}"
+                f"{_action_hint('demo.ticks')}",
+            )
+        except Exception:
+            logger.exception(
+                "addon_stream_failed",
+                connection_id=str(state.id),
+                method="demo.ticks",
+            )
+            self._reply(
+                state,
+                sender,
+                "流失败 [INTERNAL_ERROR] 服务器内部错误，请查看服务器日志。"
+                f"{_action_hint('demo.ticks')}",
+            )
 
     async def _run_ws_command(
         self,
@@ -378,7 +444,11 @@ class AddonDemoHook(NoOpHook):
                 connection_id=str(state.id),
                 command=command,
             )
-            self._reply(state, sender, f"{label} 异常：{exc}")
+            self._reply(
+                state,
+                sender,
+                f"{label} 失败 [{type(exc).__name__}] {_bounded_text(str(exc))}",
+            )
             return
 
         self._reply(state, sender, format_ws_command_result(label, response))
@@ -409,29 +479,52 @@ class AddonDemoHook(NoOpHook):
         )
 
 
+def _bounded_text(text: object, limit: int = _MAX_ERROR_BYTES) -> str:
+    """Truncate to ``limit`` UTF-8 bytes without splitting a scalar value."""
+    value = str(text)
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def _action_hint(capability: str) -> str:
+    if capability == "run_world_command":
+        return (
+            "\n提示：世界命令默认未开放；请在 addon 侧显式注册 run_world_command "
+            "并保留命令允许列表。"
+        )
+    if capability == "demo.ticks":
+        return "\n提示：确认 addon 已安装 capabilities.ts 并启用 stream/1 能力。"
+    return "\n提示：确认 addon 已注册该能力，并检查命令参数。"
+
+
+def _format_remote_error(label: str, capability: str, exc: RemoteCallError) -> str:
+    """Render a public remote failure; the request id stays in server logs."""
+    code = exc.code if isinstance(exc.code, str) and exc.code else "ERROR"
+    return (
+        f"{label} 失败 [{code}] {_bounded_text(exc.message)}"
+        f"{_action_hint(capability)}"
+    )
+
+
 def format_capability_result(capability: str, result: Any, label: str) -> str:
     """Turn a bridge response into a short, readable tellraw body."""
     if not isinstance(result, dict):
-        return f"{label}\n{json.dumps(result, ensure_ascii=False)}"
+        return f"{label}\n{_bounded_text(json.dumps(result, ensure_ascii=False))}"
 
     if result.get("ok") is False:
         error = result.get("error")
         if isinstance(error, dict):
             code = error.get("code", "ERROR")
-            message = error.get("message", "")
-            hint = ""
-            if code == "UNSUPPORTED_CAPABILITY" and capability == "run_world_command":
-                hint = (
-                    "\n提示：run_world_command 默认未注册。"
-                    "请在 addon 侧把 handleRunWorldCommand 挂进 registry，"
-                    "或通过 setCapabilityHandler 启用。"
-                )
+            message = _bounded_text(error.get("message", ""))
+            hint = _action_hint(capability) if code == "UNSUPPORTED_CAPABILITY" else ""
             return f"{label} 失败 [{code}] {message}{hint}".rstrip()
         if "payload" in result and isinstance(result["payload"], dict):
             output = result["payload"].get("output")
             if output:
-                return f"{label} 失败：{output}"
-        return f"{label} 失败：{json.dumps(result, ensure_ascii=False)}"
+                return f"{label} 失败：{_bounded_text(output)}"
+        return f"{label} 失败：{_bounded_text(json.dumps(result, ensure_ascii=False))}"
 
     payload = result.get("payload", result)
 
@@ -533,14 +626,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--log-raw",
         action="store_true",
-        default=True,
-        help="log raw outbound WS payloads (default: on)",
+        default=False,
+        help="log raw outbound WS payloads (default: off; payloads may contain player data)",
     )
     parser.add_argument(
         "--no-log-raw",
         action="store_false",
         dest="log_raw",
-        help="disable raw payload logging",
+        help="disable raw payload logging (the default)",
     )
     return parser.parse_args(argv)
 

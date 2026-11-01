@@ -45,7 +45,7 @@ def trace_scope(
 ) -> Iterator[TraceContext]:
     """Inherit context, override supplied identifiers and restore on exit.
 
-    Trace IDs are local metadata and never inserted into MCBEWS/1 packets.
+    Trace IDs are local metadata and never inserted into MCBEWS/2 packets.
     Explicit contexts restore reply correlation, including an absent player.
     """
     value = context if context is not None else current_trace()

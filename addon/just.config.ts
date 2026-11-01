@@ -23,9 +23,12 @@ const projectName = getOrThrowFromProcess("PROJECT_NAME");
 
 // You can use `npm run build:production` to build a "production" build that strips out statements labelled with "dev:".
 const isProduction = argv()["production"];
+// `--demo` (or MCBE_DEMO=1) bundles the complete demo capabilities instead of
+// the two read-only defaults. The output path stays dist/scripts/main.js.
+const isDemo = Boolean(argv()["demo"]) || process.env.MCBE_DEMO === "1";
 
 const bundleTaskOptions: BundleTaskParameters = {
-  entryPoint: path.join(__dirname, "./scripts/main.ts"),
+  entryPoint: path.join(__dirname, isDemo ? "./scripts/main.demo.ts" : "./scripts/main.ts"),
   external: ["@minecraft/server", "@minecraft/server-ui", "@minecraft/server-gametest"],
   outfile: path.resolve(__dirname, "./dist/scripts/main.js"),
   minifyWhitespace: false,
@@ -42,7 +45,7 @@ const copyTaskOptions: CopyTaskParameters = {
 
 const mcaddonTaskOptions: ZipTaskParameters = {
   ...copyTaskOptions,
-  outputFile: `./dist/packages/${projectName}.mcaddon`,
+  outputFile: `./dist/packages/${projectName}${isDemo ? "-demo" : ""}.mcaddon`,
 };
 
 // Lint

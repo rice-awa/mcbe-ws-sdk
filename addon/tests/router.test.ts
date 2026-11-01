@@ -1,590 +1,275 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
-import { system } from "@minecraft/server";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { system, type ScriptEventCommandMessageAfterEvent } from "@minecraft/server";
 import {
   activateBridge,
-  handleBridgeScriptEvent,
+  enqueueOrHandle,
+  getV2Endpoint,
   registerBridgeRouter,
-  parseBridgeRequest,
-  setCapabilityHandler,
-  shouldHandleScriptEvent,
-  MAX_PRE_READY_REQUESTS,
-  MAX_ACTIVE_REQUESTS,
-  _testingGetQueueSize,
-  _testingGetActiveQueueSize,
-  _testingGetDroppedCount,
+  registerCapability,
+  unregisterCapability,
   _testingFlush,
-  _testingGetLastResponseSendOutcome,
+  _testingGetPeerCount,
+  _testingGetPendingHello,
   _testingReset,
-  type BridgeRequest,
-  type CapabilityHandler,
-  type ResponseSender,
 } from "../scripts/bridge/router";
 import { defaultCapabilityRegistry } from "../scripts/bridge/capabilities";
-import { BRIDGE_REQUEST_MESSAGE_ID } from "../scripts/bridge/constants";
+import { MANIFEST } from "../scripts/bridge/v2/assets";
+import { Message } from "../scripts/bridge/v2/codec";
+import { fragment, ReassemblyPool } from "../scripts/bridge/v2/transport";
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
+const NEGOTIATE = MANIFEST.negotiation.event;
+const PACKET = MANIFEST.carrier.event;
 
-const vectors = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../tests/fixtures/mcbews_v1_vectors.json", import.meta.url)), "utf-8")
-) as { bridge_requests: Array<{ name: string; version: number; message: string }> };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function serverEvent(message: string) {
-  return {
-    id: BRIDGE_REQUEST_MESSAGE_ID,
-    message,
-    sourceType: "Server" as const,
-  };
+function event(id: string, message: string, sourceType = "Server"): ScriptEventCommandMessageAfterEvent {
+  return { id, message, sourceType } as ScriptEventCommandMessageAfterEvent;
 }
 
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
+let sent: string[];
+let sequence = 0;
+
+function activate(): Promise<void> {
+  sent = [];
+  return activateBridge(async (frame) => {
+    sent.push(frame);
+  });
+}
+
+function hello(attempt: string): void {
+  enqueueOrHandle(event(NEGOTIATE, `MCBEWS2H|${attempt}`));
+}
+
+function challenge(attempt: string): string {
+  hello(attempt);
+  const parts = sent[sent.length - 1].split("|");
+  expect(parts.slice(0, 2)).toEqual(["MCBEWS2N", attempt]);
+  expect(parts.slice(3)).toEqual(["2", MANIFEST.negotiation.features.join(",")]);
+  return parts[2];
+}
+
+function confirm(attempt: string, epoch: string): void {
+  enqueueOrHandle(event(NEGOTIATE, `MCBEWS2C|${attempt}|${epoch}`));
+  expect(sent[sent.length - 1]).toBe(`MCBEWS2N|${attempt}|${epoch}|ready`);
+}
+
+function admit(attempt: string): string {
+  const epoch = challenge(attempt);
+  confirm(attempt, epoch);
+  return epoch;
+}
+
+async function sendRequest(epoch: string, method: string, id: string, params: unknown = {}): Promise<void> {
+  const message = { v: "MCBEWS/2", kind: "request", id, method, params };
+  for (const frame of fragment(message, `p.${epoch}.${++sequence}`, "down")) {
+    enqueueOrHandle(event(PACKET, frame));
+  }
+  await _testingFlush();
+}
+
+async function sendNotification(epoch: string, method: string, params: unknown = {}): Promise<void> {
+  const message = { v: "MCBEWS/2", kind: "notification", method, params };
+  for (const frame of fragment(message, `p.${epoch}.${++sequence}`, "down")) {
+    enqueueOrHandle(event(PACKET, frame));
+  }
+  await _testingFlush();
+}
+
+function carrierResponses(): Message[] {
+  const pool = new ReassemblyPool();
+  return sent
+    .filter((frame) => frame.startsWith("MCBEWS2|"))
+    .map((frame) => pool.receive("c", "s", frame, "up"))
+    .filter((message): message is Message => message !== null);
+}
 
 beforeEach(() => {
   _testingReset();
   system.afterEvents.scriptEventReceive.clear();
+  sequence = 0;
 });
 
-// ---------------------------------------------------------------------------
-// shouldHandleScriptEvent
-// ---------------------------------------------------------------------------
-
-describe("shouldHandleScriptEvent", () => {
-  it("returns true for bridge message ID", () => {
-    expect(shouldHandleScriptEvent(BRIDGE_REQUEST_MESSAGE_ID)).toBe(true);
-  });
-
-  it("returns false for other message IDs", () => {
-    expect(shouldHandleScriptEvent("other:id")).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Source acceptance
-// ---------------------------------------------------------------------------
-
-describe("source acceptance", () => {
-  it("accepts Entity source (WS /wsserver commandRequest path)", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    // Entity-originated events must still be processed: Bedrock tags
-    // /wsserver-delivered scriptevents as Entity, not Server.
-    await handleBridgeScriptEvent({
-      id: BRIDGE_REQUEST_MESSAGE_ID,
-      message: JSON.stringify({ request_id: "r1", capability: "missing", payload: {} }),
-      sourceType: "Entity",
-    });
-
-    expect(sender).toHaveBeenCalledOnce();
-    expect(sender).toHaveBeenCalledWith("r1", expect.stringContaining("UNSUPPORTED_CAPABILITY"));
-  });
-
-  it("processes Server source events", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    const handler = vi.fn<CapabilityHandler>().mockResolvedValue({ ok: true });
-    setCapabilityHandler(handler);
-
-    await handleBridgeScriptEvent(serverEvent(JSON.stringify({ request_id: "r2", capability: "test", payload: {} })));
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(sender).toHaveBeenCalledOnce();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// v1/v2 vectors
-// ---------------------------------------------------------------------------
-
-describe("v1 and v2 request vectors", () => {
-  it("accepts shared v1 and v2 request vectors with trusted server caller", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    const handler = vi.fn<CapabilityHandler>().mockResolvedValue({ greeting: "hello" });
-    setCapabilityHandler(handler);
-
-    for (const vector of vectors.bridge_requests) {
-      await handleBridgeScriptEvent(serverEvent(vector.message));
-    }
-
-    expect(handler).toHaveBeenNthCalledWith(
-      1,
-      "greet",
-      { name: "Steve" },
-      { caller: { kind: "server" }, requestVersion: 1 }
-    );
-    expect(handler).toHaveBeenNthCalledWith(
-      2,
-      "greet",
-      { name: "Steve" },
-      { caller: { kind: "server" }, requestVersion: 2 }
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Structured error responses
-// ---------------------------------------------------------------------------
-
-describe("structured error responses", () => {
-  it("returns UNSUPPORTED_VERSION for a valid id", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ v: 99, request_id: "r99", capability: "x", payload: {} }))
-    );
-
-    expect(sender).toHaveBeenCalledWith(
-      "r99",
-      JSON.stringify({
-        ok: false,
-        error: { code: "UNSUPPORTED_VERSION", message: "unsupported bridge version" },
-      })
-    );
-  });
-
-  it("does not send error response for MALFORMED_JSON without requestId", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    await handleBridgeScriptEvent(serverEvent("not json at all"));
-
-    // No requestId available from unparseable JSON — sender is not called
-    expect(sender).not.toHaveBeenCalled();
-  });
-
-  it("does not send error response for non-record JSON without requestId", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    await handleBridgeScriptEvent(serverEvent("[1, 2, 3]"));
-
-    // Array is valid JSON but not a record — no requestId possible
-    expect(sender).not.toHaveBeenCalled();
-  });
-
-  it("returns UNSUPPORTED_CAPABILITY for unknown capability", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ request_id: "r3", capability: "nonexistent", payload: {} }))
-    );
-
-    expect(sender).toHaveBeenCalledWith(
-      "r3",
-      JSON.stringify({
-        ok: false,
-        error: { code: "UNSUPPORTED_CAPABILITY", message: "unsupported capability: nonexistent" },
-      })
-    );
-  });
-
-  it("returns CAPABILITY_FAILED when handler throws", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    const handler = vi.fn<CapabilityHandler>().mockRejectedValue(new Error("boom"));
-    setCapabilityHandler(handler);
-
-    await handleBridgeScriptEvent(serverEvent(JSON.stringify({ request_id: "r4", capability: "test", payload: {} })));
-
-    expect(sender).toHaveBeenCalledWith(
-      "r4",
-      JSON.stringify({
-        ok: false,
-        error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
-      })
-    );
-  });
-
-  it("returns INVALID_REQUEST for missing capability field", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    await handleBridgeScriptEvent(serverEvent(JSON.stringify({ request_id: "r5", payload: {} })));
-
-    expect(sender).toHaveBeenCalledWith(
-      "r5",
-      JSON.stringify({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: "invalid bridge request" },
-      })
-    );
-  });
-
-  it("stringifies error responses without stack traces or request payloads", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    const handler = vi.fn<CapabilityHandler>().mockRejectedValue(new Error("secret"));
-    setCapabilityHandler(handler);
-
-    await handleBridgeScriptEvent(
-      serverEvent(JSON.stringify({ request_id: "r6", capability: "test", payload: { password: "hunter2" } }))
-    );
-
-    const sentBody = JSON.parse(sender.mock.calls[0][1]);
-    expect(sentBody).toEqual({
-      ok: false,
-      error: { code: "CAPABILITY_FAILED", message: "capability handler failed" },
-    });
-    expect(JSON.stringify(sentBody)).not.toContain("secret");
-    expect(JSON.stringify(sentBody)).not.toContain("hunter2");
-    expect(JSON.stringify(sentBody)).not.toContain("stack");
-    expect(JSON.stringify(sentBody)).not.toContain("Error");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Pre-ready queue
-// ---------------------------------------------------------------------------
-
-describe("pre-ready queue", () => {
-  it("queues events before activation and drains after activate", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
+describe("bridge router activation", () => {
+  it("subscribes once and retains a single sanitized hello before activation", async () => {
+    registerBridgeRouter();
     registerBridgeRouter();
 
-    system.afterEvents.scriptEventReceive.emit({
-      id: BRIDGE_REQUEST_MESSAGE_ID,
-      message: JSON.stringify({ request_id: "r1", capability: "get_player_snapshot", payload: {} }),
-      sourceType: "Server",
-    } as ScriptEventCommandMessageAfterEvent);
+    hello("first");
+    hello("second");
+    hello("invalid|extra");
+    enqueueOrHandle(event(NEGOTIATE, `MCBEWS2H|${"x".repeat(120)}`));
 
-    expect(_testingGetQueueSize()).toBe(1);
-    expect(sender).not.toHaveBeenCalled();
+    expect(_testingGetPendingHello()).toBe("second");
+    await activate();
 
-    await activateBridge(sender);
-    expect(_testingGetQueueSize()).toBe(0);
-    expect(sender).toHaveBeenCalledTimes(1);
+    const parts = sent[0].split("|");
+    expect(parts.slice(0, 2)).toEqual(["MCBEWS2N", "second"]);
+    expect(getV2Endpoint(parts[2])).toBeNull();
+    expect(_testingGetPendingHello()).toBeNull();
+
+    confirm("second", parts[2]);
+    expect(getV2Endpoint(parts[2])?.epoch).toBe(parts[2]);
+    expect(_testingGetPeerCount()).toBe(1);
   });
 
-  it("preserves FIFO order", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    registerBridgeRouter();
+  it("does not dispatch a pre-activation hello as business", async () => {
+    const handler = vi.fn(async () => ({ ok: true }));
+    registerCapability("probe", handler);
 
-    // Enqueue three events before activation
-    for (let i = 1; i <= 3; i++) {
-      system.afterEvents.scriptEventReceive.emit({
-        id: BRIDGE_REQUEST_MESSAGE_ID,
-        message: JSON.stringify({ request_id: `r${i}`, capability: "get_player_snapshot", payload: {} }),
-        sourceType: "Server",
-      } as ScriptEventCommandMessageAfterEvent);
-    }
-
-    await activateBridge(sender);
-    expect(sender).toHaveBeenCalledTimes(3);
-    // FIFO means r1 then r2 then r3
-    expect(sender.mock.calls[0][0]).toBe("r1");
-    expect(sender.mock.calls[1][0]).toBe("r2");
-    expect(sender.mock.calls[2][0]).toBe("r3");
+    hello("early");
+    expect(_testingGetPendingHello()).toBe("early");
+    expect(handler).not.toHaveBeenCalled();
   });
 
-  it("drops events when pre-ready queue exceeds max", () => {
-    registerBridgeRouter();
+  it("drops business frames received before activation without replaying them", async () => {
+    const handler = vi.fn(async () => ({ ok: true }));
+    registerCapability("probe", handler);
+    const epoch = "pending";
 
-    for (let i = 0; i < MAX_PRE_READY_REQUESTS; i++) {
-      system.afterEvents.scriptEventReceive.emit({
-        id: BRIDGE_REQUEST_MESSAGE_ID,
-        message: JSON.stringify({ request_id: `r${i}`, capability: "x", payload: {} }),
-        sourceType: "Server",
-      } as ScriptEventCommandMessageAfterEvent);
-    }
+    await sendNotification(epoch, "probe");
+    expect(handler).not.toHaveBeenCalled();
 
-    expect(_testingGetQueueSize()).toBe(MAX_PRE_READY_REQUESTS);
-
-    // One more should be silently dropped
-    system.afterEvents.scriptEventReceive.emit({
-      id: BRIDGE_REQUEST_MESSAGE_ID,
-      message: JSON.stringify({ request_id: "overflow", capability: "x", payload: {} }),
-      sourceType: "Server",
-    } as ScriptEventCommandMessageAfterEvent);
-
-    expect(_testingGetQueueSize()).toBe(MAX_PRE_READY_REQUESTS);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Active queue
-// ---------------------------------------------------------------------------
-
-function emitRequest(requestId: string): void {
-  system.afterEvents.scriptEventReceive.emit({
-    id: BRIDGE_REQUEST_MESSAGE_ID,
-    message: JSON.stringify({ request_id: requestId, capability: "test", payload: {} }),
-    sourceType: "Server",
-  } as ScriptEventCommandMessageAfterEvent);
-}
-
-/** A handler that blocks until the returned release function is called. */
-function blockingHandler(): { handler: CapabilityHandler; release: () => void } {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const handler: CapabilityHandler = async () => {
-    await gate;
-    return { ok: true };
-  };
-  return { handler, release };
-}
-
-describe("active queue", () => {
-  it("bounds the active queue and drops overflow requests", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    const { handler, release } = blockingHandler();
-    setCapabilityHandler(handler);
-    registerBridgeRouter();
-
-    for (let i = 0; i < MAX_ACTIVE_REQUESTS + 5; i++) emitRequest(`r${i}`);
-
-    // The first handler blocks, so the serial chain fills up and the rest drop.
-    expect(_testingGetActiveQueueSize()).toBeLessThanOrEqual(MAX_ACTIVE_REQUESTS);
-    expect(_testingGetActiveQueueSize()).toBe(MAX_ACTIVE_REQUESTS);
-    expect(_testingGetDroppedCount()).toBe(5);
-
-    release();
+    await activate();
     await _testingFlush();
-
-    expect(_testingGetActiveQueueSize()).toBe(0);
-    consoleSpy.mockRestore();
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
   });
 
-  it("does not send responses for dropped active requests", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
+  it("reaches ready after one challenge confirmation and routes requests", async () => {
+    await activate();
+    const handler = vi.fn(async (_name: string, payload: Record<string, unknown>) => ({ echo: payload }));
+    registerCapability("echo", handler);
 
-    const { handler, release } = blockingHandler();
-    setCapabilityHandler(handler);
-    registerBridgeRouter();
+    const epoch = admit("session");
+    await sendRequest(epoch, "echo", `p.${epoch}.1`, { value: 7 });
 
-    for (let i = 0; i < MAX_ACTIVE_REQUESTS + 3; i++) emitRequest(`r${i}`);
-
-    expect(_testingGetDroppedCount()).toBe(3);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("BRIDGE_ACTIVE_QUEUE_FULL"));
-
-    release();
-    await _testingFlush();
-
-    // The first MAX_ACTIVE_REQUESTS requestIds are answered; overflow ids never are.
-    expect(sender).toHaveBeenCalledTimes(MAX_ACTIVE_REQUESTS);
-    for (let i = MAX_ACTIVE_REQUESTS; i < MAX_ACTIVE_REQUESTS + 3; i++) {
-      expect(sender).not.toHaveBeenCalledWith(`r${i}`, expect.anything());
-    }
-    consoleSpy.mockRestore();
-  });
-
-  it("resets active queue counters", async () => {
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    const { handler, release } = blockingHandler();
-    setCapabilityHandler(handler);
-    registerBridgeRouter();
-
-    for (let i = 0; i < MAX_ACTIVE_REQUESTS + 1; i++) emitRequest(`r${i}`);
-
-    expect(_testingGetDroppedCount()).toBe(1);
-    release();
-    await _testingFlush();
-
-    _testingReset();
-    expect(_testingGetActiveQueueSize()).toBe(0);
-    expect(_testingGetDroppedCount()).toBe(0);
-    consoleSpy.mockRestore();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Response sender failures
-// ---------------------------------------------------------------------------
-
-describe("response sender failure handling", () => {
-  it("catches response sender failures and does not reject", async () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const sender: ResponseSender = vi.fn().mockRejectedValue(new Error("network down"));
-
-    await activateBridge(sender);
-
-    // This should not throw — the rejection is caught and logged
-    await expect(
-      handleBridgeScriptEvent(
-        serverEvent(JSON.stringify({ request_id: "r99", capability: "get_player_snapshot", payload: {} }))
-      )
-    ).resolves.toEqual({
-      requestId: "r99",
-      ok: false,
-      delivered: false,
-      error: {
-        code: "RESPONSE_SEND_FAILED",
-        message: "bridge response sender failed",
-        errorType: "Error",
+    expect(handler).toHaveBeenCalledWith("echo", { value: 7 }, expect.objectContaining({ requestVersion: 2 }));
+    expect(carrierResponses()).toEqual([
+      {
+        v: "MCBEWS/2",
+        kind: "response",
+        id: `p.${epoch}.1`,
+        result: { echo: { value: 7 } },
+        meta: {},
       },
-    });
-    expect(_testingGetLastResponseSendOutcome()).toEqual({
-      requestId: "r99",
-      ok: false,
-      delivered: false,
-      error: {
-        code: "RESPONSE_SEND_FAILED",
-        message: "bridge response sender failed",
-        errorType: "Error",
-      },
-    });
+    ]);
+  });
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("r99"));
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("errorType=Error"));
-    consoleSpy.mockRestore();
+  it("routes notifications and refreshes an admitted lease", async () => {
+    await activate();
+    const handler = vi.fn(async () => ({}));
+    registerCapability("notice", handler);
+    const epoch = admit("lease");
+
+    for (const _ of [0, 1]) await sendNotification(epoch, "notice", { text: "x" });
+    expect(handler).toHaveBeenCalledTimes(2);
+
+    enqueueOrHandle(event(NEGOTIATE, `MCBEWS2R|${epoch}`));
+    expect(sent[sent.length - 1]).toBe(`MCBEWS2N|${epoch}|lease`);
+
+    enqueueOrHandle(event(NEGOTIATE, `MCBEWS2X|${epoch}`));
+    expect(getV2Endpoint(epoch)).toBeNull();
+  });
+
+  it("returns null for an unknown epoch", () => {
+    expect(getV2Endpoint("missing")).toBeNull();
   });
 });
 
-// ---------------------------------------------------------------------------
-// parseBridgeRequest unit tests
-// ---------------------------------------------------------------------------
-
-describe("parseBridgeRequest", () => {
-  it("returns MALFORMED_JSON for unparseable input", () => {
-    const result = parseBridgeRequest("{{{");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.error.code).toBe("MALFORMED_JSON");
-      expect(result.requestId).toBeUndefined();
-    }
+describe("retired MCBEWS/1 surface", () => {
+  const retired = ["mcbews:bridge_req", "mcbews:session_req", "mcbews:text_resp"];
+  const legacyBody = JSON.stringify({
+    v: 1,
+    request_id: "old-1",
+    capability: "probe",
+    payload: {},
+    action: "list",
   });
 
-  it("returns valid BridgeRequest for v1 (missing v)", () => {
-    const result = parseBridgeRequest('{"request_id":"r1","capability":"greet","payload":{"name":"Steve"}}');
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.request.v).toBe(1);
-      expect(result.request.request_id).toBe("r1");
-      expect(result.request.capability).toBe("greet");
-      expect(result.request.payload).toEqual({ name: "Steve" });
+  it("logs a structured rejection with zero capability calls or responses", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const handler = vi.fn(async () => ({ ok: true }));
+    registerCapability("probe", handler);
+    await activate();
+
+    for (const id of retired) {
+      enqueueOrHandle(event(id, legacyBody, "Server"));
+      enqueueOrHandle(event(id, legacyBody, "Entity"));
     }
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    for (const id of retired) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`event=${id}`));
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("expected=MCBEWS/2"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("reason=UNSUPPORTED_PROTOCOL"));
+    warn.mockRestore();
   });
 
-  it("returns valid BridgeRequest for v2", () => {
-    const result = parseBridgeRequest('{"v":2,"request_id":"r2","capability":"greet","payload":{"x":1}}');
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.request.v).toBe(2);
-    }
+  it("reports a server admission rejection with its reason", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await activate();
+
+    enqueueOrHandle(event(MANIFEST.admission.reject_notice, "NEGOTIATION_TIMEOUT"));
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("reason=NEGOTIATION_TIMEOUT"));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("reason=UNSUPPORTED_PROTOCOL"));
+    expect(sent).toEqual([]);
+    warn.mockRestore();
   });
 
-  it("rejects version 3 as UNSUPPORTED_VERSION", () => {
-    const result = parseBridgeRequest('{"v":3,"request_id":"r3","capability":"x","payload":{}}');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.error.code).toBe("UNSUPPORTED_VERSION");
-      expect(result.requestId).toBe("r3");
-    }
+  it("logs any unknown event in the bridge namespace and ignores other namespaces", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const handler = vi.fn(async () => ({ ok: true }));
+    registerCapability("probe", handler);
+    await activate();
+
+    enqueueOrHandle(event("mcbews:future_event", legacyBody));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("event=mcbews:future_event"));
+
+    warn.mockClear();
+    enqueueOrHandle(event("other_addon:event", legacyBody));
+    expect(warn).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    warn.mockRestore();
   });
 
-  it("rejects request_id as empty string", () => {
-    const result = parseBridgeRequest('{"v":1,"request_id":"","capability":"x","payload":{}}');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.error.code).toBe("INVALID_REQUEST");
-      expect(result.requestId).toBeUndefined();
-    }
-  });
+  it("never queues a retired request for a later activation", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const handler = vi.fn(async () => ({ ok: true }));
+    registerCapability("probe", handler);
 
-  it("rejects missing capability", () => {
-    const result = parseBridgeRequest('{"v":1,"request_id":"r4","payload":{}}');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.error.code).toBe("INVALID_REQUEST");
-      expect(result.requestId).toBe("r4");
-    }
-  });
+    enqueueOrHandle(event("mcbews:bridge_req", legacyBody));
+    expect(_testingGetPendingHello()).toBeNull();
 
-  it("accepts null payload as empty object", () => {
-    const result = parseBridgeRequest('{"v":2,"request_id":"r5","capability":"test"}');
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.request.payload).toEqual({});
-    }
-  });
-
-  it("rejects non-object payload", () => {
-    const result = parseBridgeRequest('{"v":1,"request_id":"r6","capability":"x","payload":"string"}');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.error.code).toBe("INVALID_REQUEST");
-    }
-  });
-
-  it("rejects array as root value", () => {
-    const result = parseBridgeRequest("[1, 2, 3]");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.error.code).toBe("INVALID_REQUEST");
-      expect(result.requestId).toBeUndefined();
-    }
+    await activate();
+    await _testingFlush();
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    warn.mockRestore();
   });
 });
 
-// ---------------------------------------------------------------------------
-// defaultCapabilityRegistry check
-// ---------------------------------------------------------------------------
+describe("capability registration", () => {
+  it("registers and unregisters a custom capability", async () => {
+    await activate();
+    const epoch = admit("registry");
+    const registration = registerCapability("custom", () => ({ ok: true, source: "custom" }));
 
-describe("default capability registry", () => {
-  it("does not expose run_world_command by default", () => {
+    await sendRequest(epoch, "custom", `p.${epoch}.1`);
+    expect(carrierResponses()[0].result).toEqual({ ok: true, source: "custom" });
+
+    expect(unregisterCapability(registration)).toBe(true);
+    sent = [];
+    await sendRequest(epoch, "custom", `p.${epoch}.2`);
+    expect(carrierResponses()[0].error).toEqual({
+      code: "UNSUPPORTED_METHOD",
+      message: "unsupported capability: custom",
+    });
+  });
+
+  it("keeps the two read-only defaults and no world command", () => {
+    expect(Object.keys(defaultCapabilityRegistry).sort()).toEqual(["get_inventory_snapshot", "get_player_snapshot"]);
     expect(defaultCapabilityRegistry).not.toHaveProperty("run_world_command");
-  });
-
-  it("exposes get_player_snapshot by default", () => {
-    expect(defaultCapabilityRegistry).toHaveProperty("get_player_snapshot");
-  });
-
-  it("exposes get_inventory_snapshot by default", () => {
-    expect(defaultCapabilityRegistry).toHaveProperty("get_inventory_snapshot");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases
-// ---------------------------------------------------------------------------
-
-describe("edge cases", () => {
-  it("queues non-Server sourceType when bridge is not active yet", () => {
-    registerBridgeRouter();
-
-    // Entity events must be queued, not dropped — WS commandRequest arrives as Entity.
-    system.afterEvents.scriptEventReceive.emit({
-      id: BRIDGE_REQUEST_MESSAGE_ID,
-      message: JSON.stringify({ request_id: "rx", capability: "x", payload: {} }),
-      sourceType: "Entity",
-    } as ScriptEventCommandMessageAfterEvent);
-
-    expect(_testingGetQueueSize()).toBe(1);
-  });
-
-  it("handles empty message in handleBridgeScriptEvent gracefully", async () => {
-    const sender = vi.fn(async (_rid: string, _body: string) => {});
-    await activateBridge(sender);
-
-    await handleBridgeScriptEvent(serverEvent(""));
-
-    // No requestId from empty message — sender not called
-    expect(sender).not.toHaveBeenCalled();
   });
 });
