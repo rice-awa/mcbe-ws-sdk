@@ -2,36 +2,37 @@
 
 # MCBE WS Bridge Addon
 
-The TypeScript counterpart of `mcbe-ws-sdk`. It implements the Minecraft side
-of MCBEWS/2: negotiation, the packet carrier, the capability registry and request
-streams. The Python host implements the other side.
+The TypeScript counterpart of `mcbe-ws-sdk`. It does the Minecraft side of
+MCBEWS/2: negotiation, the packet carrier, the capability registry and request
+streams. The Python host does the other side.
 
-The current addon uses **V2 (MCBEWS/2)**, with two script event ids:
+The current addon uses **V2 (MCBEWS/2)** and listens for two script event ids:
 
-- `mcbews:negotiate_v2` — negotiation control;
-- `mcbews:packet_v2` — logical message carrier.
+- `mcbews:negotiate_v2` carries the negotiation control messages.
+- `mcbews:packet_v2` carries the logical messages.
 
-Retired events (`mcbews:bridge_req`, `mcbews:session_req`, `mcbews:text_resp`)
-are logged and rejected. Nothing is parsed, queued, answered or dispatched for
-them. The addon cannot close a WebSocket owned by an old server; it only refuses
-that server's business frames.
+The retired events (`mcbews:bridge_req`, `mcbews:session_req` and
+`mcbews:text_resp`) are logged and rejected. The addon does not parse, queue,
+answer or dispatch them. It also cannot close a WebSocket that belongs to an old
+server, so it simply refuses that server's business frames.
 
-SDK, npm project, pack, protocol and Script API versions are independent.
-See [version numbers](../docs/migration.md#version-numbers) for the current values.
+The SDK, the npm project, the pack, the protocol and the Script API are each
+versioned independently. See [version numbers](../docs/migration.md#version-numbers)
+for the current values.
 
 ## Requirements
 
-- Minecraft Bedrock with Script API and the target world's
-  **Experiments → Beta APIs** enabled.
-- Node.js 22 for building the pack.
+- Minecraft Bedrock with Script API support, and **Experiments → Beta APIs**
+  enabled in the target world.
+- Node.js 22 to build the pack.
 - Dependencies pinned in `package.json`:
   - `@minecraft/server` 2.8.0
   - `@minecraft/server-ui` 2.1.0
   - `@minecraft/server-gametest` `1.0.0-beta.1.26.30-stable`
-- Both pack manifests target `min_engine_version` `[1, 26, 30]`.
+- Both pack manifests set `min_engine_version` to `[1, 26, 30]`.
 
-Automated builds and tests do not prove live-game support. Verify the game
-version and platform you deploy to.
+Passing automated builds and tests does not prove the addon works in a live
+game. Check the game version and platform you deploy to.
 
 ## Build
 
@@ -42,8 +43,8 @@ npm run mcaddon     # assemble the .mcaddon
 ```
 
 The default package ships the complete capability set: the two read-only
-snapshots, `demo.echo`, the `demo.ticks` stream and `run_world_command`. Import
-`dist/packages/mc-ws-sdk.mcaddon`.
+snapshots, `demo.echo`, the `demo.ticks` stream and `run_world_command`. To use
+it, import `dist/packages/mc-ws-sdk.mcaddon`.
 
 The lean package contains only the two read-only snapshots:
 
@@ -52,13 +53,15 @@ npm run build:base
 npm run mcaddon:base
 ```
 
-`--base` or `MCBE_BASE=1` selects `scripts/main.ts`; the default build uses
-`scripts/main.demo.ts`. Both variants write the same final artifact,
-`dist/scripts/main.js`, and the lean pack is `mc-ws-sdk-base.mcaddon`. `lib/` is
-only intermediate type-check output and is not loaded by the game.
+Passing `--base` or setting `MCBE_BASE=1` makes the build start from
+`scripts/main.ts`, while the default build starts from `scripts/main.demo.ts`.
+Both variants write the same final file, `dist/scripts/main.js`, and the lean
+pack is named `mc-ws-sdk-base.mcaddon`. `lib/` only holds intermediate
+type-check output, and the game never loads it.
 
-The bundle externalizes `@minecraft/server`, `@minecraft/server-ui` and
-`@minecraft/server-gametest`; the pack manifest supplies the module versions.
+The bundle leaves `@minecraft/server`, `@minecraft/server-ui` and
+`@minecraft/server-gametest` as external modules, and the pack manifest supplies
+their versions.
 
 ## Enable in a world
 
@@ -70,9 +73,9 @@ The bundle externalizes `@minecraft/server`, `@minecraft/server-ui` and
 4. Activate the behavior pack (and the companion resource pack if prompted).
 5. Enter the world, then connect with `/wsserver <host-ip>:8080`.
 
-Without Beta APIs the scripts never load: negotiation times out and no bridge
-activity appears in-game. Enabling experiments may make the world ineligible
-for some achievements; use a dedicated test world when possible.
+Without Beta APIs the scripts never load, so negotiation times out and you see
+no bridge activity in the game. Enabling experiments may also make the world
+ineligible for some achievements, so use a dedicated test world when you can.
 
 ## How it works
 
@@ -87,14 +90,15 @@ V2Endpoint
 └── stream handlers      → registerV2Stream
 ```
 
-The router activates only after the world is ready. A hello that arrives before
-activation is retained as one sanitized attempt; other pre-ready business is
-dropped, never replayed. Each connected peer has its own epoch, fragments and
-pending requests. A new peer never replaces another.
+The router activates only once the world is ready. A hello that arrives before
+that is kept as a single sanitized attempt, and any other business message that
+arrives early is dropped and never replayed. Each connected peer has its own
+epoch, fragments and pending requests, and a new peer never replaces an existing
+one.
 
-Downlink uses `scriptevent mcbews:packet_v2`; uplink uses chat frames sent by
-the simulated player `MCBEWS_BRIDGE`. That name is transport attribution, not
-authentication.
+Downlink messages go out through `scriptevent mcbews:packet_v2`. Uplink messages
+arrive as chat frames sent by the simulated player `MCBEWS_BRIDGE`. That name
+only tells you which transport carried the message; it is not authentication.
 
 ## Register a capability
 
@@ -108,12 +112,14 @@ const registration = registerCapability("custom.echo", (_method, payload, contex
 // unregisterCapability(registration)
 ```
 
-Handlers receive `(method, payload, context)` and return an object or a Promise.
-Context includes `caller`, `requestVersion`, `metadata`, `client` and
-`cancellation`. An optional validator returns a message to reject the payload.
+A handler receives `(method, payload, context)` and returns an object or a
+Promise. The context includes `caller`, `requestVersion`, `metadata`, `client`
+and `cancellation`. An optional validator rejects the payload by returning a
+message.
 
-Duplicate names throw unless `replace: true` is passed. Unregistering during an
-in-flight call does not change that call; later calls no longer see the name.
+Registering a name that already exists throws unless you pass `replace: true`.
+Unregistering while a call is in flight does not affect that call, but later
+calls no longer find the name.
 
 ## Register a stream
 
@@ -128,12 +134,13 @@ const unregister = registerV2Stream("custom.ticks", async function* (_method, pa
 });
 ```
 
-Producers yield JSON items and do not need to know the total length. Large items
-are fragmented by the SDK and delivered once. Duplicate stream names throw.
-Consumers stop with cancellation; producers must check `context.cancellation`.
+A producer yields JSON items one at a time and does not need to know the total
+length in advance. The SDK fragments large items and delivers each one once,
+after reassembly. Registering a duplicate stream name throws. A consumer stops a
+stream by cancelling it, so producers must check `context.cancellation`.
 
 The router also exposes `getV2Endpoint(epoch)` for advanced host code that needs
-the per-connection endpoint directly.
+direct access to the per-connection endpoint.
 
 ## Built-in capabilities
 
@@ -152,43 +159,44 @@ The default demo build additionally registers:
 | `demo.ticks`        | Finite or unbounded index stream; cancellation stops production |
 | `run_world_command` | World-command handler; the command denylist applies             |
 
-Other capabilities such as `find_entities` are not bundled. Custom entity
-queries are host-defined and must validate their own scope.
+Other capabilities, such as `find_entities`, are not bundled. Custom entity
+queries are defined by the host, which must also validate their scope.
 
 ## World command safety
 
-For player-relative commands, call `run_world_command` with
-`{"command": "testfor @s", "player": "Alex"}`. The exact online player name
-supplies the executor, position and dimension; an unavailable player returns an
-error. Omitting `player` keeps the overworld dimension context. The example's
-`!cmd` supplies the chat sender automatically.
+To run a command relative to a player, call `run_world_command` with
+`{"command": "testfor @s", "player": "Alex"}`. The exact name of an online player
+supplies the executor, position and dimension, and the call returns an error if
+that player is not available. If you omit `player`, the command keeps the
+overworld dimension context. The example's `!cmd` passes the chat sender
+automatically.
 
-`successCount` is the number of successful command applications. A zero count
-is reported explicitly; a completed bridge call alone does not establish a
-world change.
+`successCount` is the number of times the command was applied successfully, and
+a zero is reported explicitly. A completed bridge call alone does not mean the
+world changed.
 
 `run_world_command` ships in the default package, but its policy still applies:
 
-- the default policy is denylist-only: any entrypoint on the command
-  denylist (`execute`, `script`, `op`, `setblock`, `fill`, and others) is
-  rejected;
-- pass an explicit allowlist to `handleRunWorldCommand` to narrow it further;
-- every call must still be authorized by the Python host.
+- The default policy is denylist-only: any command whose entrypoint is on the
+  denylist (`execute`, `script`, `op`, `setblock`, `fill` and others) is
+  rejected.
+- To narrow it further, pass an explicit allowlist to `handleRunWorldCommand`.
+- Every call must still be authorized by the Python host.
 
 The bridge is **not** a security boundary. Transport attribution, the simulated
-player and metadata identity do not replace authentication or authorization.
-The addon only provides the defensive command filter above.
+player and metadata identity cannot replace authentication or authorization.
+The addon provides only the defensive command filter described above.
 
 ## Troubleshooting
 
-| Symptom                                       | Check                                                                                                |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Negotiation times out                         | The pack is not active, the target world is wrong, or **Beta APIs** is off                           |
-| `UNSUPPORTED_PROTOCOL` in logs                | A retired script event reached the addon; update the Python host or the addon so both speak MCBEWS/2 |
-| `UNSUPPORTED_METHOD` for `!echo` or `!stream` | The lean `--base` package is installed. Use the default demo build                                   |
-| `!cmd` is rejected                            | The command is on the command denylist, or the pack is the lean `--base` build                       |
-| No bridge activity in-game                    | Scripts did not load. Confirm Beta APIs, content log and pack activation                             |
-| `demo.ticks` stops early                      | The consumer cancelled or exceeded a stream limit                                                    |
+| Symptom                                       | Check                                                                                                 |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Negotiation times out                         | The pack is not active, you joined the wrong world, or **Beta APIs** is off                           |
+| `UNSUPPORTED_PROTOCOL` in logs                | The addon received a retired script event; update the Python host or the addon so both speak MCBEWS/2 |
+| `UNSUPPORTED_METHOD` for `!echo` or `!stream` | The lean `--base` package is installed. Switch to the default demo build                              |
+| `!cmd` is rejected                            | The command is on the command denylist, or the pack is the lean `--base` build                        |
+| No bridge activity in-game                    | The scripts did not load. Check Beta APIs, the content log and whether the pack is active             |
+| `demo.ticks` stops early                      | The consumer cancelled the stream, or the stream hit a limit                                          |
 
 ## License
 

@@ -1,19 +1,20 @@
 # Upgrade to the current SDK
 
-This guide covers the retired V1 API, including intermediate dual-protocol
-builds. The current SDK introduces breaking changes. The SDK no longer speaks MCBEWS/1 and no longer
-offers a second server entry point. Deploy the Python package and the companion
-addon as a matched pair; mixed old/new deployments are rejected by design.
+This guide is for hosts that still use the retired V1 API, including
+intermediate builds that supported both protocols. The current SDK has breaking
+changes: it no longer speaks MCBEWS/1, and it no longer offers a second server
+entry point. Deploy the Python package and the companion addon together as a
+matched pair, because mixed old and new deployments are rejected by design.
 
-The symbols and routes marked **removed** below no longer exist in this version.
-They are named here only so existing hosts can find what to replace.
+Everything marked **removed** below no longer exists in this version. It is
+listed only so that existing hosts can find its replacement.
 
 ## What changed at a glance
 
 | Area | Older hosts | This release |
 | --- | --- | --- |
 | Python entry | `McbeServerFacade`; some development builds also exposed `McbeServer` | `McbeServer` only |
-| Dispatch | `legacy` callback order or `reliable` lanes | Always reliable managed lanes |
+| Dispatch | `legacy` callback order or `reliable` queues | Always the managed queues |
 | Protocol | MCBEWS/1 by default, MCBEWS/2 opt-in | V2 (MCBEWS/2); negotiated before business processing |
 | Negotiation | Business could run before discovery finished | `READY_V2` required before business |
 | Fallback | Old addons continued on known v1 methods | No fallback; old peers are rejected |
@@ -28,13 +29,15 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
                               └────────→ REJECTED ────────→ CLOSED
 ```
 
-- `WS_TRANSPORT_CONNECTED` is transport only. It is not business readiness.
-- `NEGOTIATING` handles only negotiation, required control frames and correlated
-  native `commandResponse` / `error` frames. Business frames are dropped, not
-  buffered for replay.
-- `on_connected` fires once at `READY_V2`. A rejected connection never emits a
-  business `on_connected` or a paired business `on_disconnected`.
-- Failures close the WebSocket with code `1008` and a bounded reason token.
+- `WS_TRANSPORT_CONNECTED` only means the transport is open. It does not mean the
+  connection is ready for business.
+- While `NEGOTIATING`, the SDK handles only negotiation frames, required control
+  frames and correlated native `commandResponse` / `error` frames. Business
+  frames are dropped, not buffered for replay.
+- `on_connected` fires exactly once, at `READY_V2`. A rejected connection never
+  emits a business `on_connected`, so it never emits a matching business
+  `on_disconnected` either.
+- A failure closes the WebSocket with code `1008` and a short reason token.
 
 | Peer combination | Result | Business side effects |
 | --- | --- | --- |
@@ -58,7 +61,7 @@ protocol and is unrelated to MCBEWS/1. It stays as Bedrock defines it.
 | Removed | Replacement |
 | --- | --- |
 | `McbeServerFacade` | `McbeServer` |
-| `DispatchSettings(mode="legacy" \| "reliable")` switch | Removed. `McbeServer` always uses managed lanes |
+| `DispatchSettings(mode="legacy" \| "reliable")` switch | Removed. `McbeServer` always uses managed queues |
 | `ConnectionHook.on_ui_chat_reassembled` | Removed. Use native events or host V2 methods |
 | `AddonControlHook` | Removed |
 | `LegacyUiChatHook`, `LegacyUiChatHookAdapter` | Removed |
@@ -79,8 +82,9 @@ protocol and is unrelated to MCBEWS/1. It stays as Bedrock defines it.
 | `mcbe_ws_sdk.extensions.mcbews_v1.*` | Removed |
 | v1 bridge codecs and wire vectors | Old frames are rejected, not decoded for business |
 
-The 461-byte empirical command budget was preserved, but it now comes from the
-MCBEWS/2 manifest (`limits.command_bytes`). It may only be lowered.
+The 461-byte command budget, which was determined empirically, is preserved. It
+now comes from the MCBEWS/2 manifest (`limits.command_bytes`) and can only be
+lowered.
 
 ### Addon bridge and host business helpers
 
@@ -95,9 +99,9 @@ MCBEWS/2 manifest (`limits.command_bytes`). It may only be lowered.
 | `mcbews:bridge_req`, `mcbews:session_req`, `mcbews:text_resp` | Removed; rejected with zero side effects |
 
 If your host still needs session, approval, UI-chat or text-response semantics,
-implement them as ordinary MCBEWS/2 methods and notifications in your own
-capability registry. The SDK no longer ships business DTOs, channels or
-aggregate handlers for them.
+implement them yourself as ordinary MCBEWS/2 methods and notifications in your
+own capability registry. The SDK no longer ships DTOs, channels or aggregate
+handlers for them.
 
 ## Removed addon API and routes
 
@@ -129,8 +133,8 @@ server = McbeServerFacade(hook=hook)
 server = McbeServer(hook=hook)
 ```
 
-Do not add a background task around hooks. Managed lanes keep the reader free
-while a hook awaits a command or capability reply.
+Do not wrap your hooks in a background task. The managed queues keep the reader
+free while a hook awaits a command or capability reply.
 
 ### 2. Replace capability calls
 
@@ -145,9 +149,9 @@ response = await server.v2.request(
 )
 ```
 
-The new call returns the response envelope; successful data is under `result`.
-Remote protocol failures raise `RemoteCallError` with `code`. There is no v1
-result wrapper.
+The new call returns the response envelope, and the data of a successful call is
+under `result`. A remote protocol failure raises `RemoteCallError` with a
+`code`. There is no longer a v1 result wrapper.
 
 ### 3. Replace capability registration
 
@@ -168,8 +172,8 @@ const registration = registerCapability("demo.echo", (_method, payload, context)
 }));
 ```
 
-Duplicate names require `replace: true`. Unregistering affects future calls
-only.
+Registering a duplicate name requires `replace: true`. Unregistering affects
+only future calls.
 
 ### 4. Replace UI / session / approval / text-response flows
 
@@ -211,14 +215,16 @@ Demo capabilities ship in the default package. Use `npm run build:base` /
 | Gametest | pack `1.0.0-beta`; npm `1.0.0-beta.1.26.30-stable` | Engine module declaration and matching development package |
 | Minimum engine | `[1, 26, 30]` | Declared game target; validate the actual game build separately |
 
-Pack versions use three integers, so they do not carry the SDK's `rc1` suffix.
-Keep the candidate's Python and addon artifacts together. Changing a Script API
-dependency does not change the wire protocol or determine the SDK version.
+A pack version is made of three integers, so it cannot carry the SDK's `rc1`
+suffix. Keep the Python and addon artifacts of one candidate together. Upgrading
+a Script API dependency does not change the wire protocol and does not decide the
+SDK version.
 
 ## Rollback and deployment
 
-1. Save the currently deployed Python wheel, addon file, host configuration and
-   a world backup as one rollback set. Keep their version and source information.
+1. Save the Python wheel, addon file and host configuration you currently run,
+   plus a world backup, as one rollback set. Keep their version and source
+   information with it.
 2. Install the candidate wheel into a separate environment:
 
    ```bash
@@ -255,8 +261,8 @@ version of **both** the Python package and the addon, then reconnecting.
 - `PlayerMessageEvent.sender` is still the authoritative player identity.
 - `NoOpHook`, `ConnectionHook`, `ResponseSink`, `OutboundText`,
   `SystemNotification` and `McbeOutboundDelivery` keep their roles.
-- Native event subscriptions and interceptors keep their contract.
-- The 461-byte command budget, sentence-aware splitting and native-command
-  atomicity are unchanged.
+- Native event subscriptions and interceptors work as before.
+- The 461-byte command budget, sentence-aware splitting and the rule that native
+  commands are never split are unchanged.
 - Automated tests do not prove live-game support; verify the target game
   version, platform and addon loading separately.

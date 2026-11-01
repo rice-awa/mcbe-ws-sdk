@@ -1,10 +1,10 @@
 # API 参考
 
-完整 API 参考提供英文版，包含签名、参数与源码文档。本站的使用指南另有中文译本。
+完整的 API 参考只有英文版，包含签名、参数和源码文档；本站的使用指南则提供中文版本。
 
-`McbeServer` 是唯一公开的服务入口；`server.v2` 提供 `V2Bridge`，
-用于能力、通知与流。入口与用法见[快速开始](getting-started.md)与
-[扩展作者指南](extension-authors.md)，线协议见[协议合同](protocol-v2.md)。
+`McbeServer` 是唯一公开的服务入口，`server.v2` 提供 `V2Bridge`，
+用来调用能力、发送通知和处理流。入口与用法见[快速开始](getting-started.md)和
+[扩展作者指南](extension-authors.md)，线协议见 [MCBEWS/2 协议](protocol-v2.md)。
 
 ## 如何查看完整 API
 

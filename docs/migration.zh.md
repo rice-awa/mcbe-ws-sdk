@@ -1,17 +1,17 @@
 # 升级到当前 SDK
 
-本指南适用于使用 V1 接口的宿主，也涵盖开发期间的双协议版本。
-当前 SDK 有破坏性变化：移除了 MCBEWS/1 和旧服务入口。
-Python 包与配套附加包需要配套部署；新旧协议不匹配时连接会被拒绝。
+本指南写给仍在使用 V1 接口的宿主，也适用于开发期间同时支持两种协议的中间版本。
+当前 SDK 含有破坏性变化：MCBEWS/1 和旧的服务入口都已经移除。
+Python 包与配套附加包必须成套部署，新旧协议不匹配的连接会被拒绝。
 
-下文标记为**已删除**的符号与路由在当前版本中已不存在，仅用于帮助现有宿主查找替代项。
+下文标记为**已删除**的符号和路由，在当前版本中已经不存在，列出来只是为了帮助现有宿主找到替代项。
 
 ## 变化概览
 
 | 领域 | 旧宿主 | 当前版本 |
 | --- | --- | --- |
 | Python 入口 | `McbeServerFacade`；部分开发版本还提供 `McbeServer` | 只保留 `McbeServer` |
-| 调度 | `legacy` 串行回调或 `reliable` 队列 | 始终使用受管理队列 |
+| 调度 | `legacy` 串行回调或 `reliable` 队列 | 始终使用 SDK 托管的队列 |
 | 协议 | 默认 MCBEWS/1，显式启用 MCBEWS/2 | 当前使用 V2（MCBEWS/2），业务在协商后运行 |
 | 协议协商 | 探测完成前业务仍可运行 | 必须 `READY_V2` 后才执行业务 |
 | 回退 | 旧附加包继续使用已知 v1 方法 | 无回退；旧端直接拒绝 |
@@ -26,12 +26,12 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
                               └────────→ REJECTED ────────→ CLOSED
 ```
 
-- `WS_TRANSPORT_CONNECTED` 只表示传输建立，不表示业务就绪。
-- `NEGOTIATING` 只处理协商、必要控制帧，以及已关联的原生
+- `WS_TRANSPORT_CONNECTED` 只说明传输已经建立，连接还没有为业务做好准备。
+- 处于 `NEGOTIATING` 时，SDK 只处理协商帧、必要的控制帧，以及已匹配请求的原生
   `commandResponse` / `error`；业务帧会被丢弃，不会缓存后重放。
-- `on_connected` 在 `READY_V2` 时只触发一次。被拒绝的连接不会产生业务
-  `on_connected`，也不会产生无配对的业务 `on_disconnected`。
-- 失败会以 `1008` 关闭 WebSocket，并附带长度有界的原因标识。
+- `on_connected` 在 `READY_V2` 时只触发一次。被拒绝的连接不会触发业务
+  `on_connected`，因此也不会出现单独、没有配对的业务 `on_disconnected`。
+- 失败时 WebSocket 以 `1008` 关闭，并附带一个简短的原因标识。
 
 | 对端组合 | 结果 | 业务副作用 |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 | 已删除 | 替代 |
 | --- | --- |
 | `McbeServerFacade` | `McbeServer` |
-| `DispatchSettings(mode="legacy" \| "reliable")` 开关 | 已删除；`McbeServer` 始终使用受管理队列 |
+| `DispatchSettings(mode="legacy" \| "reliable")` 开关 | 已删除；`McbeServer` 始终使用 SDK 托管的队列 |
 | `ConnectionHook.on_ui_chat_reassembled` | 已删除；使用原生事件或宿主自己的 V2 方法 |
 | `AddonControlHook` | 已删除 |
 | `LegacyUiChatHook`、`LegacyUiChatHookAdapter` | 已删除 |
@@ -75,7 +75,7 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 | `mcbe_ws_sdk.extensions.mcbews_v1.*` | 已删除 |
 | v1 桥编解码与线向量 | 旧帧只被拒绝，不再解码执行 |
 
-461 字节经验命令预算保留，但现在来自 MCBEWS/2 清单的 `limits.command_bytes`，只能降低。
+461 字节的命令预算（由实测得出）继续保留，现在它来自 MCBEWS/2 清单中的 `limits.command_bytes`，并且只能调低。
 
 ### 附加包桥与宿主业务辅助
 
@@ -89,8 +89,8 @@ WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
 | `TextResponseChunk`、`TextResponseMessage`、`TokenUsage`、文本响应编解码 | 已删除 |
 | `mcbews:bridge_req`、`mcbews:session_req`、`mcbews:text_resp` | 已删除；只记录拒绝，零副作用 |
 
-如果宿主仍需要会话、审批、UI 聊天或文本响应语义，请把它们实现为普通的 MCBEWS/2
-方法与通知，放进自己的能力注册表。SDK 不再提供这些业务 DTO、通道或聚合入口。
+如果宿主仍然需要会话、审批、UI 聊天或文本响应这类语义，请自行把它们实现为普通的 MCBEWS/2
+方法和通知，放进自己的能力注册表。SDK 不再提供这些业务 DTO、通道和聚合入口。
 
 ## 已删除的附加包 API 与路由
 
@@ -121,7 +121,7 @@ server = McbeServerFacade(hook=hook)
 server = McbeServer(hook=hook)
 ```
 
-不要在钩子外自行创建后台任务。受管理队列会让读取循环在钩子等待命令或能力回复时继续工作。
+不要自己在钩子外再创建后台任务。SDK 托管的队列会让读取循环在钩子等待命令或能力回复时继续工作。
 
 ### 2. 替换能力调用
 
@@ -136,8 +136,8 @@ response = await server.v2.request(
 )
 ```
 
-新调用返回响应信封，成功数据在 `result` 中。远端协议失败抛出带 `code` 的
-`RemoteCallError`。不再有 v1 结果包装。
+新的调用返回响应信封，成功时的数据在 `result` 中。远端协议失败会抛出带 `code` 的
+`RemoteCallError`。不再有 v1 的结果包装。
 
 ### 3. 替换能力注册
 
@@ -158,7 +158,7 @@ const registration = registerCapability("demo.echo", (_method, payload, context)
 }));
 ```
 
-同名注册必须传 `replace: true` 才覆盖。注销只影响后续调用。
+注册同名能力时必须传入 `replace: true` 才会覆盖。注销只影响之后的调用。
 
 ### 4. 替换 UI / 会话 / 审批 / 文本响应流程
 
@@ -192,18 +192,18 @@ npm run mcaddon
 | Python SDK | `0.3.0rc1` | 发布候选，验收后再转 `0.3.0` |
 | npm 项目 | `0.3.0-rc.1` | 附加包构建项目，标记为 private，不向 npm 发布 |
 | Pack header 与 modules | `1.1.0` | 行为包、资源包的部署版本 |
-| 线协议 | `MCBEWS/2` | 消息与协商合同 |
+| 线协议 | `MCBEWS/2` | 消息与协商规范 |
 | Script API 依赖 | server `2.8.0`、server-ui `2.1.0` | 游戏提供的 API |
 | Gametest | pack `1.0.0-beta`；npm `1.0.0-beta.1.26.30-stable` | 引擎模块声明与配套开发包 |
 | 最低引擎 | `[1, 26, 30]` | 声明的游戏目标，实际游戏构建仍需单独验证 |
 
-Pack 版本使用三个整数，不携带 SDK 的 `rc1` 后缀。请把同一候选的 Python 包与附加包一起保存。
-Script API 依赖升级不自动改变线协议，也不决定 SDK 发布版本。
+Pack 版本由三个整数组成，不能带 SDK 的 `rc1` 后缀。请把同一个候选版本的 Python 包和附加包放在一起保存。
+升级 Script API 依赖既不会改变线协议，也不决定 SDK 的发布版本。
 
 ## 回退与部署
 
-1. 把当前部署的 Python wheel、附加包文件、宿主配置和世界备份保存为一套回退资料，
-   记录版本和来源。
+1. 把当前正在运行的 Python wheel、附加包文件、宿主配置，连同一份世界备份，
+   保存为一套回退资料，并记下各自的版本和来源。
 2. 在独立环境安装候选 wheel：
 
    ```bash
@@ -211,8 +211,8 @@ Script API 依赖升级不自动改变线协议，也不决定 SDK 发布版本�
    .venv-next/bin/pip install ./dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl
    ```
 
-   Windows 使用 `.venv-next\Scripts\pip`。在新环境安装宿主自己的依赖，
-   并先完成宿主 API 调用迁移。
+   Windows 下使用 `.venv-next\Scripts\pip`。在新环境中安装宿主自己的依赖，
+   并在切换流量之前，先完成宿主 API 调用的迁移。
 3. 断开旧服务，在目标世界启用候选配套附加包，开启 **实验 → 测试版 API（Beta APIs）**，
    重新加载世界，再用新环境启动更新后的宿主。
 4. 重新执行 `/wsserver`。使用附加包示例核对连接就绪、`!inv`、`!echo` 和
@@ -233,6 +233,6 @@ Script API 依赖升级不自动改变线协议，也不决定 SDK 发布版本�
 - `PlayerMessageEvent.sender` 仍是权威玩家身份。
 - `NoOpHook`、`ConnectionHook`、`ResponseSink`、`OutboundText`、
   `SystemNotification` 与 `McbeOutboundDelivery` 的职责不变。
-- 原生事件订阅与拦截器合同不变。
-- 461 字节命令预算、句子优先分片与原生命令原子性不变。
+- 原生事件订阅与拦截器的行为不变。
+- 461 字节的命令预算、优先按句子分片，以及原生命令不拆分发送的规则都没有变。
 - 自动化测试不等于实机支持；请单独验证目标游戏版本、平台与附加包加载情况。

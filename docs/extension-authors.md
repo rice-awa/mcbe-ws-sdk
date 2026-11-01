@@ -1,8 +1,9 @@
 # Extension authors
 
-Extensions register handlers; they do not own request wait tables, wire IDs or
-fragment state. Start with [getting started](getting-started.md); use
-[migration](migration.md) only when updating an existing host.
+An extension only registers handlers. It does not keep a table of pending
+requests, assign wire IDs or hold fragment state, because the SDK does all of
+that. If you are new here, start with [getting started](getting-started.md), and
+turn to [migration](migration.md) only when you are updating an existing host.
 
 ## Register a Python capability
 
@@ -27,20 +28,22 @@ registration = bridge.registry.register("demo.echo", echo, validate=validate)
 # bridge.registry.unregister(registration)
 ```
 
-Handlers receive `(name, payload, CapabilityContext)` and return a mapping, or
-an awaitable resolving to one. A validator returns `None` to accept or a message
-to reject the payload.
+A handler receives `(name, payload, CapabilityContext)` and returns a mapping, or
+an awaitable that resolves to one. A validator returns `None` to accept the
+payload, or a message to reject it.
 
-Duplicate names require explicit `replace=True`. Removal affects future calls;
-a stale registration cannot remove its replacement. In-flight calls keep the
-handler selected when they started. Unknown methods, invalid input and handler
-exceptions map to `UNSUPPORTED_METHOD`, `INVALID_PARAMS` and `HANDLER_FAILED`
-on the wire.
+Registering a name that already exists requires an explicit `replace=True`.
+Unregistering affects only future calls, and an outdated registration handle
+cannot remove the registration that replaced it. A call already in progress
+keeps the handler that was chosen when it started. On the wire, an unknown
+method, invalid input and a handler exception map to `UNSUPPORTED_METHOD`,
+`INVALID_PARAMS` and `HANDLER_FAILED`.
 
-`context.client` is the connection's V2 endpoint for reverse requests,
-notifications and streams. Calls into an already active method group are
-rejected to avoid recursive queue waits. Metadata identity is untrusted;
-transport attribution and host authorization remain separate.
+`context.client` is the V2 endpoint of the current connection, which you can use
+to send requests, notifications and streams back to the caller. A call into a
+method group that is already running is rejected, so a handler cannot end up
+waiting on its own queued work. The identity in metadata is untrusted; see
+[Trust boundary](#trust-boundary).
 
 ## Register an addon capability
 
@@ -56,13 +59,14 @@ const registration = registerCapability("custom.echo", (_method, payload, contex
 // unregisterCapability(registration)
 ```
 
-Handlers receive `(method, payload, context)` and return an object or a Promise.
-Context includes `caller`, `requestVersion`, `metadata`, `client` and
-`cancellation`. An optional validator returns a message to reject the payload.
+A handler receives `(method, payload, context)` and returns an object or a
+Promise. The context includes `caller`, `requestVersion`, `metadata`, `client`
+and `cancellation`. An optional validator returns a message to reject the
+payload.
 
-Custom handlers coexist with the built-ins and need no SDK changes. Duplicate
-names throw unless `replace: true` is passed. Unregistering during an in-flight
-call does not change that call.
+Your handlers sit alongside the built-in ones, and you do not need to change the
+SDK. Registering a duplicate name throws unless you pass `replace: true`.
+Unregistering a capability while a call is running does not affect that call.
 
 ## Register a stream producer
 
@@ -89,9 +93,9 @@ const unregister = registerV2Stream("custom.ticks", async function* (_method, pa
 });
 ```
 
-A producer yields JSON items and does not need to know the total length.
-Large items are fragmented by the SDK and delivered once as logical items.
-Registering a duplicate stream name throws.
+A producer yields JSON items one at a time and does not need to know the total
+length in advance. The SDK fragments large items and delivers each one once, as
+a single logical item. Registering a stream name that already exists throws.
 
 ## Call the addon
 
@@ -117,33 +121,36 @@ async with stream:
         print(item)
 ```
 
-`ready()` is only needed when work starts outside a hook. Hooks already run
-after `READY_V2`.
+You only need `ready()` when the work starts outside a hook, because hooks
+already run after `READY_V2`.
 
-A remote protocol error raises `RemoteCallError` with `code` and a bounded
-message. Transport failures, timeouts and cancellation also end the call.
-Notifications create no reply waiter, so a remote handler failure cannot be
-returned as a response.
+When the remote side returns a protocol error, the call raises `RemoteCallError`
+with the `code` and a short message. A transport failure, a timeout or a
+cancellation also ends the call. A notification has no reply to wait for, so if
+the remote handler fails, that failure cannot come back as a response.
 
-Metadata is limited to 4096 compact JSON UTF-8 bytes and follows the protocol
-depth and number rules. Optional unknown keys and nested values survive the
-round trip. Caller-supplied `sdk.*` keys are reserved; use `trace_id` for
-tracing. Identity fields never grant permission.
+Metadata is limited to 4096 UTF-8 bytes of compact JSON and follows the protocol
+rules for depth and numbers. Unknown optional keys and nested values come back
+unchanged. Keys matching `sdk.*` are reserved and cannot be set by the caller;
+pass `trace_id` to trace a request. An identity field never grants
+permission.
 
 ## Cancellation and errors
 
-- Cancelling a pending Python request ends its wait. A frame already handed to
-  the transport may still deliver, and an executed world change is not undone.
-- Addon callers use a `V2RequestCancellation` handle per request; call
-  `cancel()` and check `cancelled` before sending more work.
-- Stream consumers exit with `async with` or `await stream.aclose()`; cancelling
-  a pending read cancels that stream, not other requests.
-- Producers must cooperate with cancellation. JavaScript producers should check
-  `context.cancellation`; an arbitrary unresolved Promise cannot be forcibly
-  unwound.
-- Player-facing failures show the method or capability, the error code, a
-  readable message of at most 256 UTF-8 bytes, and an action hint. Internal
-  request IDs and stack traces stay in logs.
+- Cancelling a pending Python request ends the wait. A frame that was already
+  handed to the transport may still be delivered, and a world change that has
+  already run is not undone.
+- Addon callers use one `V2RequestCancellation` handle per request. Call
+  `cancel()`, and check `cancelled` before sending more work.
+- A stream consumer that may stop early should use `async with` or
+  `await stream.aclose()`. Cancelling a pending read cancels that stream only,
+  not other requests.
+- Producers have to cooperate with cancellation. JavaScript producers should
+  check `context.cancellation`, because a Promise that never resolves cannot be
+  forced to stop.
+- When a call fails in front of a player, show the method or capability, the
+  error code, a readable message of at most 256 UTF-8 bytes and an action hint.
+  Keep internal request IDs and stack traces in the logs.
 
 ## Limits
 
@@ -158,47 +165,35 @@ tracing. Identity fields never grant permission.
 | Buffered bytes per endpoint | 262144 |
 | Stream idle deadline | 30000 ms per open/item/message |
 
-A slow consumer fails with `LIMIT_EXCEEDED` and sends a cancellation. Fixed
-send intervals do not provide receiver backpressure; there is no receiver-credit
-mechanism. See [the protocol contract](protocol-v2.md#request-streams).
+A slow consumer fails with `LIMIT_EXCEEDED`, and the SDK sends a cancellation.
+Sending at a fixed interval does not give the receiver backpressure, and there
+is no receiver-credit mechanism. See
+[the MCBEWS/2 protocol](protocol-v2.md#request-streams).
 
 ## Build variants and demo registration
 
 The default addon build registers every bundled capability: `get_player_snapshot`,
 `get_inventory_snapshot`, `demo.echo`, the `demo.ticks` stream and
-`run_world_command`:
+`run_world_command`. The lean `--base` build registers only
+`get_player_snapshot` and `get_inventory_snapshot`. The build commands for both
+are in the [addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#build).
 
-```bash
-cd addon
-npm ci
-npm run build
-npm run mcaddon
-```
-
-The lean `--base` build registers exactly `get_player_snapshot` and
-`get_inventory_snapshot`:
-
-```bash
-npm run build:base
-npm run mcaddon:base
-```
-
-`--base` or `MCBE_BASE=1` selects `main.ts`; the default entry is
-`main.demo.ts`. The output path is still `dist/scripts/main.js`. To add your own
-handlers, import them in your entry and register once during
+`--base` or `MCBE_BASE=1` selects `main.ts`, while the default entry is
+`main.demo.ts`. Both write to `dist/scripts/main.js`. To add your own handlers,
+import them in your entry and register them once during
 `initializeAfterWorldLoad`.
 
-`run_world_command` applies the command denylist by default; pass an
-explicit allowlist to `handleRunWorldCommand` to narrow it further. Keep
-host-side authorization in place regardless of the addon policy.
-
-The addon must be imported into the target world with **Experiments → Beta
-APIs** enabled. Automated examples do not establish live-game support; verify
-your game version and platform separately.
+`run_world_command` applies the command denylist by default. To narrow it
+further, pass an explicit allowlist to `handleRunWorldCommand`. The addon must
+be imported into a world with **Experiments → Beta APIs** enabled, as described
+in the [addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#enable-in-a-world). Automated examples
+do not establish live-game support, so verify your game version and platform
+separately.
 
 ## Trust boundary
 
-The bridge is not a security boundary. Caller attribution, the simulated
-`MCBEWS_BRIDGE` player, metadata identity and addon-side command filtering do
-not replace host authentication and authorization. Enforce caller permissions in
-your Python capability handlers.
+The bridge is not a security boundary. None of the following replaces
+authentication and authorization on your host: where a message was delivered
+from, the simulated `MCBEWS_BRIDGE` player, the identity in metadata, and the
+command filtering in the addon. Check each caller's permissions in your Python
+capability handlers, whatever policy the addon applies.

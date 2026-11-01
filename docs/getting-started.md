@@ -1,7 +1,8 @@
 # Getting started
 
-This guide connects a Bedrock client to a Python host through `McbeServer`,
-runs the bundled examples, and covers the first failures you are likely to hit.
+This guide walks you through connecting a Bedrock client to a Python host with
+`McbeServer`, running the bundled examples and fixing the problems people most
+often hit on a first run.
 
 ## Prerequisites
 
@@ -70,8 +71,8 @@ dedicated test world when possible.
 
 ## Start the example server
 
-The basic example calls no addon capability; it answers prefixed commands and waits for native
-`commandRequest` replies:
+The basic example calls no addon capability. It answers commands that start
+with `!` and waits for native `commandRequest` replies:
 
 ```bash
 python examples/basic-server/server.py --host 0.0.0.0 --port 8080
@@ -89,14 +90,15 @@ Use `127.0.0.1` when Python and the game run on the same machine. From another
 device, use the Python machine's LAN IP and allow the listening port through
 its firewall. There is no login step and no authentication in the examples.
 
-The connection is ready when protocol negotiation reaches `READY_V2`.
-`on_connected` fires at that point; no business frame is handled before it.
+A connection is ready only when protocol negotiation reaches `READY_V2`.
+`on_connected` fires at that moment, and no business message is handled before
+it.
 
 ## Commands in the examples
 
 Both examples share one input rule: after trimming surrounding whitespace, the
-message must start with ASCII `!`. Everything else is silent — no reply, no
-command, no capability or stream call.
+message must start with ASCII `!`. Everything else is ignored: the example
+sends no reply and runs no command, capability or stream call.
 
 | Input | Result |
 | --- | --- |
@@ -156,12 +158,12 @@ response = await server.v2.request(
 print(response["result"])
 ```
 
-The SDK owns correlation, timeouts, fragmentation and reassembly. A remote
-protocol error raises `RemoteCallError` with its wire `code`. Inspect native
-command responses for `statusCode` as well; a received frame is not proof of
-business success.
+The SDK matches replies to requests and handles timeouts, fragmentation and
+reassembly. When the remote side returns a protocol error, the call raises
+`RemoteCallError` with the wire `code`. For native commands, also check
+`statusCode`, because receiving a response does not mean the command succeeded.
 
-For streams:
+To consume a stream:
 
 ```python
 stream = await server.v2.stream(state.id, "demo.ticks", {"count": 3})
@@ -177,14 +179,15 @@ not other requests.
 
 ## Errors players see
 
-Application-level failures should show the player:
+When an application-level call fails, show the player:
 
 - the method or capability being called,
 - a stable error code,
-- a bounded readable message (at most 256 UTF-8 bytes, never split Unicode),
+- a short readable message (at most 256 UTF-8 bytes, never cutting a character
+  in half),
 - an action hint, such as “use the default package” or “check the parameter”.
 
-Internal request IDs, trace IDs and stack traces stay in logs. The addon maps
+Keep internal request IDs, trace IDs and stack traces in the logs only. The addon maps
 unknown capabilities, invalid parameters and handler failures to
 `UNSUPPORTED_METHOD`, `INVALID_PARAMS` and `HANDLER_FAILED`.
 
@@ -195,24 +198,25 @@ unknown capabilities, invalid parameters and handler failures to
 | Connection closes immediately with `UNSUPPORTED_PROTOCOL` | The addon or client is not speaking MCBEWS/2. Old protocol frames are rejected; there is no fallback. |
 | `NEGOTIATION_TIMEOUT` | The addon is absent, not active, or scripts are not loaded. Confirm the pack and **Beta APIs**. |
 | `NEGOTIATION_CONFIRMATION_TIMEOUT` | The addon answered the challenge but the final confirmation did not complete. Reconnect and check the world/log for script errors. |
-| `NEGOTIATION_BUSY` | Too many provisional negotiations or peers; reconnect after the previous session expires. |
+| `NEGOTIATION_BUSY` | Too many negotiations or peers are in progress at once; reconnect after the previous session expires. |
 | `INVALID_NEGOTIATION` | A malformed or mismatched control frame. Verify the addon version matches this SDK. |
 | `SESSION_INVALID` | The active session was revoked or became stale. Reconnect; the new session gets a fresh epoch. |
 | Capability call times out | Confirm the active pack, the target world, Beta APIs and the live `/wsserver` connection. |
 | `!cmd` fails while `!wscmd` works | The command is on the command denylist, or the pack is the lean `--base` build. |
 | Ordinary chat gets no reply | This is expected. Examples answer only trimmed messages that start with ASCII `!`. |
-| Text arrives in pieces | The SDK uses a 461-byte empirical command budget and may split tellraw/scriptevent. Native commands stay atomic and reject overflow. |
+| Text arrives in pieces | The SDK splits tellraw and scriptevent text to fit a 461-byte empirical budget. Native commands are never split and fail if they exceed it. |
 
-Negotiation failures close the WebSocket with code `1008`. The close reason is a
-bounded token (at most 123 UTF-8 bytes). See [diagnostics](diagnostics.md) for
+When negotiation fails, the WebSocket closes with code `1008` and a short reason
+token of at most 123 UTF-8 bytes. See [diagnostics](diagnostics.md) for
 connection and transport errors.
 
 ## Shutdown and rollback
 
-Call `await server.stop()` or cancel `run_lifetime()`; managed tasks, pending
-calls and fragments are cleaned up. Reconnecting starts a new negotiation and a
-fresh session. Already executed world changes are not undone and are never
-replayed automatically.
+To shut down, call `await server.stop()` or cancel `run_lifetime()`. The SDK
+cleans up managed tasks, pending calls and fragments. Reconnecting starts a new
+negotiation and a fresh session. World changes that already ran are not undone
+and are never replayed automatically.
 
-The examples have no authentication. The bridge is not a security boundary;
-your host owns caller authentication, authorization and application state.
+The examples have no authentication, and the bridge is not a security boundary.
+Your host is responsible for authenticating and authorizing callers and for
+application state.

@@ -1,9 +1,9 @@
 # Basic WebSocket server
 
-A minimal `McbeServer` host. It shows the connection lifecycle, managed hooks,
-`!` command dispatch, tellraw replies and native `commandRequest` correlation.
-The SDK owns negotiation, request waiters, timeouts and fragments; the example
-owns the chat behavior.
+A minimal `McbeServer` host. It demonstrates the connection lifecycle, managed
+hooks, `!` command dispatch, tellraw replies and native `commandRequest`
+correlation. The SDK takes care of negotiation, request waiters, timeouts and
+fragments, and the example only supplies the chat behavior.
 
 ## Run
 
@@ -14,17 +14,19 @@ pip install -e ".[dev]"
 python examples/basic-server/server.py --host 0.0.0.0 --port 8080
 ```
 
-In game, run `/wsserver <python-host-ip>:8080`. Use `127.0.0.1` on the same
-machine, a LAN IP from another device, and allow the port through the firewall.
-Use `--log-level DEBUG` for lifecycle diagnostics and `Ctrl+C` to stop.
+In game, run `/wsserver <python-host-ip>:8080`. Use `127.0.0.1` when Python and
+the game are on the same machine. From another device, use the Python machine's
+LAN IP and allow the port through its firewall. Pass `--log-level DEBUG` to see
+lifecycle diagnostics, and press `Ctrl+C` to stop the server.
 
 ## Input rule
 
-Only messages whose trimmed text starts with ASCII `!` are handled. Empty or
-whitespace input, ordinary chat, bare `help` / `帮助`, mid-sentence `!` and
-full-width `！` are silent: no reply, no command, no capability call. A bare `!`
-returns one usage hint; an unknown `!command` returns one hint. The rule applies
-to the example only; SDK protocol and native events are never filtered by it.
+The example handles a message only when its trimmed text starts with ASCII `!`.
+Empty or whitespace input, ordinary chat, a bare `help` / `帮助`, a `!` in the
+middle of a sentence and the full-width `！` are all ignored: the example sends
+no reply and makes no command or capability call. A bare `!` returns a single
+usage hint, and so does an unknown `!command`. The rule applies to the example
+only; it never filters SDK protocol frames or native events.
 
 ## Commands
 
@@ -34,27 +36,27 @@ to the example only; SDK protocol and native events are never filtered by it.
 | `!wscmd <command>` | Await a native command response, for example `!wscmd time query daytime` |
 
 Install the companion addon and enable **Experiments → Beta APIs** in the
-world. The addon completes protocol negotiation even though this example calls
-no addon capability. `!wscmd` uses the SDK's
-native command client and returns the typed `MinecraftCommandResponse`; inspect
-`statusCode`. Without the addon the server logs `NEGOTIATION_TIMEOUT` and
-closes the connection — it never falls back to processing chat.
+world. Even though this example calls no addon capability, the addon is still
+what completes protocol negotiation. `!wscmd` uses the SDK's native command
+client and returns the typed `MinecraftCommandResponse`, so check `statusCode`.
+Without the addon, the server logs `NEGOTIATION_TIMEOUT` and closes the
+connection. It never falls back to handling chat.
 
 ## Behavior
 
 - `on_connected` fires only after MCBEWS/2 negotiation reaches `READY_V2`.
-- Same-player callbacks stay ordered; different players may progress
-  concurrently. The reader keeps receiving replies while a hook awaits a
-  command.
-- The example filters external tellraw echoes with `is_external_echo()` so it
-  does not answer itself.
-- Cancellation ends the wait but cannot undo a command already executed.
+- Callbacks for the same player run in order, while different players can
+  progress concurrently. The reader keeps receiving replies while a hook waits
+  for a command.
+- The example filters external tellraw echoes with `is_external_echo()`, so it
+  never answers its own messages.
+- Cancelling ends the wait, but it cannot undo a command that has already run.
 
 For inventory, capabilities, metadata and streams, see the
 [addon example](../addon-server/README.md) and
-[extension authors](../../docs/extension-authors.md). Addon worlds must enable
-**Experiments → Beta APIs**.
+[extension authors](../../docs/extension-authors.md). Worlds that use the addon
+must have **Experiments → Beta APIs** enabled.
 
-This example has no authentication; run it on a trusted local/LAN network and
-add host authorization for production. Automated examples do not establish new
-Minecraft platform or version support.
+This example has no authentication, so run it on a trusted local or LAN network
+and add host authorization before using it in production. Running the automated
+examples does not establish support for new Minecraft platforms or versions.

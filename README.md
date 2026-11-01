@@ -17,9 +17,10 @@ interactive experience, and connect it to the model services, message systems
 and application state you already use. Your host controls authentication and
 authorization.
 
-**The current protocol is V2 (MCBEWS/2)**, with bidirectional capability calls,
-notifications, metadata and request streams. SDK, addon and protocol versions
-are managed separately; see [migration](docs/migration.md) for the version axes.
+The SDK and the addon talk over **V2 (MCBEWS/2)**, which supports capability
+calls in both directions, notifications, metadata and request streams. The SDK,
+the addon and the protocol are versioned independently; [migration](docs/migration.md#version-numbers)
+lists the current values.
 
 [Read the docs](https://rice-awa.github.io/mcbe-ws-sdk/) · [Get started](docs/getting-started.md) · [Explore the example](examples/addon-server/README.md)
 
@@ -33,23 +34,23 @@ Minecraft world (companion addon) ←── /wsserver ──→ Python app (Mcbe
 ## What you can build
 
 - **Respond to game actions with async Python.** Handle player messages in a
-  `ConnectionHook`, run native commands and await addon results while the SDK
-  reader continues processing replies.
-- **Connect Python and the addon in both directions.** Register capabilities on
-  either side, exchange requests and notifications, and carry call context in
-  metadata. New game-side features use the same request mechanism.
-- **Receive data as it is produced.** Request streams support normal completion
-  and cancellation. Large items are fragmented and reassembled before the
-  consumer receives each complete logical item.
-- **Keep player interactions organized.** Messages retain their sender identity;
-  work from one player stays ordered while other players can progress
-  independently. Store application context by connection and sender.
-- **Create your own in-game interaction.** Render results through a `ResponseSink`
-  and `McbeOutboundDelivery`, or use native event subscriptions and interceptors
-  to extend how your host receives input.
-- **Start with a working example.** The default addon includes player and
-  inventory snapshots, echo, streams and world commands. Run the demo first,
-  then replace its handlers with your own application logic.
+  `ConnectionHook`, run native commands and await addon results. While your
+  handler waits, the SDK keeps reading and matches each reply to its request.
+- **Call both ways between Python and the addon.** Either side can register
+  capabilities, send requests and notifications, and attach call context as
+  metadata. New game-side features reuse the same request mechanism.
+- **Receive data as it is produced.** A request stream can finish normally or be
+  cancelled. Large items are fragmented for transport and reassembled, so your
+  code always receives complete items.
+- **Keep each player's interactions separate.** Every message carries its sender.
+  Work from one player runs in order, while different players can progress
+  independently, so you can store application context by connection and sender.
+- **Shape the in-game experience.** Render results with a `ResponseSink` and
+  `McbeOutboundDelivery`, or use native event subscriptions and interceptors to
+  change how your host receives input.
+- **Start from a working example.** The default addon already provides player
+  and inventory snapshots, echo, streams and world commands. Run the demo first,
+  then swap in your own handlers.
 
 ## Run your first example
 
@@ -68,9 +69,9 @@ npm --prefix addon run mcaddon:production
 
 Import `addon/dist/packages/mc-ws-sdk.mcaddon` into Minecraft. Enable
 **Experiments → Beta APIs** in the target world and activate the behavior pack.
-Without Beta APIs, scripts do not load and protocol negotiation times out.
-The addon targets engine 1.26.30 with server 2.8.0 / server-ui 2.1.0;
-see the [addon README](addon/README.md) for the full dependency list.
+Without Beta APIs the scripts never load, and protocol negotiation times out.
+The addon targets Minecraft engine 1.26.30; the full requirements are in the
+[addon README](addon/README.md#requirements).
 
 Start the server:
 
@@ -85,16 +86,22 @@ Connect from Minecraft and query your inventory:
 !inv
 ```
 
-Use `127.0.0.1` on the same machine or the host's LAN IP from another device.
-Send `!help` for commands, `!echo hello` for an echo or `!stream 5` for five items
-followed by completion. The example handles only messages starting with ASCII
-`!`; ordinary chat stays silent. Stop the server with `Ctrl+C`.
+Use `127.0.0.1` when Python and the game run on the same machine, and the
+LAN IP of the Python machine when connecting from another device. Then try:
+
+- `!help` to list the commands.
+- `!echo hello` to get an echo back.
+- `!stream 5` to receive five items followed by completion.
+
+The example reacts only to messages that start with ASCII `!`, so ordinary chat
+stays silent. Press `Ctrl+C` to stop the server.
 
 ## Integrate with your application
 
-Start with a hook when integrating the SDK into your own application. This
-host listens for `!inv`, queries the sender's inventory and prints the result.
-The SDK handles request IDs, sending, timeouts and reply correlation:
+To use the SDK in your own application, start with a hook. The host below
+listens for `!inv`, asks the addon for the sender's inventory and prints the
+result. The SDK takes care of request IDs, sending, timeouts and matching the
+reply to its request:
 
 ```python
 import asyncio
@@ -116,10 +123,10 @@ server = McbeServer(hook=InventoryHook())
 asyncio.run(server.run_lifetime())
 ```
 
-To display results in the game, add a `ResponseSink` backed by
+To show results in the game, add a `ResponseSink` backed by
 `McbeOutboundDelivery`; the [runnable example](examples/addon-server/server.py)
-shows the complete setup. For multiplayer applications, store player state by
-`(connection_id, event.sender)` so each player has a separate business context.
+has the complete setup. In a multiplayer world, key your per-player state by
+`(connection_id, event.sender)` so each player keeps a separate context.
 
 ## Find what you need
 
@@ -134,13 +141,21 @@ shows the complete setup. For multiplayer applications, store player state by
 | Upgrade from 0.2.x or roll back a deployment | [Migration](docs/migration.md) |
 | Look up classes, methods and parameters | [API reference](docs/reference.md) |
 
-The default addon includes snapshots, echo, streams and world commands. For
-snapshots alone, build the lean pack with `npm --prefix addon run mcaddon:base`.
-World commands apply a [command denylist](addon/README.md#world-command-safety);
-the host authorizes callers. Native commands stay atomic and reject overflow;
-tellraw and script events can be fragmented within the default 461-byte budget.
+## Good to know
+
+- **Choosing an addon pack.** The default addon includes snapshots, echo,
+  streams and world commands. If you only need snapshots, build the lean pack
+  with `npm --prefix addon run mcaddon:base`.
+- **World commands.** They pass through a
+  [command denylist](addon/README.md#world-command-safety), but deciding who may
+  call them is still up to your host.
+- **Long text.** Native commands are never split and fail if they exceed the
+  byte budget. tellraw and script events can be split to stay within the default
+  461-byte budget.
 
 ## Development and checks
+
+To work on the SDK itself, run these checks from the repository root:
 
 ```bash
 ruff check --no-cache src tests examples tools
@@ -150,6 +165,7 @@ mkdocs build --strict
 python tools/format.py --check
 ```
 
-Cross-language tests use Node.js 22 and the addon's TypeScript dependencies;
-run `npm ci --prefix addon` first. Plain pytest skips runner-dependent cases
-when tools are missing; `MCBE_REQUIRE_CROSS_LANGUAGE=1` makes missing tools fail.
+Cross-language tests need Node.js 22 and the addon's TypeScript dependencies, so
+run `npm ci --prefix addon` first. When those tools are missing, plain pytest
+skips the tests that depend on them; with `MCBE_REQUIRE_CROSS_LANGUAGE=1` a
+missing tool fails the run instead.

@@ -1,6 +1,6 @@
 # 快速开始
 
-本指南把基岩版客户端连接到 Python 宿主，运行仓库自带示例，并说明最常见的首次故障。
+本指南带你把基岩版客户端连接到 Python 宿主，运行仓库自带的示例，并说明首次使用时最常遇到的问题。
 
 ## 环境要求
 
@@ -24,7 +24,8 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
 ```
 
-如果已有构建好的 wheel，`pip install ./dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl` 即可安装。
+如果已经有构建好的 wheel，直接执行 `pip install ./dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl` 即可，
+运行时依赖会根据 wheel 的元数据自动安装。
 
 ## 构建并导入附加包
 
@@ -62,8 +63,8 @@ npm --prefix addon run mcaddon:base
 
 ## 启动示例服务
 
-基础示例不调用附加包能力，只响应带前缀的命令，
-并等待原生 `commandRequest` 回复：
+基础示例不调用附加包能力，只响应以 `!` 开头的命令，
+并等待原生 `commandRequest` 的回复：
 
 ```bash
 python examples/basic-server/server.py --host 0.0.0.0 --port 8080
@@ -81,13 +82,13 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 跨设备时改用运行 Python 的机器的局域网 IP，并在防火墙放行监听端口。
 示例没有登录步骤，也没有鉴权。
 
-协议协商进入 `READY_V2` 后，连接就绪。
-`on_connected` 在该时刻触发；此前不会处理任何业务消息。
+协议协商进入 `READY_V2` 后，连接才算就绪，`on_connected` 也在此刻触发；
+在此之前不会处理任何业务消息。
 
 ## 示例命令
 
 两个示例使用同一条输入规则：去掉首尾空白后，消息必须以 ASCII `!` 开头。
-其他输入一律静默——不回复、不执行命令、不调用能力或流。
+其他输入一律静默，既不回复，也不执行命令，不调用能力或流。
 
 | 输入 | 结果 |
 | --- | --- |
@@ -124,15 +125,15 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 | `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） |
 | `!help` / `!帮助` | 显示帮助 |
 
-`run_world_command` 随默认包发布。默认策略为仅禁止列表：命中命令禁止列表的入口
-一律拒绝；需要更严格时可向 `handleRunWorldCommand` 传入显式允许列表。
-`!cmd testfor @s` 使用发送者的玩家上下文，包括位置与维度。
-直接调用能力时可传入在线玩家的完整 `player` 名称；省略时保留主世界上下文。
-`successCount` 为零时明确显示成功应用次数为零。
+`run_world_command` 随默认包发布，默认只使用命令禁止列表：命中列表的命令一律拒绝。
+需要更严格时，可以向 `handleRunWorldCommand` 传入明确的允许列表。
+`!cmd testfor @s` 会以发送者的玩家上下文执行，包括位置和维度。
+直接调用该能力时，可以把在线玩家的完整名称作为 `player` 传入；省略时沿用主世界上下文。
+`successCount` 为零时，会明确显示成功应用次数为零。
 
 ## 从 Python 调用附加包能力
 
-在协议协商后的受管理钩子中，使用服务的 `V2Bridge`：
+协议协商完成后，在 SDK 托管的钩子里，可以通过服务的 `V2Bridge` 调用附加包能力：
 
 ```python
 response = await server.v2.request(
@@ -143,10 +144,11 @@ response = await server.v2.request(
 print(response["result"])
 ```
 
-SDK 负责关联、超时、分片与重组。远端协议错误抛出带线错误码 `code` 的
-`RemoteCallError`。原生命令还需检查 `statusCode`；收到响应不等于业务成功。
+SDK 负责把回复对应到请求，并处理超时、分片和重组。远端返回协议错误时，
+会抛出带有错误码 `code` 的 `RemoteCallError`。原生命令还要检查 `statusCode`，
+因为收到响应并不代表命令执行成功。
 
-流式调用：
+流式调用的写法如下：
 
 ```python
 stream = await server.v2.stream(state.id, "demo.ticks", {"count": 3})
@@ -155,43 +157,44 @@ async with stream:
         print(item)
 ```
 
-流要求协商出 `stream/1`。`demo.ticks` 生产者由默认包注册。
-可能提前退出时使用 `async with` 或 `await stream.aclose()`；
-取消正在等待的读取只取消该流，不影响其他请求。
+使用流要求协商结果中包含 `stream/1`，`demo.ticks` 的生产者由默认包注册。
+如果可能提前停止读取，请使用 `async with` 或 `await stream.aclose()`。
+取消一个正在等待的读取，只会取消这条流，不影响其他请求。
 
 ## 玩家看到的错误
 
-应用层失败应向玩家显示：
+应用层调用失败时，建议向玩家展示：
 
 - 正在调用的方法或能力名；
 - 稳定的错误码；
-- 有界可读说明（最多 256 个 UTF-8 字节，不截断 Unicode 标量）；
+- 一段简短的可读说明（最多 256 个 UTF-8 字节，不会把一个字符截成两半）；
 - 行动提示，例如“请使用默认包”或“请检查参数”。
 
-内部请求编号、追踪编号和堆栈只留在日志中。附加包会把未知能力、参数错误与处理器异常映射为
-`UNSUPPORTED_METHOD`、`INVALID_PARAMS` 与 `HANDLER_FAILED`。
+内部请求编号、追踪编号和堆栈只写入日志，不展示给玩家。附加包会把未知能力、参数错误和
+处理器异常分别映射为 `UNSUPPORTED_METHOD`、`INVALID_PARAMS` 与 `HANDLER_FAILED`。
 
 ## 排查
 
 | 现象 | 检查 |
 | --- | --- |
-| 连接立即以 `UNSUPPORTED_PROTOCOL` 关闭 | 附加包或客户端不是 MCBEWS/2。旧协议帧会被拒绝，没有回退。 |
+| 连接立即以 `UNSUPPORTED_PROTOCOL` 关闭 | 附加包或客户端没有使用 MCBEWS/2。旧协议的帧会被拒绝，也没有回退方案。 |
 | `NEGOTIATION_TIMEOUT` | 附加包缺失、未启用，或脚本未加载。确认行为包与 **测试版 API**。 |
 | `NEGOTIATION_CONFIRMATION_TIMEOUT` | 附加包已应答挑战，但最终确认未完成。重连并查看世界/脚本日志。 |
-| `NEGOTIATION_BUSY` | 临时协议协商或对端名额已满；等旧会话过期后重连。 |
+| `NEGOTIATION_BUSY` | 同时进行的协商或对端数量已达上限；等旧会话过期后再重连。 |
 | `INVALID_NEGOTIATION` | 控制帧格式错误或不匹配。确认附加包版本与本 SDK 一致。 |
 | `SESSION_INVALID` | 已就绪会话被撤销或过期。重连会获得新的会话代次。 |
 | 能力调用超时 | 确认启用的包、目标世界、测试版 API 与 `/wsserver` 连接。 |
 | `!cmd` 失败但 `!wscmd` 正常 | 命令在命令禁止列表内，或附加包是 `--base` 精简构建。 |
 | 普通聊天没有回复 | 这是预期行为。示例只处理以 ASCII `!` 开头的消息。 |
-| 文本分成多段 | SDK 使用 461 字节经验预算拆分 tellraw/scriptevent；原生命令保持原子，超限即拒绝。 |
+| 文本分成多段 | SDK 按 461 字节的经验预算拆分 tellraw 和 scriptevent；原生命令不会被拆分，超限会直接报错。 |
 
-协议协商失败会以 `1008` 关闭 WebSocket。关闭原因是有界标识（最多 123 个 UTF-8 字节）。
+协议协商失败时，WebSocket 会以 `1008` 关闭，关闭原因是一个简短的标识（最多 123 个 UTF-8 字节）。
 连接与传输错误的排查见[追踪与诊断](diagnostics.md)。
 
 ## 关闭与回退
 
-调用 `await server.stop()` 或取消 `run_lifetime()`；受管理任务、待完成调用与分片会被清理。
-重连会重新协商协议并建立新会话。已经执行的世界修改不会撤销，也不会自动重放。
+调用 `await server.stop()` 或取消 `run_lifetime()` 即可关闭，SDK 会清理托管的任务、
+尚未完成的调用和分片缓存。重新连接时会再次协商协议，并建立新的会话。
+已经执行的世界修改不会撤销，也不会自动重放。
 
-示例没有鉴权。桥接不是安全边界；宿主负责调用方认证、授权与应用状态。
+示例没有鉴权，桥接本身也不是安全边界。调用方的认证、授权以及应用状态都由宿主负责。
