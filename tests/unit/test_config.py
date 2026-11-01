@@ -1,13 +1,11 @@
 import pytest
 
 from mcbe_ws_sdk.config import (
-    AddonBridgeSettings,
     FlowControlSettings,
     GatewaySettings,
     WebsocketTransportConfig,
 )
 from mcbe_ws_sdk.errors import ConfigurationError
-from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
 
 
 def test_flow_control_default_byte_budget_is_461():
@@ -26,8 +24,8 @@ def test_flow_control_frozen():
 def test_gateway_settings_default_nested():
     g = GatewaySettings()
     assert g.flow.command_line_byte_budget == 461
-    assert g.addon.timeout_seconds == 5.0
-    assert isinstance(g.addon.profile, McbewsV1Profile)
+    assert not hasattr(g, "addon")
+    assert g.dispatch.max_pending_requests == 128
 
 
 def test_websocket_transport_defaults():
@@ -58,23 +56,6 @@ def test_gateway_settings_includes_websocket_transport():
 def test_websocket_transport_rejects_invalid_port(port: int):
     with pytest.raises(ConfigurationError, match="websocket.port"):
         WebsocketTransportConfig(port=port)
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("timeout_seconds", 0),
-        ("buffer_ttl_seconds", 0),
-        ("max_pending_requests", 0),
-        ("max_buffer_ids", 0),
-        ("max_chunks_per_message", 0),
-        ("max_message_bytes", 0),
-        ("max_total_buffer_bytes", 0),
-    ],
-)
-def test_addon_bridge_settings_reject_non_positive_limits(field: str, value: int):
-    with pytest.raises(ConfigurationError, match=f"addon.{field}"):
-        AddonBridgeSettings(**{field: value})  # type: ignore[arg-type]
 
 
 def test_flow_control_rejects_invalid_budget_and_delay():
@@ -111,24 +92,6 @@ def test_flow_control_copies_and_freezes_chunk_delays():
     assert settings.chunk_delays["tellraw"] == 0.1
     with pytest.raises(TypeError):
         settings.chunk_delays["tellraw"] = 3.0  # type: ignore[index]
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("timeout_seconds", float("nan")),
-        ("buffer_ttl_seconds", None),
-        ("timeout_seconds", "five"),
-        ("max_pending_requests", 1.5),
-        ("max_buffer_ids", True),
-        ("max_chunks_per_message", "64"),
-        ("max_message_bytes", None),
-        ("max_total_buffer_bytes", 1.0),
-    ],
-)
-def test_addon_bridge_settings_reject_invalid_runtime_value_types(field: str, value: object):
-    with pytest.raises(ConfigurationError, match=f"addon.{field}"):
-        AddonBridgeSettings(**{field: value})  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

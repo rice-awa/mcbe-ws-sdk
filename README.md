@@ -4,139 +4,168 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
 
-Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
+**Bring your Python ideas into Minecraft Bedrock Edition.**
 
-It owns the WS transport, packet protocol, and byte-safe command chunking
-(461-byte empirically measured default ceiling; deployments may lower it).
-Your host injects behaviour through typed `ConnectionHook` and `ResponseSink`
-interfaces, with optional typed session/approval control callbacks, and drives
-the stack with `McbeServerFacade`.
+`mcbe-ws-sdk` is a general-purpose WebSocket gateway SDK for Minecraft Bedrock.
+Use familiar async Python to respond to chat commands, inspect player inventories,
+connect addon capabilities to your services or consume data as a stream.
 
-There is **no** message broker and **no** LLM worker inside the SDK — those stay
-in the host application.
+The project includes a Python SDK and a companion TypeScript addon. Together they
+manage connections, protocol negotiation, request correlation, fragmentation and
+cleanup when a connection ends. Build a chat bot, a game utility or your own
+interactive experience, and connect it to the model services, message systems
+and application state you already use. Your host controls authentication and
+authorization.
+
+The SDK and the addon talk over **V2 (MCBEWS/2)**, which supports capability
+calls in both directions, notifications, metadata and request streams. The SDK,
+the addon and the protocol are versioned independently; [migration](docs/migration.md#version-numbers)
+lists the current values.
+
+[Read the docs](https://rice-awa.github.io/mcbe-ws-sdk/) · [Get started](docs/getting-started.md) · [Explore the example](examples/addon-server/README.md)
 
 ```text
-Minecraft client  ←── /wsserver IP:port ──→  Your Python host (this SDK)
+Minecraft world (companion addon) ←── /wsserver ──→ Python app (McbeServer)
+                                                      ├── ConnectionHook: input
+                                                      ├── ResponseSink: replies
+                                                      └── server.v2: capabilities and streams
 ```
 
-## In-game addon capability bridge
+## What you can build
 
-Use the companion TypeScript addon when your host needs structured information
-or Script API actions from inside the world—not just player chat. A capability
-call follows one correlated, chunk-safe round trip:
+- **Respond to game actions with async Python.** Handle player messages in a
+  `ConnectionHook`, run native commands and await addon results. While your
+  handler waits, the SDK keeps reading and matches each reply to its request.
+- **Call both ways between Python and the addon.** Either side can register
+  capabilities, send requests and notifications, and attach call context as
+  metadata. New game-side features reuse the same request mechanism.
+- **Receive data as it is produced.** A request stream can finish normally or be
+  cancelled. Large items are fragmented for transport and reassembled, so your
+  code always receives complete items.
+- **Keep each player's interactions separate.** Every message carries its sender.
+  Work from one player runs in order, while different players can progress
+  independently, so you can store application context by connection and sender.
+- **Shape the in-game experience.** Render results with a `ResponseSink` and
+  `McbeOutboundDelivery`, or use native event subscriptions and interceptors to
+  change how your host receives input.
+- **Start from a working example.** The default addon already provides player
+  and inventory snapshots, echo, streams and world commands. Run the demo first,
+  then swap in your own handlers.
 
-```text
-Python host
-  → AddonBridgeService request(capability, payload)
-  → scriptevent mcbews:bridge_req
-  → addon capability handler in the Bedrock world
-  → MCBEWS_BRIDGE simulated-player chat chunks
-  → WebSocket PlayerMessage stream
-  → AddonBridgeSession reassembles by request_id and resolves the request
-  → your host renders the result (tellraw or mcbews:text_resp)
-```
+## Run your first example
 
-- **Bidirectional by design.** Python calls addon capabilities; the addon can
-  also send UI-originated player messages back through the same bridge. Python
-  can send framed text responses to the addon UI with `mcbews:text_resp`.
-- **Safe on the actual transport.** Requests and responses carry a
-  `request_id`; large payloads are chunked and reassembled rather than relying
-  on a direct addon-to-WebSocket connection.
-- **Clear ownership.** The addon owns its capability registry; the Python host
-  owns authentication and authorization. The bridge itself is not a security
-  boundary.
+You need Python 3.11+, Node.js 22 and a Bedrock world with `/wsserver` available.
+Both examples need the companion addon for protocol negotiation.
 
-Start with the runnable [`addon-server`](./examples/addon-server/) example and
-the [bridge protocol](./docs/addon-bridge-protocol.md). To load the companion
-addon, the target world must enable **Experiments → Beta APIs**; otherwise its
-scripts do not load and capability calls time out.
-
-## Install
+From the repository root, install the SDK and build the addon:
 
 ```bash
-pip install mcbe-ws-sdk
-```
-
-Editable install for development:
-
-```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
+npm ci --prefix addon
+npm --prefix addon run mcaddon:production
 ```
 
-Requires **Python 3.11+**.
+Import `addon/dist/packages/mc-ws-sdk.mcaddon` into Minecraft. Enable
+**Experiments → Beta APIs** in the target world and activate the behavior pack.
+Without Beta APIs the scripts never load, and protocol negotiation times out.
+The addon targets Minecraft engine 1.26.30; the full requirements are in the
+[addon README](addon/README.md#requirements).
 
-## 30-second taste
+Start the server:
+
+```bash
+python examples/addon-server/server.py --host 0.0.0.0 --port 8080
+```
+
+Connect from Minecraft and query your inventory:
+
+```text
+/wsserver <python-host-ip>:8080
+!inv
+```
+
+Use `127.0.0.1` when Python and the game run on the same machine, and the
+LAN IP of the Python machine when connecting from another device. Then try:
+
+- `!help` to list the commands.
+- `!echo hello` to get an echo back.
+- `!stream 5` to receive five items followed by completion.
+
+The example reacts only to messages that start with ASCII `!`, so ordinary chat
+stays silent. Press `Ctrl+C` to stop the server.
+
+## Integrate with your application
+
+To use the SDK in your own application, start with a hook. The host below
+listens for `!inv`, asks the addon for the sender's inventory and prints the
+result. The SDK takes care of request IDs, sending, timeouts and matching the
+reply to its request:
 
 ```python
 import asyncio
-from mcbe_ws_sdk import McbeServerFacade, NoOpHook
+
+from mcbe_ws_sdk import McbeServer, NoOpHook
 
 
-class MyHook(NoOpHook):
-    async def on_connected(self, state):
-        print("connected:", state.id)
-
+class InventoryHook(NoOpHook):
     async def on_player_message(self, state, event, parsed=None):
-        print(f"{event.sender}: {event.message}")
+        if event.message.strip() != "!inv":
+            return
+        response = await server.v2.request(
+            state.id, "get_inventory_snapshot", {"target": event.sender}
+        )
+        print(response["result"])
 
 
-async def main() -> None:
-    facade = McbeServerFacade(hook=MyHook())
-    print(f"ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
-    await facade.run_lifetime()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+server = McbeServer(hook=InventoryHook())
+asyncio.run(server.run_lifetime())
 ```
 
-Then in Minecraft: `/wsserver <this-machine-ip>:8080`
+To show results in the game, add a `ResponseSink` backed by
+`McbeOutboundDelivery`; the [runnable example](examples/addon-server/server.py)
+has the complete setup. In a multiplayer world, key your per-player state by
+`(connection_id, event.sender)` so each player keeps a separate context.
 
-For a **reply-with-tellraw** host, run the ready-made example:
+## Find what you need
 
-```bash
-python examples/basic-server/server.py
-```
+| Goal | Guide |
+| --- | --- |
+| Install, connect, run commands and troubleshoot | [Getting started](docs/getting-started.md) |
+| Add capabilities, notifications, metadata and streams | [Extension authors](docs/extension-authors.md) |
+| Understand queues, lifetimes and ownership | [Architecture](docs/architecture.md) |
+| Subscribe to or intercept game events | [Native events](docs/native-events.md) |
+| Trace requests and diagnose errors | [Diagnostics](docs/diagnostics.md) |
+| Inspect message fields and transport limits | [V2 protocol](docs/protocol-v2.md) |
+| Upgrade from 0.2.x or roll back a deployment | [Migration](docs/migration.md) |
+| Look up classes, methods and parameters | [API reference](docs/reference.md) |
 
-## Documentation
+## Good to know
 
-Full beginner tutorial, architecture, protocol, and API reference live on the
-docs site (English + 中文):
+- **Choosing an addon pack.** The default addon includes snapshots, echo,
+  streams and world commands. If you only need snapshots, build the lean pack
+  with `npm --prefix addon run mcaddon:base`.
+- **World commands.** They pass through a
+  [command denylist](addon/README.md#world-command-safety), but deciding who may
+  call them is still up to your host.
+- **Long text.** Native commands are never split and fail if they exceed the
+  byte budget. tellraw and script events can be split to stay within the default
+  461-byte budget.
 
-| | |
-|---|---|
-| **Online** | https://rice-awa.github.io/mcbe-ws-sdk/ |
-| **Local** | `pip install -e ".[docs]" && mkdocs serve` → http://127.0.0.1:8000 |
+## Development and checks
 
-| Page | Content |
-|------|---------|
-| [Getting Started](./docs/getting-started.md) | Install, 5-minute walkthrough, minimal echo bot, FAQ |
-| [Architecture](./docs/architecture.md) | Layer stack and dependency inversion |
-| [Protocol](./docs/addon-bridge-protocol.md) | mcbews v1 bridge wire format |
-| [API Reference](./docs/reference.md) | Generated from source |
-
-## Examples
-
-| Path | What it shows |
-|------|---------------|
-| [`examples/basic-server/`](./examples/basic-server/) | Echo chat with `tellraw` (start here) |
-| [`examples/addon-server/`](./examples/addon-server/) | Capability calls via the companion addon |
-| [`examples/addon-capability-call/`](./examples/addon-capability-call/) | In-memory bridge round-trip (no game) |
-
-Companion TypeScript addon: [`addon/`](./addon/). Worlds that load it must enable
-**Experiments → Beta APIs** (see [addon README](./addon/README.md#enable-in-a-world)).
-
-## Development
+To work on the SDK itself, run these checks from the repository root:
 
 ```bash
-pip install -e ".[dev,docs]"
-ruff check --no-cache src tests examples
+ruff check --no-cache src tests examples tools
 mypy --no-incremental src
-pytest -p no:cacheprovider -q
-python tools/format.py          # ruff format+fix (Python); prettier (Addon if Node)
-python tools/format.py --check  # CI-style check
+MCBE_REQUIRE_CROSS_LANGUAGE=1 pytest -p no:cacheprovider -q
+mkdocs build --strict
+python tools/format.py --check
 ```
 
-## License
-
-[MIT](./LICENSE)
+Cross-language tests need Node.js 22 and the addon's TypeScript dependencies, so
+run `npm ci --prefix addon` first. When those tools are missing, plain pytest
+skips the tests that depend on them; with `MCBE_REQUIRE_CROSS_LANGUAGE=1` a
+missing tool fails the run instead.

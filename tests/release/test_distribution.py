@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -140,8 +141,10 @@ def test_wheel_contains_py_typed(built_wheel: Path) -> None:
 def test_wheel_contains_canonical_protocol_assets(built_wheel: Path) -> None:
     with zipfile.ZipFile(built_wheel) as archive:
         names = set(archive.namelist())
-        assert "mcbe_ws_sdk/profiles/mcbews_v1/manifest.json" in names
-        assert "mcbe_ws_sdk/profiles/mcbews_v1/vectors.json" in names
+        assert "mcbe_ws_sdk/profiles/mcbews_v2/manifest.json" in names
+        assert "mcbe_ws_sdk/profiles/mcbews_v2/vectors.json" in names
+        assert not any("mcbews_v1" in name for name in names)
+        assert set(_check_dist.REQUIRED_WHEEL_ASSETS) <= names
 
 
 def test_clean_wheel_passes(built_wheel: Path) -> None:
@@ -264,3 +267,40 @@ def test_check_dist_script_main(built_wheel: Path, built_sdist: Path) -> None:
             text=True,
         )
     assert result.returncode == 0, f"stderr: {result.stderr}"
+
+
+@pytest.mark.parametrize("archive_kind", ["wheel", "sdist"])
+@pytest.mark.parametrize("fault", ["missing", "protocol", "streams", "vectors", "stream_vectors"])
+def test_rejects_broken_v2_authority(archive_kind: str, fault: str) -> None:
+    assets = {
+        asset: (_project_root / "src" / asset).read_bytes()
+        for asset in _check_dist.REQUIRED_WHEEL_ASSETS
+    }
+    manifest_path = "mcbe_ws_sdk/profiles/mcbews_v2/manifest.json"
+    vectors_path = "mcbe_ws_sdk/profiles/mcbews_v2/vectors.json"
+    if fault == "missing":
+        del assets[manifest_path]
+    elif fault == "vectors":
+        assets[vectors_path] = b"{}"
+    elif fault == "stream_vectors":
+        vectors = json.loads(assets[vectors_path])
+        vectors["valid"] = [v for v in vectors["valid"] if v["message"]["kind"] != "stream_item"]
+        assets[vectors_path] = json.dumps(vectors).encode()
+    else:
+        manifest = json.loads(assets[manifest_path])
+        if fault == "protocol":
+            manifest["protocol"] = "MCBEWS/1"
+        else:
+            del manifest["fields"]["stream_item"]
+        assets[manifest_path] = json.dumps(manifest).encode()
+    if archive_kind == "wheel":
+        path = _make_zip_file([("mcbe_ws_sdk/py.typed", b""), *assets.items()])
+        checker = check_wheel
+    else:
+        path = _make_tar_file([(f"sdk/src/{key}", value) for key, value in assets.items()])
+        checker = check_sdist
+    try:
+        with pytest.raises(DistributionError):
+            checker(path)
+    finally:
+        path.unlink()

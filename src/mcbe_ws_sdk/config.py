@@ -1,3 +1,9 @@
+"""Frozen gateway settings.
+
+The empirical command budget comes from the current protocol manifest.
+Every connection uses managed business lanes.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -7,12 +13,9 @@ from numbers import Real
 from types import MappingProxyType
 
 from mcbe_ws_sdk.errors import ConfigurationError
-from mcbe_ws_sdk.profiles.mcbews_v1.manifest import MCBEWS_V1_MANIFEST
-from mcbe_ws_sdk.profiles.mcbews_v1.profile import McbewsV1Profile
+from mcbe_ws_sdk.profiles.mcbews_v2.codec import MANIFEST
 
-_DEFAULT_COMMAND_LINE_BYTE_BUDGET = int(
-    MCBEWS_V1_MANIFEST["limits"]["command_line_byte_budget"]
-)
+_DEFAULT_COMMAND_LINE_BYTE_BUDGET = int(MANIFEST["limits"]["command_bytes"])
 
 
 def _require_positive_int(value: object, field_name: str) -> None:
@@ -40,17 +43,16 @@ class FlowControlSettings:
         default_factory=lambda: {
             "tellraw": 0.05,
             "scriptevent": 0.05,
-            "text_resp": 0.15,
         }
     )
 
-    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent", "text_resp"})
+    VALID_DELAY_KINDS = frozenset({"tellraw", "scriptevent"})
 
     def __post_init__(self) -> None:
         _require_positive_int(self.command_line_byte_budget, "flow.command_line_byte_budget")
         if self.command_line_byte_budget > _DEFAULT_COMMAND_LINE_BYTE_BUDGET:
             raise ConfigurationError(
-                "flow.command_line_byte_budget may only lower the MCBEWS/1 empirical ceiling "
+                "flow.command_line_byte_budget may only lower the MCBEWS/2 empirical ceiling "
                 f"({_DEFAULT_COMMAND_LINE_BYTE_BUDGET})"
             )
         _require_positive_int(self.max_chunk_content_length, "flow.max_chunk_content_length")
@@ -70,37 +72,8 @@ class FlowControlSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class AddonBridgeSettings:
-    timeout_seconds: float = 5.0
-    buffer_ttl_seconds: float = 30.0
-    max_pending_requests: int = 128
-    max_buffer_ids: int = 128
-    max_chunks_per_message: int = 64
-    max_message_bytes: int = 262_144
-    max_total_buffer_bytes: int = 1_048_576
-    # MCBEWS/1 is the only runtime profile.  The historical
-    # ``AddonBridgeProfile`` name is a deprecated type alias, not a replacement
-    # profile seam.
-    profile: McbewsV1Profile = field(default_factory=McbewsV1Profile)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.profile, McbewsV1Profile):
-            raise ConfigurationError("addon.profile must be a concrete McbewsV1Profile")
-        for name in ("timeout_seconds", "buffer_ttl_seconds"):
-            _require_finite_real(getattr(self, name), f"addon.{name}")
-        for name in (
-            "max_pending_requests",
-            "max_buffer_ids",
-            "max_chunks_per_message",
-            "max_message_bytes",
-            "max_total_buffer_bytes",
-        ):
-            _require_positive_int(getattr(self, name), f"addon.{name}")
-
-
-@dataclass(frozen=True, slots=True)
 class WebsocketTransportConfig:
-    """Transport knobs for the facade's ``websockets.serve`` lifetime."""
+    """Transport knobs for the server's ``websockets.serve`` lifetime."""
 
     host: str = "0.0.0.0"
     port: int = 8080
@@ -127,7 +100,79 @@ class WebsocketTransportConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DispatchSettings:
+    """Business-task and request-lifecycle knobs for the reliable path."""
+
+    business_queue_maxsize: int = 256
+    max_concurrent_business_tasks: int = 64
+    event_queue_maxsize: int = 256
+    max_pending_requests: int = 128
+    command_timeout_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "business_queue_maxsize",
+            "max_concurrent_business_tasks",
+            "event_queue_maxsize",
+            "max_pending_requests",
+        ):
+            _require_positive_int(getattr(self, name), f"gateway.dispatch.{name}")
+        _require_finite_real(
+            self.command_timeout_seconds,
+            "gateway.dispatch.command_timeout_seconds",
+        )
+
+
+def _require_non_negative_int(value: object, field_name: str) -> None:
+    if type(value) is not int or value < 0:
+        raise ConfigurationError(f"{field_name} must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class SendSchedulerSettings:
+    """Per-connection outbound scheduler capacity and rate limit.
+
+    ``control_reserve_slots`` / ``control_reserve_bytes`` keep part of the
+    queue available for control frames while bulk content is in flight; they
+    are automatically clamped so at least one non-control frame still fits.
+    ``fairness_quota`` bounds how many consecutive higher-priority frames may be
+    sent while a lower priority waits.
+    """
+
+    queue_maxsize: int = 256
+    queue_max_bytes: int = 4 * 1024 * 1024
+    min_interval_seconds: float = 0.0
+    capacity_timeout_seconds: float = 5.0
+    control_reserve_slots: int = 1
+    control_reserve_bytes: int = 4096
+    fairness_quota: int = 8
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.queue_maxsize, "gateway.send.queue_maxsize")
+        _require_positive_int(self.queue_max_bytes, "gateway.send.queue_max_bytes")
+        _require_finite_real(
+            self.min_interval_seconds,
+            "gateway.send.min_interval_seconds",
+            allow_zero=True,
+        )
+        _require_finite_real(
+            self.capacity_timeout_seconds,
+            "gateway.send.capacity_timeout_seconds",
+        )
+        _require_non_negative_int(
+            self.control_reserve_slots,
+            "gateway.send.control_reserve_slots",
+        )
+        _require_non_negative_int(
+            self.control_reserve_bytes,
+            "gateway.send.control_reserve_bytes",
+        )
+        _require_positive_int(self.fairness_quota, "gateway.send.fairness_quota")
+
+
+@dataclass(frozen=True, slots=True)
 class GatewaySettings:
     flow: FlowControlSettings = field(default_factory=FlowControlSettings)
-    addon: AddonBridgeSettings = field(default_factory=AddonBridgeSettings)
     websocket: WebsocketTransportConfig = field(default_factory=WebsocketTransportConfig)
+    dispatch: DispatchSettings = field(default_factory=DispatchSettings)
+    send: SendSchedulerSettings = field(default_factory=SendSchedulerSettings)

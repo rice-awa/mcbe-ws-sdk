@@ -16,6 +16,8 @@ from uuid import UUID
 
 import pytest
 
+from mcbe_ws_sdk.config import DispatchSettings, FlowControlSettings, SendSchedulerSettings
+from mcbe_ws_sdk.errors import RequestClosedError
 from mcbe_ws_sdk.gateway import EventBus, WsEventType
 from mcbe_ws_sdk.gateway.connection import (
     ConnectionManager,
@@ -23,11 +25,13 @@ from mcbe_ws_sdk.gateway.connection import (
     enqueue_response,
 )
 from mcbe_ws_sdk.gateway.messages import OutboundText, SystemNotification
+from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
 from mcbe_ws_sdk.gateway.sink import (
     DefaultResponseSink,
     ResponseKind,
     RouteEnvelope,
 )
+from mcbe_ws_sdk.requests import CATEGORY_COMMAND, RequestTable
 
 
 class RecordingSink(DefaultResponseSink):
@@ -142,6 +146,178 @@ async def test_response_sender_routes_duck_typed_sink_without_dispatch(bus: Even
     await manager.drop_connection(state.id)
 
 
+def _install_runtime(state: ConnectionState) -> ConnectionRuntime:
+    runtime = ConnectionRuntime(
+        connection_id=state.id,
+        dispatch=DispatchSettings(),
+        send=SendSchedulerSettings(),
+        flow=FlowControlSettings(),
+        transport=_send_noop,
+    )
+    state.runtime = runtime
+    state.requests = runtime.requests
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_disconnected_observer_can_repeat_drop_without_changing_order(
+    manager: ConnectionManager, bus: EventBus
+) -> None:
+    state = await manager.create_connection(send_payload=_send_noop)
+    state.ready = True
+    state.requests = RequestTable()
+    order: list[str] = []
+
+    async def on_disconnected(dropped: ConnectionState) -> None:
+        if dropped.requests is not None and dropped.requests.is_closed:
+            order.append("requests closed")
+        await manager.drop_connection(dropped.id)
+        await manager.shutdown_all()
+        order.append("observer finished")
+
+    bus.subscribe(WsEventType.DISCONNECTED, on_disconnected, weak=False)
+    await asyncio.wait_for(manager.drop_connection(state.id), 2)
+    assert order == ["requests closed", "observer finished"]
+    assert manager._drop_tasks == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_first", [False, True])
+async def test_concurrent_manager_drops_wait_for_runtime_cleanup(
+    manager: ConnectionManager, bus: EventBus, cancel_first: bool
+) -> None:
+    state = await manager.create_connection(send_payload=_send_noop)
+    state.ready = True
+    runtime = _install_runtime(state)
+    started, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    disconnected: list[ConnectionState] = []
+    bus.subscribe(WsEventType.DISCONNECTED, lambda s: disconnected.append(s), weak=False)
+
+    async def job() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    assert runtime.business.submit(job, lane="player:Alice", label="blocked")
+    await asyncio.wait_for(started.wait(), 2)
+    first = asyncio.create_task(manager.drop_connection(state.id))
+    await asyncio.wait_for(cancelling.wait(), 2)
+    second_entered = asyncio.Event()
+
+    async def second_drop() -> None:
+        second_entered.set()
+        await manager.drop_connection(state.id)
+
+    second = asyncio.create_task(second_drop())
+    try:
+        await asyncio.wait_for(second_entered.wait(), 2)
+        assert not first.done()
+        assert not second.done()
+        assert runtime.business.task_count == 1
+        assert not runtime.scheduler.is_closed
+        assert disconnected == []
+        if cancel_first:
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            assert not second.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(first, second, return_exceptions=True), 2)
+    assert second.exception() is None
+    if not cancel_first:
+        assert first.exception() is None
+    assert runtime.business.task_count == 0
+    assert runtime.scheduler.is_closed
+    assert runtime.requests.pending_count == 0
+    assert disconnected == [state]
+    assert manager._sender_tasks == {}
+    assert manager._drop_tasks == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reliable", [False, True])
+async def test_cancelled_drop_during_sender_cleanup_is_joined_by_shutdown(
+    bus: EventBus, reliable: bool
+) -> None:
+    started, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    order: list[str] = []
+
+    class SlowSink(DefaultResponseSink):
+        async def on_outbound_text(self, state: ConnectionState, message: OutboundText) -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelling.set()
+                await release.wait()
+                order.append("sender stopped")
+
+    manager = ConnectionManager(sink=SlowSink(), event_bus=bus)
+    state = await manager.create_connection(send_payload=_send_noop)
+    state.ready = True
+    runtime = _install_runtime(state) if reliable else None
+    if not reliable:
+        state.requests = RequestTable()
+    assert state.requests is not None
+    pending = state.requests.reserve(CATEGORY_COMMAND, request_id="pending")
+    other = await manager.create_connection(send_payload=_send_noop)
+    other.ready = True
+    other_runtime = _install_runtime(other)
+    disconnected: list[ConnectionState] = []
+    cleanup_observed: list[tuple[bool, bool, list[str]]] = []
+
+    def on_disconnected(dropped: ConnectionState) -> None:
+        disconnected.append(dropped)
+        if dropped is state:
+            cleanup_observed.append(
+                (
+                    dropped.requests is not None and dropped.requests.is_closed,
+                    dropped.id not in manager._sender_tasks,
+                    list(order),
+                )
+            )
+
+    bus.subscribe(WsEventType.DISCONNECTED, on_disconnected, weak=False)
+    enqueue_response(state, OutboundText(content="block", sequence=1))
+    await asyncio.wait_for(started.wait(), 2)
+    first = asyncio.create_task(manager.drop_connection(state.id))
+    await asyncio.wait_for(cancelling.wait(), 2)
+    first.cancel()
+    shutdown_entered = asyncio.Event()
+
+    async def shutdown() -> None:
+        shutdown_entered.set()
+        await manager.shutdown_all()
+
+    shutdown_task = asyncio.create_task(shutdown())
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await asyncio.wait_for(shutdown_entered.wait(), 2)
+        assert not shutdown_task.done()
+        assert disconnected == [] or disconnected == [other]
+    finally:
+        release.set()
+        await asyncio.wait_for(shutdown_task, 2)
+        await manager.drop_connection(state.id)
+    with pytest.raises(RequestClosedError):
+        await pending.future
+    assert {s.id for s in disconnected} == {state.id, other.id}
+    assert len(disconnected) == 2
+    assert cleanup_observed == [(True, True, ["sender stopped"])]
+    if runtime is not None:
+        assert runtime.scheduler.is_closed
+        assert runtime.business.task_count == 0
+    assert other_runtime.scheduler.is_closed
+    assert manager._sender_tasks == {}
+    assert manager._drop_tasks == {}
+    assert manager.connection_count == 0
+
+
 @pytest.mark.asyncio
 async def test_response_sender_drops_unroutable_message(manager: ConnectionManager) -> None:
     state = await manager.create_connection(connection_id=UUID(int=3), send_payload=_send_noop)
@@ -162,6 +338,7 @@ async def test_drop_connection_awaits_sender_task_cleanup(
     manager: ConnectionManager, bus: EventBus
 ) -> None:
     state = await manager.create_connection(connection_id=UUID(int=41), send_payload=_send_noop)
+    state.ready = True
     disconnected: list[ConnectionState] = []
     bus.subscribe(WsEventType.DISCONNECTED, lambda s: disconnected.append(s), weak=False)
     task = manager._sender_tasks[state.id]

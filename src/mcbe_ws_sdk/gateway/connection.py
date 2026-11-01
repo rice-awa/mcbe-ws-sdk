@@ -20,9 +20,11 @@ entirely onto the host's ``HostSink``.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import structlog
@@ -35,6 +37,14 @@ from mcbe_ws_sdk.gateway.sink import (
     ResponseSink,
     RouteEnvelope,
 )
+from mcbe_ws_sdk.tracing import TraceContext, current_trace, trace_scope
+
+if TYPE_CHECKING:
+    from mcbe_ws_sdk.diagnostics import Diagnostics
+    from mcbe_ws_sdk.gateway.commands import NativeCommandClient
+    from mcbe_ws_sdk.gateway.native_events import NativeEventSubscriptions
+    from mcbe_ws_sdk.gateway.runtime import ConnectionRuntime
+    from mcbe_ws_sdk.requests import RequestTable
 
 logger = structlog.get_logger(__name__)
 
@@ -65,6 +75,9 @@ def enqueue_response(state: ConnectionState, message: object) -> None:
             dropped_type=type(dropped).__name__ if dropped is not None else None,
             maxsize=queue.maxsize,
         )
+    if state._response_traces.maxlen != (queue.maxsize or 256):
+        state._response_traces = deque(state._response_traces, maxlen=queue.maxsize or 256)
+    state._response_traces.append((message, current_trace()))
     queue.put_nowait(message)
 
 
@@ -81,7 +94,35 @@ class ConnectionState:
     id: UUID = field(default_factory=uuid4)
     _player_name: str | None = field(default=None, repr=False)
     send_payload: SendPayload | None = None
+    # Optional bulk adapter installed by the runtime. It takes the same single
+    # argument as ``send_payload``; hosts that build ``McbeOutboundDelivery``
+    # can pass it as ``send_bulk`` to keep long text off the request queue.
+    send_bulk: SendPayload | None = field(default=None, kw_only=True)
     response_queue: asyncio.Queue[object] | None = None
+    # Every connection owns a runtime with business/observation lanes, request
+    # tracking and the outbound scheduler.
+    runtime: ConnectionRuntime | None = field(default=None, repr=False)
+    requests: RequestTable | None = field(default=None, repr=False)
+    command_client: NativeCommandClient | None = field(default=None, repr=False)
+
+    # Admission state machine. Business frames are only routed once ``ready``
+    # is true; ``pre_ready_dropped`` counts frames discarded before then so the
+    # close log can summarise them without replaying anything.
+    admission_state: str = field(default="WS_TRANSPORT_CONNECTED", kw_only=True, repr=False)
+    ready: bool = field(default=False, kw_only=True)
+    pre_ready_dropped: int = field(default=0, kw_only=True)
+
+    _response_traces: deque[tuple[object, TraceContext]] = field(
+        default_factory=lambda: deque(maxlen=256), repr=False, kw_only=True
+    )
+    diagnostics: Diagnostics | None = field(default=None, repr=False, kw_only=True)
+
+    @property
+    def native_events(self) -> NativeEventSubscriptions:
+        """Connection-local native subscriptions."""
+        if self.runtime is None:
+            raise RuntimeError("connection runtime is not installed")
+        return self.runtime.native_events
 
     @property
     def player_name(self) -> str | None:
@@ -124,6 +165,7 @@ class ConnectionManager:
         self._response_queue_maxsize = response_queue_maxsize
         self._connections: dict[UUID, ConnectionState] = {}
         self._sender_tasks: dict[UUID, asyncio.Task[None]] = {}
+        self._drop_tasks: dict[UUID, asyncio.Task[None]] = {}
 
     @property
     def sink(self) -> ResponseSink:
@@ -156,10 +198,59 @@ class ConnectionManager:
         logger.info("connection_created", connection_id=str(state.id))
         return state
 
-    async def drop_connection(self, connection_id: UUID) -> None:
-        """Cancel the sender coroutine, drop the connection, emit DISCONNECTED."""
-        state = self._connections.pop(connection_id, None)
-        if state is not None and state.response_queue is not None:
+    async def drop_connection(self, connection_id: UUID, *, notify: bool | None = None) -> None:
+        """Cancel the sender, release the runtime, drop, emit DISCONNECTED.
+
+        ``notify=None`` emits ``DISCONNECTED`` only for a connection that reached
+        ``READY_V2``. A connection rejected during admission has no paired
+        ``CONNECTED`` event and must not produce a business ``DISCONNECTED``.
+        Remove the connection from routing immediately. Concurrent callers await
+        the same cleanup, which continues even if a caller is cancelled.
+        """
+        task = self._drop_tasks.get(connection_id)
+        if task is None:
+            state = self._connections.pop(connection_id, None)
+            if state is None:
+                return
+            if notify is None:
+                notify = state.ready
+            task = asyncio.create_task(
+                self._drop_connection(state, notify=notify),
+                name=f"connection-drop:{connection_id}",
+            )
+            self._drop_tasks[connection_id] = task
+            task.add_done_callback(lambda completed: self._drop_finished(connection_id, completed))
+        if task is asyncio.current_task():
+            # DISCONNECTED observers may repeat teardown of this connection.
+            return
+        await asyncio.shield(task)
+
+    def _drop_finished(self, connection_id: UUID, task: asyncio.Task[None]) -> None:
+        self._drop_tasks.pop(connection_id, None)
+        # A cancelled waiter may leave nobody to retrieve a teardown failure.
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(
+                "connection_drop_failed",
+                connection_id=str(connection_id),
+                exc_info=task.exception(),
+            )
+
+    async def _drop_connection(self, state: ConnectionState, *, notify: bool) -> None:
+        connection_id = state.id
+        await self._cancel_sender(connection_id)
+        if state.runtime is not None:
+            try:
+                await state.runtime.close(reason="connection dropped")
+            except Exception:
+                logger.exception(
+                    "connection_runtime_close_failed",
+                    connection_id=str(connection_id),
+                )
+        elif state.requests is not None:
+            state.requests.close()
+        if state.diagnostics is not None:
+            await state.diagnostics.close()
+        if state.response_queue is not None:
             discarded = state.response_queue.qsize()
             if discarded:
                 logger.warning(
@@ -167,10 +258,16 @@ class ConnectionManager:
                     connection_id=str(connection_id),
                     discarded=discarded,
                 )
-        await self._cancel_sender(connection_id)
-        if state is not None:
+        state._response_traces.clear()
+        if notify:
             await self._bus.emit(WsEventType.DISCONNECTED, state)
-            logger.info("connection_dropped", connection_id=str(connection_id))
+        logger.info(
+            "connection_dropped",
+            connection_id=str(connection_id),
+            admission_state=state.admission_state,
+            ready=state.ready,
+            pre_ready_dropped=state.pre_ready_dropped,
+        )
 
     def get_connection(self, connection_id: UUID) -> ConnectionState | None:
         return self._connections.get(connection_id)
@@ -184,7 +281,7 @@ class ConnectionManager:
 
     async def shutdown_all(self) -> None:
         """Drop every connection (on server stop)."""
-        for connection_id in list(self._connections):
+        for connection_id in dict.fromkeys((*self._connections, *self._drop_tasks)):
             await self.drop_connection(connection_id)
 
     async def _cancel_sender(self, connection_id: UUID) -> None:
@@ -214,7 +311,16 @@ class ConnectionManager:
                     )
                     continue
                 try:
-                    await self._route_envelope(state, envelope)
+                    context = TraceContext(connection_id=str(state.id))
+                    for index, (queued, trace) in enumerate(state._response_traces):
+                        if queued is message:
+                            context = trace
+                            del state._response_traces[index]
+                            break
+                    with trace_scope(
+                        context=context, connection_id=str(state.id), diagnostics=state.diagnostics
+                    ):
+                        await self._route_envelope(state, envelope)
                 except Exception:
                     logger.exception(
                         "response_sink_dispatch_failed",

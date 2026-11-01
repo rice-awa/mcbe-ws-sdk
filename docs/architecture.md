@@ -1,114 +1,134 @@
 # Architecture
 
-The SDK layers stack bottom-up. Every layer above transport is injectable so
-the host can override any default without the SDK importing host code:
+The SDK is a general-purpose WebSocket gateway. It takes care of the transport,
+protocol negotiation, matching replies to requests, task lifetimes,
+fragmentation and byte-safe delivery. Your host takes care of authorization,
+history and business state.
 
 ```text
-McbeServerFacade          ← host entry point; owns the full WS lifetime
-├── ConnectionManager     ← active connections + one response-sender per connection
-│   ├── ConnectionState   ← transport-agnostic identity (id, send_payload, queue)
-│   └── ResponseSink      ← host routes OutboundText / SystemNotification
-├── MinecraftProtocolHandler  ← parse PlayerMessage, resolve commands, status lines
-│   └── CommandRegistry
-├── EventBus              ← typed in-process pub/sub keyed by WsEventType
-├── ConnectionHook        ← six typed lifecycle hooks the host implements
-├── AddonBridgeService    ← ScriptEvent bridge + chunk reassembly
-│   └── AddonBridgeSession
-├── FlowControlMiddleware ← byte-safe tellraw/scriptevent chunking (461 B empirical default ceiling)
-└── McbeOutboundDelivery  ← unified outbound adapter
+McbeServer                        only public entry
+├── ConnectionManager / ConnectionState
+│   └── connection state machine
+├── ConnectionRuntime             bounded business + observation queues
+│   └── OutboundScheduler         per-connection send capacity and fairness
+├── NativeCommandClient / RequestTable
+├── MinecraftProtocolHandler / CommandRegistry
+├── ConnectionHook / ResponseSink  host behavior and rendering
+├── V2Bridge                       negotiation, requests, notifications, streams
+│   └── V2Endpoint                 per-connection epoch and dispatch
+├── McbeOutboundDelivery
+└── FlowControlMiddleware          byte-safe tellraw/scriptevent chunking
+
+Companion addon
+router (mcbews:negotiate_v2 / mcbews:packet_v2)
+└── V2Endpoint (capability registry + stream registry)
 ```
 
-There is **no** SDK-owned `PlayerSession`. Multiplayer isolation is a **host**
-concern: the gateway only forwards `PlayerMessageEvent.sender`; the host buckets
-history / locks / context by `(connection_id, sender)`.
+## Entry and ownership
 
-## Dependency inversion
+`McbeServer` looks after each connection from transport setup through protocol
+negotiation and business processing to shutdown. Business callbacks run on
+queues that the SDK manages, so the reader stays free to receive replies while a
+callback is waiting for one. To show `OutboundText` or `SystemNotification` in
+Minecraft, supply your own `ResponseSink`; the default sink only logs them.
 
-`McbeServerFacade.__init__` is keyword-only; every collaborator collapses to a
-gateway default when `None`. The host subclasses only what it needs:
+The SDK handles transport, negotiation, pending requests, task lifetimes,
+ordering and fragment state. The host handles authentication, authorization,
+history and business state. The SDK has no `PlayerSession` of its own, so keep
+application state separate per `(connection_id, sender)`, using the value of the
+current `PlayerMessageEvent.sender`.
 
-- `NoOpHook` / `ConnectionHook`
-- `DefaultResponseSink` / `ResponseSink`
+## Connection state machine
 
-`ConnectionHook` has six side-effecting hooks (all `-> None`). The chat hook
-signature is:
-
-```python
-async def on_player_message(
-    self,
-    state: ConnectionState,
-    player_event: PlayerMessageEvent,
-    parsed: ParsedCommand | None = None,
-) -> None: ...
+```text
+WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
+                              └────────→ REJECTED ────────→ CLOSED
 ```
 
-`parsed` is the registry match when one exists; it is **not** a consumed-bool
-return value — the host decides what to do with free-form chat and commands.
+- The reader and the required event subscriptions start before negotiation
+  begins, so the server can always read replies while it waits for negotiation
+  to finish.
+- While in `NEGOTIATING`, the server accepts only negotiation frames, required
+  control frames, and native `commandResponse` / `error` frames that match a
+  pending request. Business frames are dropped and counted rather than queued
+  for replay.
+- Only in `READY_V2` does the server publish the business `CONNECTED` event,
+  call `on_connected` and route player messages.
+- A timeout, a malformed or busy negotiation, a failed confirmation or an
+  invalid session moves the connection to `REJECTED`, then `CLOSING` /
+  `CLOSED`. The close code is `1008`, and the reason is a short token with a
+  length limit.
+- A rejected connection never produces the business `on_connected` /
+  `on_disconnected` pair, but transport diagnostics still record the attempt.
+- A late or stale epoch (the identifier of one negotiated session) cannot reopen
+  a closed connection. Reconnecting starts a new negotiation and a new epoch.
 
-The typed UI callback is `on_ui_chat_reassembled(state, UiChatMessage)` and the
-DTO carries `cid`/`conversation_id`. Authenticated session and approval frames
-use the optional `AddonControlHook.on_addon_control_message` callback. The old
-three-argument UI callback is supported only through the explicit
-`LegacyUiChatHookAdapter`.
+The addon accepts only `mcbews:negotiate_v2` and `mcbews:packet_v2`. It logs and
+rejects the old `mcbews:bridge_req`, `session_req` and `text_resp` events
+without triggering any business logic. It cannot close a WebSocket that belongs
+to an old server, so it simply refuses that server's business frames.
 
-## Per-connection message routing
+## Managed dispatch
 
-1. `McbeServerFacade._on_connection` creates connection state, starts a
-   `_response_sender` coroutine, and sends handshake + subscribe. After those
-   succeed it emits `WsEventType.CONNECTED` then calls `hook.on_connected`
-   (welcome is the host's responsibility in that hook — the facade never sends
-   a welcome banner itself).
-2. `_handle_raw` classifies each inbound frame:
-   - **error** → `WsEventType.ERROR` + `hook.on_error`
-   - **commandResponse** → `WsEventType.COMMAND_RESPONSE` + `hook.on_command_response`
-   - **addon prefix match** → `AddonBridgeService` (bridge / UI chat reassembly)
-   - **PlayerMessage** → `WsEventType.PLAYER_MESSAGE` +
-     `hook.on_player_message(state, event, parsed=...)`
-3. The response-sender drains `state.response_queue`, wrapping each message via
-   `RouteEnvelope.from_message()` and routing inline to the sink's two `on_*`
-   methods (no `dispatch` on the protocol).
-4. The host sink turns queued messages into MC WebSocket payloads with
-   `McbeOutboundDelivery`.
+During setup, the SDK finishes the transport handshake and the required
+subscriptions before it acts on the negotiation result. Once the connection
+reaches `READY_V2`, the reader first classifies each frame and matches command
+replies, negotiation frames and reserved carrier traffic, and only then queues
+business callbacks.
 
-## Flow control — 461 B empirical configurable ceiling
+Chat from the same player is handled first-in, first-out, through the
+interceptors and then the hook, while different players can progress
+concurrently. Other native business events share one first-in, first-out queue.
+Observers have their own queue with a size limit. When the business or
+observation queue is overloaded, the SDK rejects the new work explicitly instead
+of letting the queue grow without limit. An exception in one callback is
+contained and does not affect the others.
 
-`FlowControlMiddleware` enforces the configured MCBE `commandLine` byte budget
-(default 461 bytes, empirically determined; deployments may lower it):
+When a callback awaits a command or capability, the reader remains free to
+receive the reply. On disconnect, the SDK cancels and waits for its managed
+tasks, fails any pending requests and releases buffers. Your host does not need
+to create its own table of pending requests, request tasks or fragment buffers.
 
-- `chunk_tellraw()` / `chunk_scriptevent()` — sentence-aware splitting with a
-  byte-safety guard
-- `chunk_raw_command()` — no semantic splitting; raises `FrameTooLargeError` on
-  overflow
-- `chunk_framed_scriptevent()` — two-pass split then re-encode with `i/n` metadata
+Hooks return `None`. `on_player_message(state, event, parsed=None)` receives an
+optional match from the command registry; it is not a flag saying the message
+was consumed. The five hooks are `on_connected`, `on_disconnected`,
+`on_player_message`, `on_command_response` and `on_error`.
 
-## Protocol profiles
+## Bridge and delivery
 
-`McbewsV1Profile` is the sole concrete runtime profile (module-level singleton
-`MCBEWS_V1`). Installed `manifest.json`/`vectors.json` are authoritative and
-generate the reference Addon `protocol.ts` plus the Python fixture. Wire IDs,
-schema axes and safety bounds are fixed by the manifest; only lowering the
-empirical command budget and response delays are operational settings.
-`AddonBridgeProfile` is a deprecated type alias, not a runtime replacement
-seam. See [Protocol](addon-bridge-protocol.md) for the wire format.
+`V2Bridge` manages negotiation, the capability registry and the stream registry
+for each connection. `V2Endpoint` represents one active session (its epoch): it
+matches replies to requests before dispatching new requests, enforces the
+request and stream limits, and carries metadata. A capability handler receives
+`(name, payload, CapabilityContext)` and returns a JSON mapping. Streams use
+`stream/1` and produce logical items one at a time; the transport layer
+fragments large items and delivers each one once.
 
-## Addon bridge runtime requirement
+Each connection has its own outbound scheduler. It limits how many frames and
+bytes can be queued, reserves capacity for control frames, and shares the send
+capacity fairly among bulk content. To keep long text from blocking requests,
+pass `state.send_bulk` to `McbeOutboundDelivery`.
 
-The companion Script addon only loads when the world has **Experiments →
-Beta APIs** enabled. Without it, `scriptEventReceive` never fires and
-capability requests time out. See
-[addon/README.md — Enable in a world](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#enable-in-a-world).
+The budget for the final command line defaults to 461 UTF-8 bytes and can only
+be lowered. tellraw and framed scriptevents may be split across several
+commands. Native commands are never split and fail if they exceed the budget.
+MCBEWS/2 uplink measures the whole carrier frame on its own and does not inherit
+the downlink budget.
 
-## Addon bridge trust boundary
+The installed `profiles/mcbews_v2/manifest.json` and `vectors.json` define every
+wire format, limit and error code. See [the MCBEWS/2 protocol](protocol-v2.md).
 
-The bridge is **not** a security boundary. The host must authenticate and
-authorize who can invoke capabilities; the addon only applies a defensive
-command allow/denylist on the world-command path. See
-[addon/README.md — Trust boundary](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md#trust-boundary).
+## Addon requirements and trust
 
-## No host imports
+The companion addon needs **Experiments → Beta APIs** enabled in the target
+world. The setup steps, and what happens if it is left off, are in the
+[addon README](https://github.com/rice-awa/mcbe-ws-sdk/blob/main/addon/README.md).
 
-The SDK never imports from its parent host application.
-`ConnectionState.send_payload` is an opaque
-`Callable[[str], Awaitable[None]]` — the facade wires it to `websocket.send`.
-Host-specific framing (`connection_id`, timestamps, LLM message ids) stays in
-the host.
+The carrier that delivered a message, the simulated `MCBEWS_BRIDGE` player and
+the identity in metadata are not authentication. Your host must authenticate and
+authorize callers itself. Passing the automated protocol tests also does not
+widen the game versions or platforms supported in live play.
+
+The SDK never imports host application modules. `ConnectionState.send_payload`
+is an opaque async callable connected to the transport; host-specific message
+IDs, timestamps and business framing stay outside the SDK.

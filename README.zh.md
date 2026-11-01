@@ -4,128 +4,147 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
 
-面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
+**用 Python，为 Minecraft 基岩版创造更多玩法。**
 
-本包拥有 WS 传输、数据包协议与字节安全的命令分片（461 字节实测默认上限，部署可以
-进一步降低）。宿主通过 typed `ConnectionHook`、`ResponseSink` 以及可选的 typed
-session/approval 控制回调注入行为，并由 `McbeServerFacade` 驱动整条链路。
+`mcbe-ws-sdk` 是面向 Minecraft 基岩版（Bedrock）的通用 WebSocket 网关 SDK。
+从响应一条聊天指令、查询玩家背包，到让附加包调用 Python 服务、持续返回流式数据，
+你都可以通过熟悉的异步代码把游戏世界与自己的应用连接起来。
 
-SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属于宿主应用。
+项目提供 Python SDK 和配套的 TypeScript 附加包，管理连接、协议协商、请求与回复配对、
+消息分片以及断连后的任务清理。你可以用它编写聊天机器人、游戏工具和自定义交互，
+也可以接入自己的模型服务、消息系统或管理后台；认证、授权和业务状态由应用自行掌握。
 
-```text
-Minecraft 客户端  ←── /wsserver IP:端口 ──→  你的 Python 宿主（本 SDK）
-```
+SDK 与附加包之间使用 **V2 协议（MCBEWS/2）**通信，支持双向能力调用、通知、元数据和请求流。
+SDK、附加包和协议各自独立编号，当前版本见[迁移指南](docs/migration.zh.md#版本号分别表示什么)。
 
-## 游戏内 addon 能力桥接
-
-当宿主需要从世界内取得结构化信息或调用 Script API，而不只是接收玩家聊天时，使用配套的
-TypeScript addon。一条能力调用会走完这条带关联 ID、支持分片的往返链路：
+[浏览文档](https://rice-awa.github.io/mcbe-ws-sdk/zh/) · [快速开始](docs/getting-started.zh.md) · [查看示例](examples/addon-server/README.zh.md)
 
 ```text
-Python 宿主
-  → AddonBridgeService.request(capability, payload)
-  → scriptevent mcbews:bridge_req
-  → 基岩版世界内的 addon 能力处理器
-  → MCBEWS_BRIDGE 模拟玩家聊天分片
-  → WebSocket PlayerMessage 流
-  → AddonBridgeSession 按 request_id 重组并完成请求
-  → 宿主渲染结果（tellraw 或 mcbews:text_resp）
+Minecraft 世界（配套附加包） ←── /wsserver ──→ Python 应用（McbeServer）
+                                                   ├── ConnectionHook：处理输入
+                                                   ├── ResponseSink：显示回复
+                                                   └── server.v2：能力、通知与流
 ```
 
-- **为双向通信而设计。** Python 可调用 addon 能力；addon UI 也可经同一桥接将玩家消息传回
-  Python。Python 还可通过 `mcbews:text_resp` 向 addon UI 发送带帧的文本回复。
-- **适配真实传输限制。** 请求和响应携带 `request_id`；大载荷会被分片、再重组，而非假设
-  addon 能直接连接 WebSocket。
-- **职责清晰。** addon 拥有能力注册表；Python 宿主负责认证与授权。桥接本身不是安全边界。
+## 可以用它做什么
 
-从可运行的 [`addon-server`](./examples/addon-server/) 示例和[桥接协议](./docs/addon-bridge-protocol.zh.md)开始。
-加载配套 addon 的目标世界必须开启 **实验 → 测试版 API**；否则脚本不会加载，能力调用会超时。
+- **用异步代码响应游戏操作。** 在 `ConnectionHook` 中处理玩家消息、执行原生命令，
+  或等待附加包返回结果。处理器等待期间，SDK 仍会继续读取消息，并把回复对应到各自的请求。
+- **让 Python 与附加包双向调用。** 双方都可以注册能力、发起请求和发送通知，
+  并用元数据携带调用上下文。扩展游戏侧功能时，沿用同一套请求机制即可。
+- **随产生随接收数据。** 请求流可以正常结束，也可以中途取消。较大的数据项会先分片传输再重组，
+  你的代码拿到的始终是完整的数据项。
+- **让每名玩家的交互互不干扰。** 每条消息都带有发送者。同一玩家的处理按顺序执行，
+  不同玩家可以各自推进，因此可以按连接和发送者保存应用上下文。
+- **自定义游戏内体验。** 用 `ResponseSink` 和 `McbeOutboundDelivery` 把结果显示到游戏里，
+  也可以通过原生事件订阅和拦截器改变宿主接收输入的方式。
+- **从可运行的示例起步。** 默认附加包已经提供玩家和背包快照、回声、流和世界命令。
+  先运行示例，再逐步换成自己的处理器。
 
-## 安装
+## 运行第一个示例
+
+需要 Python 3.11+、Node.js 22，以及可使用 `/wsserver` 的基岩版世界。
+两个示例都需要配套附加包完成协议协商。
+
+在仓库根目录安装 SDK 并构建附加包：
 
 ```bash
-pip install mcbe-ws-sdk
-```
-
-开发时的可编辑安装：
-
-```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
+npm ci --prefix addon
+npm --prefix addon run mcaddon:production
 ```
 
-需要 **Python 3.11+**。
+将 `addon/dist/packages/mc-ws-sdk.mcaddon` 导入 Minecraft，在目标世界开启
+**实验 → 测试版 API（Beta APIs）**，并启用行为包。未开启时脚本不会加载，协议协商也会超时。
+附加包面向 Minecraft 引擎 1.26.30，完整要求见[附加包说明](addon/README.zh.md#环境要求)。
 
-## 30 秒体验
+启动服务：
+
+```bash
+python examples/addon-server/server.py --host 0.0.0.0 --port 8080
+```
+
+在游戏中连接并查询背包：
+
+```text
+/wsserver <Python宿主IP>:8080
+!inv
+```
+
+Python 与游戏在同一台机器上时使用 `127.0.0.1`，从其他设备连接则使用运行 Python 的机器的局域网 IP。
+连接后可以试试：
+
+- `!help` 查看命令列表。
+- `!echo hello` 收到一条回声。
+- `!stream 5` 依次接收五项数据后结束。
+
+示例只响应以 ASCII `!` 开头的消息，普通聊天不会有任何反应。按 `Ctrl+C` 停止服务。
+
+## 集成到自己的应用
+
+要在自己的应用里使用 SDK，可以从一个钩子开始。下面的宿主监听 `!inv`，
+向附加包查询发言玩家的背包，再把结果打印到终端。请求编号、发送、超时，
+以及把回复对应到请求，这些都由 SDK 完成：
 
 ```python
 import asyncio
-from mcbe_ws_sdk import McbeServerFacade, NoOpHook
+
+from mcbe_ws_sdk import McbeServer, NoOpHook
 
 
-class MyHook(NoOpHook):
-    async def on_connected(self, state):
-        print("connected:", state.id)
-
+class InventoryHook(NoOpHook):
     async def on_player_message(self, state, event, parsed=None):
-        print(f"{event.sender}: {event.message}")
+        if event.message.strip() != "!inv":
+            return
+        response = await server.v2.request(
+            state.id, "get_inventory_snapshot", {"target": event.sender}
+        )
+        print(response["result"])
 
 
-async def main() -> None:
-    facade = McbeServerFacade(hook=MyHook())
-    print(f"ws://{facade.settings.websocket.host}:{facade.settings.websocket.port}")
-    await facade.run_lifetime()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+server = McbeServer(hook=InventoryHook())
+asyncio.run(server.run_lifetime())
 ```
 
-然后在游戏里执行：`/wsserver <本机IP>:8080`
+如果想把结果直接显示在游戏里，可以再接入 `ResponseSink` 和
+`McbeOutboundDelivery`；[可运行示例](examples/addon-server/server.py)有完整写法。
+多人世界里，请按 `(connection_id, event.sender)` 保存每名玩家的状态，让不同玩家的上下文互不干扰。
 
-若要「收到消息并用 tellraw 回复」，直接跑现成示例：
+## 按需查阅
 
-```bash
-python examples/basic-server/server.py
-```
+| 目标 | 文档 |
+| --- | --- |
+| 安装、连接、命令与排查 | [快速开始](docs/getting-started.zh.md) |
+| 添加能力、通知、元数据和流 | [扩展作者指南](docs/extension-authors.zh.md) |
+| 理解队列、生命周期和职责 | [架构](docs/architecture.zh.md) |
+| 订阅或拦截游戏事件 | [原生事件](docs/native-events.zh.md) |
+| 跟踪请求、诊断错误 | [追踪与诊断](docs/diagnostics.zh.md) |
+| 查看消息字段和传输限制 | [V2 协议](docs/protocol-v2.zh.md) |
+| 从 0.2.x 升级或整套回退 | [迁移指南](docs/migration.zh.md) |
+| 查找类、方法和参数 | [API 参考](docs/reference.zh.md) |
 
-## 文档
+## 使用须知
 
-完整新手教程、架构、协议与 API 参考在文档站（中英双语）：
+- **选择附加包。** 默认附加包包含快照、回声、流和世界命令。只需要快照时，
+  可以用 `npm --prefix addon run mcaddon:base` 构建精简包。
+- **世界命令。** 命令会先经过[命令禁止列表](addon/README.zh.md#世界命令安全)过滤，
+  但谁有权调用仍由宿主判断。
+- **长文本。** 原生命令不会被拆开发送，超过字节预算时直接报错；
+  tellraw 和脚本事件则可以按默认的 461 字节预算分片。
 
-| | |
-|---|---|
-| **在线** | https://rice-awa.github.io/mcbe-ws-sdk/zh/ |
-| **本地** | `pip install -e ".[docs]" && mkdocs serve` → http://127.0.0.1:8000/zh/ |
+## 开发与验证
 
-| 页面 | 内容 |
-|------|------|
-| [快速开始](./docs/getting-started.zh.md) | 安装、5 分钟上手、最小回声机器人、FAQ |
-| [架构](./docs/architecture.zh.md) | 分层栈与依赖倒置 |
-| [协议](./docs/addon-bridge-protocol.zh.md) | mcbews v1 桥接线格式 |
-| [API 参考](./docs/reference.zh.md) | 从源码生成（导读见中文站） |
-
-## 示例
-
-| 路径 | 说明 |
-|------|------|
-| [`examples/basic-server/`](./examples/basic-server/) | 聊天回声 + `tellraw`（推荐先看） |
-| [`examples/addon-server/`](./examples/addon-server/) | 通过配套 addon 调用能力 |
-| [`examples/addon-capability-call/`](./examples/addon-capability-call/) | 内存中的桥接往返（不连游戏） |
-
-配套 TypeScript addon：[`addon/`](./addon/)。加载该包的世界必须开启
-**实验 → 测试版 API**（详见 [addon README](./addon/README.zh.md#%E5%9C%A8%E4%B8%96%E7%95%8C%E4%B8%AD%E5%90%AF%E7%94%A8)）。
-
-## 开发
+参与 SDK 本身的开发时，在仓库根目录运行下列检查：
 
 ```bash
-pip install -e ".[dev,docs]"
-ruff check --no-cache src tests examples
+ruff check --no-cache src tests examples tools
 mypy --no-incremental src
-pytest -p no:cacheprovider -q
-python tools/format.py          # ruff format+fix（Python）；有 Node 时跑 prettier（Addon）
-python tools/format.py --check  # CI 风格只检查不写入
+MCBE_REQUIRE_CROSS_LANGUAGE=1 pytest -p no:cacheprovider -q
+mkdocs build --strict
+python tools/format.py --check
 ```
 
-## License
-
-[MIT](./LICENSE)
+跨语言测试需要 Node.js 22 和 addon 的 TypeScript 依赖，请先执行前面的 `npm ci --prefix addon`。
+缺少这些工具时，普通 pytest 会跳过依赖它们的用例；设置 `MCBE_REQUIRE_CROSS_LANGUAGE=1` 后，缺少工具会直接判为失败。

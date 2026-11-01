@@ -1,0 +1,22 @@
+[
+  {
+    "pid": 560398,
+    "cwd": "/tmp/r18-matrix/py312",
+    "args": "node tests/smoke/r17-addon-runner.cjs "
+  },
+  {
+    "pid": 560975,
+    "cwd": "/tmp/r18-matrix/py311",
+    "args": "node tests/smoke/r17-addon-runner.cjs "
+  },
+  {
+    "pid": 567773,
+    "cwd": "/tmp/r18-matrix/py312",
+    "args": "node addon/tests/v2-live.cjs "
+  },
+  {
+    "pid": 568191,
+    "cwd": "/tmp/r18-matrix/py311",
+    "args": "node addon/tests/v2-live.cjs "
+  }
+]

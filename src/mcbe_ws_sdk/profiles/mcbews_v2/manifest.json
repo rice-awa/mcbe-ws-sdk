@@ -1,0 +1,229 @@
+{
+  "protocol": "MCBEWS/2",
+  "fields": {
+    "common": {
+      "required": [
+        "v",
+        "kind"
+      ],
+      "optional": [
+        "meta"
+      ],
+      "unknown": "reject"
+    },
+    "request": {
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "forbidden": [
+        "result",
+        "error"
+      ]
+    },
+    "response": {
+      "required": [
+        "id"
+      ],
+      "exclusive": [
+        "result",
+        "error"
+      ],
+      "forbidden": [
+        "method",
+        "params"
+      ]
+    },
+    "notification": {
+      "required": [
+        "method",
+        "params"
+      ],
+      "forbidden": [
+        "id",
+        "result",
+        "error"
+      ]
+    },
+    "stream_open": {
+      "required": [
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "stream_item": {
+      "required": [
+        "id",
+        "seq",
+        "item"
+      ]
+    },
+    "stream_end": {
+      "required": [
+        "id",
+        "seq"
+      ]
+    },
+    "stream_error": {
+      "required": [
+        "id",
+        "seq",
+        "error"
+      ]
+    },
+    "stream_cancel": {
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "id_pattern": "[pa][.][A-Za-z0-9_-]{1,24}[.][1-9][0-9]{0,9}",
+  "method_pattern": "[A-Za-z][A-Za-z0-9_.:-]{0,63}",
+  "token_pattern": "[A-Za-z0-9_/-]{1,64}",
+  "metadata": {
+    "reserved": [
+      "sdk.trace_id",
+      "sdk.identity",
+      "sdk.capabilities"
+    ],
+    "unknown": "preserve recursively",
+    "identity": "untrusted; never authorizes",
+    "capabilities": "unique <=16 tokens; stream/1 enables request streams"
+  },
+  "errors": [
+    "MALFORMED_JSON",
+    "UNSUPPORTED_VERSION",
+    "INVALID_MESSAGE",
+    "LIMIT_EXCEEDED",
+    "INVALID_FRAGMENT",
+    "FRAGMENT_CONFLICT",
+    "UNSUPPORTED_METHOD",
+    "INVALID_PARAMS",
+    "HANDLER_FAILED",
+    "CANCELLED",
+    "TIMEOUT"
+  ],
+  "carrier": {
+    "event": "mcbews:packet_v2",
+    "prefix": "MCBEWS2",
+    "frame": "MCBEWS2|sender.session.sequence|index/total|content",
+    "trusted_player": "MCBEWS_BRIDGE"
+  },
+  "negotiation": {
+    "event": "mcbews:negotiate_v2",
+    "hello_prefix": "MCBEWS2H",
+    "response_prefix": "MCBEWS2N",
+    "versions": [
+      "MCBEWS/2"
+    ],
+    "features": [
+      "metadata/1",
+      "notifications/1",
+      "reverse/1",
+      "stream/1"
+    ],
+    "required": true,
+    "max_attempts": 1,
+    "hello": "MCBEWS2H|attempt",
+    "response": "MCBEWS2N|attempt|epoch|2|comma-separated-features",
+    "epoch": "fresh addon-issued 1-24 character routing token; not authentication",
+    "acceptance": "one outstanding attempt and fresh challenge must match before activation; no fallback",
+    "confirm": "MCBEWS2C|attempt|epoch",
+    "ready": "MCBEWS2N|attempt|epoch|ready",
+    "busy": "MCBEWS2N|attempt|-|busy",
+    "refresh": "MCBEWS2R|epoch",
+    "lease_ack": "MCBEWS2N|epoch|lease",
+    "close": "MCBEWS2X|epoch",
+    "max_peers": 32,
+    "max_challenges": 32,
+    "challenge_ms": 10000,
+    "lease_ms": 60000,
+    "refresh_ms": 20000,
+    "max_control_sends": 64
+  },
+  "admission": {
+    "states": [
+      "WS_TRANSPORT_CONNECTED",
+      "NEGOTIATING",
+      "READY_V2",
+      "REJECTED",
+      "CLOSING",
+      "CLOSED"
+    ],
+    "reasons": [
+      "UNSUPPORTED_PROTOCOL",
+      "NEGOTIATION_TIMEOUT",
+      "NEGOTIATION_CONFIRMATION_TIMEOUT",
+      "NEGOTIATION_BUSY",
+      "INVALID_NEGOTIATION",
+      "SESSION_INVALID"
+    ],
+    "close_code": 1008,
+    "reason_max_bytes": 123,
+    "reject_notice": "mcbews:protocol_reject"
+  },
+  "limits": {
+    "command_bytes": 461,
+    "upstream_code_points": 256,
+    "upstream_bytes": 1024,
+    "chunks": 1024,
+    "message_bytes": 65536,
+    "metadata_bytes": 4096,
+    "depth": 16,
+    "source_bytes": 131072,
+    "source_buffers": 16,
+    "connection_bytes": 262144,
+    "connection_buffers": 64,
+    "global_bytes": 1048576,
+    "global_buffers": 256,
+    "ttl_ms": 30000,
+    "tombstones": 2048
+  },
+  "types": {
+    "v": "literal MCBEWS/2",
+    "kind": "request | response | notification | stream_open | stream_item | stream_end | stream_error | stream_cancel",
+    "id": "ASCII id_pattern string",
+    "method": "ASCII method_pattern string",
+    "params": "JSON value",
+    "result": "JSON value",
+    "meta": "JSON object",
+    "error": {
+      "required": {
+        "code": "errors enum string",
+        "message": "scalar string <=256 UTF-8 bytes"
+      },
+      "optional": {
+        "data": "JSON value"
+      },
+      "unknown": "reject"
+    },
+    "seq": "safe integer >=0; stream item index or next expected index at termination",
+    "item": "JSON value"
+  },
+  "json": {
+    "numbers": "finite safe integers only, abs <=9007199254740991",
+    "strings": "Unicode scalar values",
+    "duplicate_keys": "last value",
+    "depth": "root depth 0, maximum 16"
+  },
+  "state": {
+    "request": "request -> one response; response echoes initiator id",
+    "notification": "no logical id or response",
+    "transport": "fresh sender-owned id; all indexes then decode; duplicate identical ignored, conflict drops",
+    "reconnect": "fresh epoch, no replay",
+    "cleanup": "30000ms idle expiry; completion/conflict/overflow/cancel/expiry tombstone for 30000ms; disconnect clears connection",
+    "tombstone_capacity": "active IDs + tombstones <=2048; reject new IDs when full",
+    "stream": "open -> item(seq=0...), then exactly one end/error(next seq); caller cancel stops producer; late frames ignored; stream/1 required"
+  },
+  "streams": {
+    "max_active": 16,
+    "buffer_items": 32,
+    "buffer_bytes": 131072,
+    "connection_bytes": 262144,
+    "idle_ms": 30000,
+    "tombstones": 2048,
+    "tombstone_ms": 30000
+  }
+}

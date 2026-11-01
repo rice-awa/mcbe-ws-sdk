@@ -1,0 +1,11 @@
+{
+  "venvs": "/tmp/mcbe-r19-envs-_4ccgiy2",
+  "candidate_base": "c7aeb47",
+  "python_package": "0.3.0rc1",
+  "npm_project": "0.3.0-rc.1",
+  "pack": [
+    1,
+    1,
+    0
+  ]
+}

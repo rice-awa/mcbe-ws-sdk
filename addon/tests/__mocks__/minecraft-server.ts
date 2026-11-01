@@ -70,7 +70,7 @@ export interface Player {
   readonly name: string;
   readonly location: Vector3;
   readonly dimension: Dimension;
-  runCommand(command: string): Promise<void>;
+  runCommand(command: string): { successCount: number };
   getComponent(componentId: string): EntityHealthComponent | EntityInventoryComponent | undefined;
   getTags(): string[];
   getGameMode(): GameMode;
@@ -115,6 +115,8 @@ export const system = {
     scheduledRuns.push(callback);
   }),
   runInterval: vi.fn(),
+  runTimeout: vi.fn().mockReturnValue(1),
+  clearRun: vi.fn(),
 };
 
 // ---------------------------------------------------------------------------
@@ -129,4 +131,6 @@ export function resetMinecraftMocks(): void {
   world.getPlayers.mockReset().mockReturnValue([]);
   world.getDimension.mockReset();
   system.runInterval.mockReset();
+  system.runTimeout.mockReset().mockReturnValue(1);
+  system.clearRun.mockReset();
 }

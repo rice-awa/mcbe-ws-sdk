@@ -23,9 +23,13 @@ const projectName = getOrThrowFromProcess("PROJECT_NAME");
 
 // You can use `npm run build:production` to build a "production" build that strips out statements labelled with "dev:".
 const isProduction = argv()["production"];
+// The demo capabilities are the default: `demo.echo`, the `demo.ticks` stream
+// and `run_world_command` ship in every package. `--base` (or MCBE_BASE=1)
+// builds the lean package with only the two read-only snapshots.
+const isBase = Boolean(argv()["base"]) || process.env.MCBE_BASE === "1";
 
 const bundleTaskOptions: BundleTaskParameters = {
-  entryPoint: path.join(__dirname, "./scripts/main.ts"),
+  entryPoint: path.join(__dirname, isBase ? "./scripts/main.ts" : "./scripts/main.demo.ts"),
   external: ["@minecraft/server", "@minecraft/server-ui", "@minecraft/server-gametest"],
   outfile: path.resolve(__dirname, "./dist/scripts/main.js"),
   minifyWhitespace: false,
@@ -42,7 +46,7 @@ const copyTaskOptions: CopyTaskParameters = {
 
 const mcaddonTaskOptions: ZipTaskParameters = {
   ...copyTaskOptions,
-  outputFile: `./dist/packages/${projectName}.mcaddon`,
+  outputFile: `./dist/packages/${projectName}${isBase ? "-base" : ""}.mcaddon`,
 };
 
 // Lint

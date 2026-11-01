@@ -1,53 +1,50 @@
-# mcbe-ws-sdk
+# Connect Minecraft to Python
 
-Generic **WebSocket gateway SDK** for Minecraft Bedrock Edition.
+**mcbe-ws-sdk** is a WebSocket gateway for Minecraft Bedrock Edition. In Python
+you can handle player messages, run game commands, call addon capabilities and
+receive streams, without tracking packet fragments or keeping your own table of
+pending requests.
 
-It owns the **WS transport**, **packet protocol**, and **byte-safe command
-chunking** (461-byte empirically measured default ceiling; deployments may lower
-it). Your host injects behaviour through two
-protocols — `ConnectionHook` and `ResponseSink` — and drives the stack with
-`McbeServerFacade`.
+The SDK and the addon talk over **V2 (MCBEWS/2)**. Every connection negotiates
+the protocol first, and your code only sees business messages after that
+succeeds. The protocol version and the SDK package version are numbered
+independently.
 
-There is **no** message broker and **no** LLM worker inside the SDK. Those stay
-in the host application.
+## Try it
 
-```text
-Minecraft client  ←── /wsserver IP:port ──→  Your Python host (this SDK)
+From the repository root:
+
+```bash
+pip install -e ".[dev,docs]"
+npm ci --prefix addon
+npm --prefix addon run mcaddon:production
 ```
 
-## What you can build
+Import `addon/dist/packages/mc-ws-sdk.mcaddon`, enable **Experiments → Beta APIs**
+in the target world and activate the behavior pack. Both examples need the addon
+to set up the connection, and without Beta APIs its scripts never load.
 
-| You want to… | This SDK? |
-|--------------|-----------|
-| Listen to player chat and auto-reply | ✅ |
-| Run commands like `time set day` from Python | ✅ |
-| Read player inventory / position via the addon | ✅ |
-| Build an AI chat bot (you own the LLM part) | ✅ |
-| Use it as a ready-made AI server | ❌ Host app owns that |
-| Write a Java Edition plugin | ❌ Bedrock WebSocket only |
+```bash
+python examples/addon-server/server.py
+```
 
-## One-way capability model
+In Minecraft, run `/wsserver <python-host-ip>:8080`, then send `!inv` to query
+your inventory. Next, try `!echo hello` or `!stream 5`. The example answers only
+messages that start with ASCII `!`, so ordinary chat gets no reply.
 
-The SDK sends bridge requests from the Python host to the Minecraft addon and
-receives responses. There is **no inbound capability-registry dispatch** — the
-addon side owns all capability handling.
+[Getting started](getting-started.md) covers the prerequisites, configuration
+and troubleshooting in more detail.
 
-The sole built-in protocol profile is `McbewsV1Profile` (`MCBEWS_V1`).
+## Build your host
 
-`ConnectionHook` exposes six typed lifecycle hooks; UI chat uses
-`on_ui_chat_reassembled(state, UiChatMessage)`. Authenticated session/approval
-frames use the optional `AddonControlHook` callback.
+- [Architecture](architecture.md): how a connection is set up, how work is queued and how it ends.
+- [Extension authors](extension-authors.md): add capabilities, notifications, metadata and streams.
+- [Native events](native-events.md): subscribe to game events, observe them or intercept them.
+- [Diagnostics](diagnostics.md): trace a request and understand a failure.
+- [V2 protocol](protocol-v2.md): message format, negotiation, fragmentation and limits.
+- [API reference](reference.md): classes, methods and parameters.
+- [Migration](migration.md): upgrade from 0.2.x, or roll back both the Python package and the addon.
 
-## Dual interface
-
-| Layer | How you use it |
-|-------|----------------|
-| High-level | Implement `ConnectionHook` + `ResponseSink`, run `McbeServerFacade` |
-| Low-level | Subscribe to `EventBus` keyed by `WsEventType` |
-
-## Next steps
-
-- **[Getting Started](getting-started.md)** — install, 5-minute walkthrough, minimal echo bot, FAQ
-- [Architecture](architecture.md) — layer stack and dependency inversion
-- [Protocol](addon-bridge-protocol.md) — mcbews v1 bridge wire format
-- [API Reference](reference.md) — auto-generated from source
+The SDK handles transport and the protocol. Your host handles authentication,
+authorization and application state: a `ConnectionHook` receives input and a
+`ResponseSink` renders replies.

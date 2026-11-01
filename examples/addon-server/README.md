@@ -1,175 +1,126 @@
-# Addon Capability Demo Server
+# Addon capability server
 
-A runnable Minecraft Bedrock WebSocket server built on `mcbe-ws-sdk` that
-exercises the bridge addon's built-in capabilities through chat commands.
+A `McbeServer` host that calls the companion addon through `V2Bridge`. It
+demonstrates capability requests, metadata, notifications and streams, while the
+SDK takes care of negotiation, callbacks, request waiters, timeouts and
+fragments.
 
-It:
+## Build the addon
 
-1. listens on `0.0.0.0:8080`;
-2. accepts Minecraft Bedrock `/wsserver` connections;
-3. subscribes to `PlayerMessage`;
-4. sends capability requests through `AddonBridgeService`; and
-5. replies with a formatted `tellraw` summary via `McbeOutboundDelivery`.
+The default package includes every capability this server calls:
 
-## Prerequisites
+```bash
+cd addon
+npm ci
+npm run build
+npm run mcaddon
+```
 
-1. Install the SDK (editable) from the repository root:
+The lean `--base` package has only the two read-only snapshots and cannot serve
+`!echo`, `!stream`, `!stream-cancel` or `!cmd`:
 
-   ```bash
-   pip install -e ".[dev]"
-   ```
+```bash
+npm run build:base
+npm run mcaddon:base
+```
 
-2. Build and enable the bridge addon in the target world:
+Import the generated `.mcaddon`. In the target world's settings, enable
+**Experiments → Beta APIs** and activate its behavior pack. Without Beta APIs the
+scripts never load and negotiation times out. The
+[addon setup](../../addon/README.md#enable-in-a-world) guide has the full steps.
 
-   ```bash
-   cd addon
-   npm install
-   npm run build
-   npm run mcaddon
-   ```
-
-   Then import the produced `.mcaddon` (or the behavior pack) into the world
-   and make sure the pack is active.
-
-   **Required:** in the world settings, open **Experiments** and enable
-   **Beta APIs**. Without it, Script API modules do not load — bridge
-   capability calls will time out with no in-game effect. Prefer a dedicated
-   test world (experiments can affect achievements / features).
-
-3. Start this server, then in-game run:
-
-   ```text
-   /wsserver <machine-running-the-server>:8080
-   ```
+The default build bundles `addon/scripts/main.demo.ts` and calls
+`registerDemoCapabilities()`, so you do not need to copy any files into the
+addon by hand. `demoCapabilities.ts` is the single place that registers
+`demo.echo`, the `demo.ticks` stream and `run_world_command`, which applies the
+command denylist.
 
 ## Run
 
+From the repository root:
+
 ```bash
 python examples/addon-server/server.py
-python examples/addon-server/server.py --host 0.0.0.0 --port 8080
-python examples/addon-server/server.py --log-level DEBUG
+python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DEBUG
 ```
 
-## Chat commands
+In game, run `/wsserver <python-host-ip>:8080`. From another device, use the
+Python machine's LAN IP and allow the listening port through its firewall. Stop
+Python with `Ctrl+C`. Add `--log-raw` only when you really want full packet
+payloads in the logs.
 
-| Command | Capability | Notes |
+## Input rule
+
+The example handles a message only when its trimmed text starts with ASCII `!`.
+Empty or whitespace input, ordinary chat, a bare `help` / `帮助`, a `!` in the
+middle of a sentence and the full-width `！` are all ignored: the example sends
+no reply and makes no command, capability or stream call. A bare `!` returns a
+single usage hint, and so does an unknown `!command`. The Chinese aliases still
+work when prefixed with `!`. SDK protocol frames and native events are not
+affected by this rule.
+
+## Commands
+
+| Chat command | Action | Package |
 | --- | --- | --- |
-| `!player [target]` / `!玩家 [target]` | `get_player_snapshot` | Default target is the sender |
-| `!inv [target]` / `!背包 [target]` | `get_inventory_snapshot` | Default target is the sender |
-| `!cmd <command>` / `!命令 <command>` | `run_world_command` | **Not registered by default** — see below |
-| `!wscmd <command>` / `!ws命令 <command>` | WS `commandRequest` | No addon required; host tracks `commandResponse` |
-| `!help` / `帮助` | — | Show help |
+| `!player [target]` / `!玩家` | `get_player_snapshot`, current player by default | Default + lean |
+| `!inv [target]` / `!背包` | `get_inventory_snapshot` | Default + lean |
+| `!wscmd <command>` / `!ws命令` | Native `command_client.run`, no addon capability needed | Default + lean |
+| `!cmd <command>` / `!命令` | `run_world_command` as the chat sender, commands on the denylist rejected | Default only |
+| `!echo <text>` | `demo.echo`, with `example.label` and `example.player` metadata | Default only |
+| `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) | Default only |
+| `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) | Default only |
+| `!help` / `!帮助` | Show command help | Default + lean |
 
-Examples:
+With the lean `--base` package, the demo commands return a readable
+`UNSUPPORTED_METHOD` error along with a hint to use the default build.
+`run_world_command` always applies the command denylist. To narrow it further,
+pass an explicit allowlist to `handleRunWorldCommand`.
 
-```text
-!player
-!player Steve
-!inv
-!cmd time query daytime
-!wscmd time query daytime
-!help
-```
+### Selectors and command context
 
-## Enabling `run_world_command`
+Use `!cmd testfor @s` to target yourself, or
+`!cmd testfor @e[type=minecraft:cow]` to find cows in your dimension.
+`!cmd` passes your exact player name, so `@s`, nearest-player selection and
+relative coordinates all use your execution context. If you leave the game
+before the command runs, the request fails. `!wscmd` uses the WebSocket
+connection's native context instead.
 
-The handler exists in `addon/scripts/bridge/capabilities/runWorldCommand.ts`
-and is exported, but it is intentionally **not** part of the default registry
-(`get_player_snapshot` / `get_inventory_snapshot` only). To enable it for this
-demo, either:
+A direct `run_world_command` call may omit `player` to keep the overworld
+dimension context; see [world command safety](../../addon/README.md#world-command-safety).
+A `successCount` of zero means the command was applied zero times, and the
+example displays that explicitly.
 
-1. append it to the default registry in `capabilities/index.ts`:
+To select by entity type, write a selector such as `@e[type=minecraft:cow]`; a
+bare `cow` does not filter by type. `setblock` needs three coordinates (for
+example, `setblock ~ ~ ~ stone`) and is still denied by the addon policy.
 
-   ```ts
-   import { handleRunWorldCommand } from "./runWorldCommand";
+## Ordering, failures and cancellation
 
-   export const defaultCapabilityRegistry: Record<string, CapabilityHandler> = {
-     get_player_snapshot: (_c, payload) => handleGetPlayerSnapshot(payload),
-     get_inventory_snapshot: (_c, payload) => handleGetInventorySnapshot(payload),
-     run_world_command: (_c, payload) => handleRunWorldCommand(payload),
-   };
-   ```
+`McbeServer` starts business processing only after protocol negotiation
+finishes. Callbacks for the same player run in order, and other players can
+progress independently. The reader keeps receiving replies while a hook waits
+for a result, so the example needs no request wait table, no manual fragment
+state and no background request tasks.
 
-2. or override the handler from a TypeScript host:
+A negotiated request returns a response envelope, and the successful data is in
+`result`. A remote protocol error raises `RemoteCallError` with its `code`, and
+native replies carry `statusCode`. Timeouts, unsupported features and transport
+failures all end the call with an explicit error. When a call fails, the player
+sees the capability, the error code, a short message (at most 256 UTF-8 bytes)
+and an action hint, while internal request IDs and stack traces stay in the logs.
 
-   ```ts
-   import { setCapabilityHandler } from "./bridge/router";
-   import { handleRunWorldCommand } from "./bridge/capabilities";
+Consume streams with `async with stream` so that leaving early cancels the
+producer. Cancelling does not undo world changes that already ran. Slow
+consumers are terminated once their buffers fill up; receiver credits are not
+implemented.
 
-   setCapabilityHandler((capability, payload, context) => {
-     if (capability === "run_world_command") {
-       return handleRunWorldCommand(payload);
-     }
-     // fall through to other handlers / default registry as needed
-     ...
-   });
-   ```
+Use `event.sender` rather than the connection's deprecated last-player pointer.
+The example also filters out external tellraw echoes.
 
-Rebuild the addon after changing the registry. The denylist in
-`commandSafety.ts` still blocks `stop` / `reload` / `kick` / `op` / `deop`.
-
-## How the bridge call is wired
-
-```text
-player chat
-  → AddonDemoHook
-  → AddonBridgeService.create_client(...).request(capability, payload)
-  → McbeOutboundDelivery.send_raw_command("scriptevent mcbews:bridge_req ...")
-  → addon router handles capability
-  → bridge tool player replies via chat chunks
-  → facade routes chunks into AddonBridgeService
-  → pending future resolves
-  → tellraw summary back to the player
-```
-
-## How WS-side `!wscmd` is wired
-
-The SDK can **send** a `commandRequest` (`McbeOutboundDelivery.send_raw_command`)
-and **deliver** the matching `commandResponse` to
-`ConnectionHook.on_command_response`, but it intentionally does **not** keep a
-pending-future map — that correlation is host-owned. This example shows the
-minimal pattern in `WsCommandRunner`:
-
-```text
-!wscmd time query daytime
-  → on_player_message schedules a background task (must not block the receive loop)
-  → WsCommandRunner.run()
-  → send_raw_command(..., before_send=register future by requestId)
-  → Bedrock replies with commandResponse
-  → facade → on_command_response → WsCommandRunner.resolve()
-  → future completes → tellraw statusCode / statusMessage
-```
-
-**Do not `await runner.run()` (or addon `client.request()`) directly inside
-`on_player_message`.** The facade processes inbound frames with
-`async for raw in websocket: await _handle_raw(...)`, which awaits the hook.
-Blocking there for a `commandResponse` / bridge chat chunk starves the receive
-loop: the game may still execute the command, but the Python side times out
-forever. This example uses `asyncio.create_task(...)` so the hook returns
-immediately.
-
-Use `!wscmd` when you only need a normal Minecraft command and do not want to
-depend on the bridge addon. Use `!cmd` when you need the addon's
-`run_world_command` path (denylist, Script API side effects, etc.).
-
-Important details:
-
-- One `AddonBridgeService` instance is shared by the hook (outbound) and the
-  facade (inbound reassembly) so pending futures stay on the same session map.
-- `player_event.sender` is the reply target. Do not use the deprecated
-  connection-level `ConnectionState.player_name` as a session identity — one
-  `/wsserver` connection can carry many players.
-- Bedrock echoes tellraw as `sender=外部` / `External`; those echoes are ignored.
-- Untracked `commandResponse` frames (our own tellraw/scriptevent acks) are
-  ignored unless `statusCode` is non-zero.
-
-## Notes
-
-- Use the server machine's LAN IP when Minecraft runs elsewhere; do not use
-  `127.0.0.1` in that case.
-- Allow TCP port `8080` through the host firewall.
-- This example has no authentication. Use it only on a trusted local/LAN
-  network.
-- If a request times out, check in order: (1) the bridge addon pack is active
-  in this world; (2) **Experiments → Beta APIs** is on (scripts do not load
-  otherwise); (3) the `/wsserver` connection is still up.
+This example has no authentication, so run it in a trusted local or LAN
+environment and add host authorization before using anything like it in
+production. Running the automated examples does not establish support for new
+Minecraft platforms or versions. See
+[extension authors](../../docs/extension-authors.md) for registration, event
+subscriptions and protocol limits.

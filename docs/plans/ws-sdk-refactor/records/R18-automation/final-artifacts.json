@@ -1,0 +1,17 @@
+{
+  "artifacts": {
+    "dist/mcbe_ws_sdk-0.2.1-py3-none-any.whl": {
+      "sha256": "7358a90639e0e4a164bd48def10a921f9f0463913f596ba7f88f548498a376bd",
+      "bytes": 121665
+    },
+    "dist/mcbe_ws_sdk-0.2.1.tar.gz": {
+      "sha256": "921903724d82854ab9c6861b0d991eaf353612150671613199b10d143e250960",
+      "bytes": 3901660
+    },
+    "rebuilt/mcbe_ws_sdk-0.2.1-py3-none-any.whl": {
+      "sha256": "7358a90639e0e4a164bd48def10a921f9f0463913f596ba7f88f548498a376bd",
+      "bytes": 121665
+    }
+  },
+  "sdist_files": 190
+}

@@ -1,0 +1,18 @@
+{
+  "baseline_commit": "39aaf9e",
+  "candidate_base": "206361c",
+  "harness_commit": "39aaf9e",
+  "harness_sha256": "436043c6178a6e7c6c5a761732391f3bc2a5be7d230e31b1607cae7b399dcbd4",
+  "parameters": {
+    "runs": 5,
+    "messages": 30,
+    "payload_bytes": 4096,
+    "command_budget": 461
+  },
+  "python": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python",
+  "order": [
+    "baseline",
+    "candidate"
+  ],
+  "scope": "R00 legacy scenarios; synthetic, no game network"
+}

@@ -107,3 +107,35 @@ async def test_payload_debug_log_respects_log_raw_payloads_flag() -> None:
     with structlog.testing.capture_logs() as logs:
         await delivery_opted_in.send_tellraw("secret", color="", source="test", target="Steve")
     assert any("websocket_response_payload" in str(item) for item in logs)
+
+
+@pytest.mark.asyncio
+async def test_bulk_adapter_receives_text_while_raw_commands_stay_on_request() -> None:
+    """Long text uses ``send_bulk``; raw commands/generic payloads use ``send_payload``."""
+    requests: list[str] = []
+    bulk: list[str] = []
+
+    async def send_request(payload: str) -> None:
+        requests.append(payload)
+
+    async def send_bulk(payload: str) -> None:
+        bulk.append(payload)
+
+    delivery = McbeOutboundDelivery(
+        connection_id=UUID(int=74),
+        send_payload=send_request,
+        send_bulk=send_bulk,
+        settings=FlowControlSettings(),
+    )
+
+    await delivery.send_tellraw("hello", color="", source="test")
+    await delivery.send_scriptevent("data", source="test")
+    await delivery.send_raw_command("say hi")
+    await delivery.send_payload("{}", "session")
+
+    assert [json.loads(frame)["body"]["commandLine"].split(" ")[0] for frame in bulk] == [
+        "tellraw",
+        "scriptevent",
+    ]
+    assert json.loads(requests[0])["body"]["commandLine"] == "say hi"
+    assert requests[1] == "{}"

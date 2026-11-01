@@ -16,15 +16,11 @@ def bus() -> EventBus:
 
 
 def test_ws_event_type_has_core_events() -> None:
-    # PRD §4 lists nine event types (plus CONNECTED/DISCONNECTED).
     names = {member.value for member in WsEventType}
     for required in (
         "connected",
         "disconnected",
         "player_message",
-        "bridge_chunk",
-        "ui_chat_chunk",
-        "ui_chat_reassembled",
         "command_response",
         "error",
         "raw_inbound",
@@ -152,21 +148,21 @@ def test_same_strong_handler_gets_distinct_tokens(bus: EventBus) -> None:
     async def handler() -> None:
         return None
 
-    first = bus.subscribe(WsEventType.UI_CHAT_CHUNK, handler, weak=False)
-    second = bus.subscribe(WsEventType.UI_CHAT_CHUNK, handler, weak=False)
+    first = bus.subscribe(WsEventType.ERROR, handler, weak=False)
+    second = bus.subscribe(WsEventType.ERROR, handler, weak=False)
 
     assert first != second
     assert bus.unsubscribe(first) is True
-    assert bus.handler_count(WsEventType.UI_CHAT_CHUNK) == 1
+    assert bus.handler_count(WsEventType.ERROR) == 1
 
 
 def test_handler_count(bus: EventBus) -> None:
     async def h() -> None:
         return None
 
-    assert bus.handler_count(WsEventType.UI_CHAT_CHUNK) == 0
-    bus.subscribe(WsEventType.UI_CHAT_CHUNK, h, weak=False)
-    assert bus.handler_count(WsEventType.UI_CHAT_CHUNK) == 1
+    assert bus.handler_count(WsEventType.ERROR) == 0
+    bus.subscribe(WsEventType.ERROR, h, weak=False)
+    assert bus.handler_count(WsEventType.ERROR) == 1
 
 
 @pytest.mark.asyncio

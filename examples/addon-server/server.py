@@ -1,14 +1,23 @@
 """Runnable MCBE WebSocket server that exercises built-in addon capabilities.
 
 This example builds on ``examples/basic-server`` and adds chat commands that
-call the TypeScript bridge addon through :class:`AddonBridgeService`, plus a
-host-owned WebSocket ``commandRequest`` / ``commandResponse`` runner:
+call the TypeScript bridge addon through :class:`V2Bridge`, plus the
+SDK-owned awaitable ``commandRequest`` / ``commandResponse`` client
+(:attr:`ConnectionState.command_client`):
 
 * ``!player [target]`` → ``get_player_snapshot``
 * ``!inv [target]`` → ``get_inventory_snapshot``
-* ``!cmd <command>`` → ``run_world_command`` (must be enabled in the addon)
-* ``!wscmd <command>`` → WS-side ``commandRequest`` (no addon required)
+* ``!cmd <command>`` → ``run_world_command`` (included in the default addon)
+* ``!wscmd <command>`` → WS-side ``commandRequest`` (no addon capability call)
+* ``!echo <text>`` → custom capability and metadata
+* ``!stream [count]`` → continuously produced items and normal completion
+* ``!stream-cancel [count]`` → early consumer exit cancels an unlimited producer
 * ``!help`` → list available commands
+
+Only messages that start with ASCII ``!`` after trimming are dispatched;
+ordinary chat is silent. The addon's default build ships every capability this
+server calls; ``--base`` builds register only the two read-only snapshots.
+Enable the world's Beta APIs experiment before loading the addon.
 
 Usage::
 
@@ -25,149 +34,50 @@ import json
 from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
-from uuid import UUID
 
 import structlog
 
 from mcbe_ws_sdk import (
-    AddonBridgeService,
-    BridgeError,
-    BridgeTimeoutError,
+    ConnectionState,
     DefaultResponseSink,
     FlowControlSettings,
     GatewaySettings,
     McbeOutboundDelivery,
-    McbeServerFacade,
-    NoOpHook,
-    OutboundText,
-    SystemNotification,
-    WebsocketTransportConfig,
-    configure_logging,
-)
-from mcbe_ws_sdk.command.registry import ParsedCommand
-from mcbe_ws_sdk.gateway.connection import ConnectionState, enqueue_response
-from mcbe_ws_sdk.protocol.minecraft import (
+    McbeServer,
     MinecraftCommandResponse,
     MinecraftErrorFrame,
+    NativeEvent,
+    NegotiationError,
+    NoOpHook,
+    OutboundText,
+    ParsedCommand,
     PlayerMessageEvent,
+    RemoteCallError,
+    StreamError,
+    SystemNotification,
+    V2Bridge,
+    WebsocketTransportConfig,
+    configure_logging,
+    enqueue_response,
+    is_external_echo,
 )
-
-# Bedrock echoes successful tellraw/say output back as PlayerMessage events
-# with sender "外部". Treat those as transport noise, not real player chat.
-_EXTERNAL_ECHO_SENDERS = frozenset({"外部", "External"})
-
-# How long to wait for a commandResponse after a WS-side commandRequest.
-_WS_COMMAND_TIMEOUT_SECONDS = 5.0
 
 _HELP_TEXT = (
     "Addon 示例命令：\n"
     "  !player [target]  获取玩家快照（默认自己）\n"
     "  !inv [target]     获取背包快照（默认自己）\n"
-    "  !cmd <command>    通过 addon 执行世界命令（需在 addon 侧启用）\n"
-    "  !wscmd <command>  通过 WS commandRequest 执行命令（不依赖 addon）\n"
+    "  !cmd <command>    通过 addon 以自己为上下文执行（命令禁止列表生效）\n"
+    "  !wscmd <command>  通过 WS commandRequest 执行命令（不调用 addon 能力）\n"
+    "  !echo <text>      自定义能力与元数据\n"
+    "  !stream [count]   持续流直到正常结束（默认5项）\n"
+    "  !stream-cancel [count]  消费后取消无限流（默认3项）\n"
     "  !help             显示本帮助\n"
-    "也支持：!玩家 / !背包 / !命令 / !ws命令 / 帮助"
+    "也支持：!玩家 / !背包 / !命令 / !ws命令 / !帮助"
 )
+_USAGE_TEXT = "请在消息开头使用 ! 调用命令，例如 !help 或 !player。"
+_MAX_ERROR_BYTES = 256
 
 logger = structlog.get_logger("example")
-
-
-class WsCommandRunner:
-    """Host-owned request/response tracker for WS ``commandRequest`` frames.
-
-    The SDK deliberately does not keep a ``pending_command_futures`` map on
-    :class:`ConnectionState` — that plumbing is host-owned. This helper is the
-    minimal pattern:
-
-    1. ``run()`` registers a future under the outbound ``requestId``;
-    2. ``resolve()`` is called from ``on_command_response``;
-    3. ``close_connection()`` fails any leftovers on disconnect.
-    """
-
-    def __init__(
-        self,
-        flow: FlowControlSettings,
-        *,
-        timeout: float = _WS_COMMAND_TIMEOUT_SECONDS,
-    ) -> None:
-        self._flow = flow
-        self._timeout = timeout
-        self._pending: dict[UUID, dict[str, asyncio.Future[MinecraftCommandResponse]]] = {}
-
-    def _bucket(
-        self,
-        connection_id: UUID,
-    ) -> dict[str, asyncio.Future[MinecraftCommandResponse]]:
-        bucket = self._pending.get(connection_id)
-        if bucket is None:
-            bucket = {}
-            self._pending[connection_id] = bucket
-        return bucket
-
-    async def run(
-        self,
-        state: ConnectionState,
-        command: str,
-    ) -> MinecraftCommandResponse:
-        if state.send_payload is None:
-            raise RuntimeError("connection has no send_payload")
-
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[MinecraftCommandResponse] = loop.create_future()
-        delivery = McbeOutboundDelivery(
-            connection_id=state.id,
-            send_payload=state.send_payload,
-            settings=self._flow,
-        )
-        bucket = self._bucket(state.id)
-
-        def _register(request_id: str) -> None:
-            bucket[request_id] = future
-
-            def _cleanup(done: asyncio.Future[MinecraftCommandResponse]) -> None:
-                if bucket.get(request_id) is done:
-                    bucket.pop(request_id, None)
-
-            future.add_done_callback(_cleanup)
-
-        request_id = await delivery.send_raw_command(
-            command,
-            source="ws_run_command",
-            before_send=_register,
-        )
-        logger.info(
-            "ws_command_sent",
-            connection_id=str(state.id),
-            request_id=request_id,
-            command=command,
-        )
-        try:
-            return await asyncio.wait_for(future, self._timeout)
-        except TimeoutError as exc:
-            bucket.pop(request_id, None)
-            raise TimeoutError(
-                f"WS command timed out after {self._timeout:.0f}s (request_id={request_id})"
-            ) from exc
-
-    def resolve(self, state: ConnectionState, response: MinecraftCommandResponse) -> bool:
-        """Complete a pending future if this response is tracked. Returns True if handled."""
-        bucket = self._pending.get(state.id)
-        if not bucket:
-            return False
-        future = bucket.pop(response.request_id, None)
-        if future is None or future.done():
-            return False
-        future.set_result(response)
-        return True
-
-    def close_connection(self, connection_id: UUID) -> None:
-        bucket = self._pending.pop(connection_id, None)
-        if bucket is None:
-            return
-        for future in bucket.values():
-            if not future.done():
-                future.set_exception(ConnectionError("connection closed before commandResponse"))
-        bucket.clear()
 
 
 class MinecraftSink(DefaultResponseSink):
@@ -183,6 +93,7 @@ class MinecraftSink(DefaultResponseSink):
         return McbeOutboundDelivery(
             connection_id=state.id,
             send_payload=state.send_payload,
+            send_bulk=state.send_bulk,
             settings=self._flow,
             log_raw_payloads=self._log_raw_payloads,
         )
@@ -205,18 +116,8 @@ class MinecraftSink(DefaultResponseSink):
 class AddonDemoHook(NoOpHook):
     """Chat-command demo for addon capabilities and WS-side commandRequest."""
 
-    def __init__(
-        self,
-        addon: AddonBridgeService,
-        flow: FlowControlSettings,
-        ws_commands: WsCommandRunner,
-        *,
-        log_raw_payloads: bool = False,
-    ) -> None:
+    def __init__(self, addon: V2Bridge) -> None:
         self._addon = addon
-        self._flow = flow
-        self._ws_commands = ws_commands
-        self._log_raw_payloads = log_raw_payloads
 
     @staticmethod
     def _put(state: ConnectionState, message: object) -> None:
@@ -233,22 +134,8 @@ class AddonDemoHook(NoOpHook):
             ),
         )
 
-    def _bridge_client(self, state: ConnectionState):
-        if state.send_payload is None:
-            raise BridgeError("connection has no send_payload")
-        delivery = McbeOutboundDelivery(
-            connection_id=state.id,
-            send_payload=state.send_payload,
-            settings=self._flow,
-            log_raw_payloads=self._log_raw_payloads,
-        )
-
-        async def send_command(command: str) -> None:
-            await delivery.send_raw_command(command, source="addon_bridge")
-
-        return self._addon.create_client(state.id, send_command)
-
     async def on_connected(self, state: ConnectionState) -> None:
+        await state.native_events.subscribe("PlayerMessage", self._observe_chat)
         logger.info(
             "connected",
             connection_id=str(state.id),
@@ -262,8 +149,11 @@ class AddonDemoHook(NoOpHook):
             ),
         )
 
+    @staticmethod
+    def _observe_chat(event: NativeEvent) -> None:
+        logger.debug("native_event", event_name=event.name)
+
     async def on_disconnected(self, state: ConnectionState) -> None:
-        self._ws_commands.close_connection(state.id)
         logger.info("disconnected", connection_id=str(state.id))
 
     async def on_player_message(
@@ -272,7 +162,7 @@ class AddonDemoHook(NoOpHook):
         player_event: PlayerMessageEvent,
         parsed: ParsedCommand | None = None,
     ) -> None:
-        if player_event.sender in _EXTERNAL_ECHO_SENDERS:
+        if is_external_echo(player_event.sender, player_event.type):
             logger.debug(
                 "external_echo_ignored",
                 connection_id=str(state.id),
@@ -281,20 +171,10 @@ class AddonDemoHook(NoOpHook):
             )
             return
 
-        # Surface every non-echo PlayerMessage at INFO while diagnosing bridge
-        # timeouts — includes MCBEWS_BRIDGE BRIDGE/UI_CHAT chunks if they arrive.
-        logger.info(
-            "player_message_raw",
-            connection_id=str(state.id),
-            sender=player_event.sender,
-            message=player_event.message,
-            message_type=player_event.type,
-            receiver=player_event.receiver,
-            parsed_type=parsed.type if parsed is not None else None,
-        )
-
         message = player_event.message.strip()
-        if not message:
+        # Chat without the ASCII command prefix is never dispatched: ordinary
+        # conversation, bare ``help`` and full-width ``！`` stay silent.
+        if not message.startswith("!"):
             return
 
         logger.info(
@@ -305,33 +185,7 @@ class AddonDemoHook(NoOpHook):
             message_type=player_event.type,
         )
 
-        # CRITICAL: do not await run()/addon request on this stack.
-        # McbeServerFacade processes inbound frames with:
-        #   async for raw in websocket: await self._handle_raw(...)
-        # which awaits on_player_message. If we block here waiting for a
-        # commandResponse (or bridge chat chunk), the receive loop cannot
-        # read that response frame → permanent timeout even though the game
-        # executed the command. Schedule work on a background task instead.
-        # Use event.sender as the authoritative player identity. Do not use
-        # ConnectionState.player_name: one WS connection can carry many players.
-        task = asyncio.create_task(
-            self._dispatch_command(state, player_event.sender, message),
-            name=f"addon-demo:{player_event.sender}",
-        )
-        task.add_done_callback(self._log_background_failure)
-
-    @staticmethod
-    def _log_background_failure(task: asyncio.Task[Any]) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            logger.error(
-                "background_command_failed",
-                task=task.get_name(),
-                error=str(exc),
-                exc_info=exc,
-            )
+        await self._dispatch_command(state, player_event.sender, message)
 
     async def _dispatch_command(
         self,
@@ -340,13 +194,38 @@ class AddonDemoHook(NoOpHook):
         message: str,
     ) -> bool:
         lower = message.lower()
-        if lower in {"!help", "帮助", "help"}:
+        if lower in {"!help", "!帮助"}:
             self._reply(state, sender, _HELP_TEXT)
+            return True
+        if message == "!":
+            self._reply(state, sender, _USAGE_TEXT)
             return True
 
         command, _, rest = message.partition(" ")
         command_key = command.lower()
         arg = rest.strip()
+
+        if command_key == "!echo":
+            await self._run_capability(
+                state,
+                sender,
+                capability="demo.echo",
+                payload={"text": arg},
+                label="自定义回声",
+                metadata={"example.label": "chat-demo", "example.player": sender},
+            )
+            return True
+
+        if command_key in {"!stream", "!stream-cancel"}:
+            try:
+                count = int(arg or ("3" if command_key == "!stream-cancel" else "5"))
+                if not 1 <= count <= 100:
+                    raise ValueError
+            except ValueError:
+                self._reply(state, sender, "用法：!stream [1..100] / !stream-cancel [1..100]")
+                return True
+            await self._run_stream(state, sender, count, cancel=command_key == "!stream-cancel")
+            return True
 
         if command_key in {"!player", "!玩家"}:
             target = arg or sender
@@ -382,7 +261,7 @@ class AddonDemoHook(NoOpHook):
                 state,
                 sender,
                 capability="run_world_command",
-                payload={"command": arg},
+                payload={"command": arg, "player": sender},
                 label=f"addon 世界命令 ({arg})",
             )
             return True
@@ -401,7 +280,7 @@ class AddonDemoHook(NoOpHook):
         self._reply(
             state,
             sender,
-            f"未知命令：{message}\n发送 !help 查看可用命令。",
+            f"未知命令：{_bounded_text(message, 96)}\n发送 !help 查看可用命令。",
         )
         return True
 
@@ -413,6 +292,7 @@ class AddonDemoHook(NoOpHook):
         capability: str,
         payload: dict[str, Any],
         label: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         logger.info(
             "addon_request",
@@ -424,37 +304,47 @@ class AddonDemoHook(NoOpHook):
         self._reply(state, sender, f"正在请求 {label}…")
 
         try:
-            client = self._bridge_client(state)
-            result = await client.request(capability, payload)
-        except BridgeTimeoutError as exc:
+            response = await self._addon.request(state.id, capability, payload, metadata=metadata)
+            result = response["result"]
+            if metadata is not None:
+                self._reply(state, sender, f"返回元数据：{response.get('meta', {})}")
+        except RemoteCallError as exc:
             logger.warning(
-                "addon_timeout",
+                "addon_remote_error",
                 connection_id=str(state.id),
                 capability=capability,
                 request_id=exc.request_id,
+                code=exc.code,
+                message=exc.message,
+            )
+            self._reply(state, sender, _format_remote_error(label, capability, exc))
+            return
+        except NegotiationError as exc:
+            logger.warning(
+                "addon_negotiation_error",
+                connection_id=str(state.id),
+                capability=capability,
+                reason=exc.reason,
+                detail=str(exc),
             )
             self._reply(
                 state,
                 sender,
-                f"{label} 超时。请确认世界已加载 bridge addon，且 /wsserver 仍在线。",
+                f"{label} 失败 [{exc.reason}] {_bounded_text(str(exc))}{_action_hint(capability)}",
             )
             return
-        except BridgeError as exc:
-            logger.warning(
-                "addon_bridge_error",
-                connection_id=str(state.id),
-                capability=capability,
-                error=str(exc),
-            )
-            self._reply(state, sender, f"{label} 失败：{exc}")
-            return
-        except Exception as exc:
+        except Exception:
             logger.exception(
                 "addon_request_failed",
                 connection_id=str(state.id),
                 capability=capability,
             )
-            self._reply(state, sender, f"{label} 异常：{exc}")
+            self._reply(
+                state,
+                sender,
+                f"{label} 失败 [INTERNAL_ERROR] 服务器内部错误，请查看服务器日志。"
+                f"{_action_hint(capability)}",
+            )
             return
 
         logger.info(
@@ -465,6 +355,69 @@ class AddonDemoHook(NoOpHook):
             result=result,
         )
         self._reply(state, sender, format_capability_result(capability, result, label))
+
+    async def _run_stream(
+        self, state: ConnectionState, sender: str, count: int, *, cancel: bool
+    ) -> None:
+        try:
+            params = {} if cancel else {"count": count}
+            stream = await self._addon.stream(state.id, "demo.ticks", params)
+            received = 0
+            async with stream:
+                async for item in stream:
+                    self._reply(state, sender, f"流数据：{item}")
+                    received += 1
+                    if cancel and received == count:
+                        break
+            self._reply(state, sender, "流已取消。" if cancel else "流已结束。")
+        except RemoteCallError as exc:
+            logger.warning(
+                "addon_stream_remote_error",
+                connection_id=str(state.id),
+                method="demo.ticks",
+                request_id=exc.request_id,
+                code=exc.code,
+                message=exc.message,
+            )
+            self._reply(state, sender, _format_remote_error("流 demo.ticks", "demo.ticks", exc))
+        except NegotiationError as exc:
+            logger.warning(
+                "addon_stream_negotiation_error",
+                connection_id=str(state.id),
+                method="demo.ticks",
+                reason=exc.reason,
+                detail=str(exc),
+            )
+            self._reply(
+                state,
+                sender,
+                f"流失败 [{exc.reason}] {_bounded_text(str(exc))}{_action_hint('demo.ticks')}",
+            )
+        except StreamError as exc:
+            logger.warning(
+                "addon_stream_remote_error",
+                connection_id=str(state.id),
+                method="demo.ticks",
+                code=exc.code,
+                message=exc.message,
+            )
+            self._reply(
+                state,
+                sender,
+                f"流失败 [{exc.code}] {_bounded_text(exc.message)}{_action_hint('demo.ticks')}",
+            )
+        except Exception:
+            logger.exception(
+                "addon_stream_failed",
+                connection_id=str(state.id),
+                method="demo.ticks",
+            )
+            self._reply(
+                state,
+                sender,
+                "流失败 [INTERNAL_ERROR] 服务器内部错误，请查看服务器日志。"
+                f"{_action_hint('demo.ticks')}",
+            )
 
     async def _run_ws_command(
         self,
@@ -481,8 +434,20 @@ class AddonDemoHook(NoOpHook):
         )
         self._reply(state, sender, f"正在执行 {label}…")
 
+        if state.command_client is None:
+            self._reply(state, sender, f"{label} 失败：连接没有命令客户端。")
+            return
         try:
-            response = await self._ws_commands.run(state, command)
+            # The SDK registers the request before sending and pairs the
+            # commandResponse; no host-side wait table is needed.
+            response = await state.command_client.run(command)
+            logger.info(
+                "ws_command_response",
+                connection_id=str(state.id),
+                command=command,
+                request_id=response.request_id,
+                status_code=response.body.get("statusCode"),
+            )
         except TimeoutError as exc:
             logger.warning(
                 "ws_command_timeout",
@@ -498,7 +463,11 @@ class AddonDemoHook(NoOpHook):
                 connection_id=str(state.id),
                 command=command,
             )
-            self._reply(state, sender, f"{label} 异常：{exc}")
+            self._reply(
+                state,
+                sender,
+                f"{label} 失败 [{type(exc).__name__}] {_bounded_text(str(exc))}",
+            )
             return
 
         self._reply(state, sender, format_ws_command_result(label, response))
@@ -508,30 +477,8 @@ class AddonDemoHook(NoOpHook):
         state: ConnectionState,
         response: MinecraftCommandResponse,
     ) -> None:
-        # Always log the raw commandResponse while diagnosing bridge timeouts.
-        # Successful tellraw/scriptevent acks are normally noise, but right now we
-        # need to see whether scriptevent mcbews:bridge_req was accepted.
-        logger.info(
-            "command_response_raw",
-            connection_id=str(state.id),
-            request_id=response.request_id,
-            status_code=response.body.get("statusCode"),
-            status_message=response.body.get("statusMessage"),
-            body=response.body,
-        )
-
-        # Resolve host-tracked WS run_command futures first. Untracked frames
-        # (tellraw/scriptevent acks from our own replies) fall through after the
-        # raw log above.
-        if self._ws_commands.resolve(state, response):
-            logger.info(
-                "ws_command_response",
-                connection_id=str(state.id),
-                request_id=response.request_id,
-                status_code=response.body.get("statusCode"),
-            )
-            return
-
+        # The SDK already resolved its tracked native command request before
+        # invoking this hook. Remaining frames are tellraw/scriptevent acks.
         status = response.body.get("statusCode")
         if status not in (None, 0):
             logger.warning(
@@ -551,29 +498,49 @@ class AddonDemoHook(NoOpHook):
         )
 
 
+def _bounded_text(text: object, limit: int = _MAX_ERROR_BYTES) -> str:
+    """Truncate to ``limit`` UTF-8 bytes without splitting a scalar value."""
+    value = str(text)
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def _action_hint(capability: str) -> str:
+    if capability == "run_world_command":
+        return (
+            "\n提示：该命令在 addon 的命令禁止列表内，"
+            "或当前附加包是 --base 精简构建（不含世界命令能力）。"
+        )
+    if capability == "demo.ticks":
+        return "\n提示：确认附加包为默认演示构建，并启用 stream/1 能力。"
+    return "\n提示：确认 addon 已注册该能力，并检查命令参数。"
+
+
+def _format_remote_error(label: str, capability: str, exc: RemoteCallError) -> str:
+    """Render a public remote failure; the request id stays in server logs."""
+    code = exc.code if isinstance(exc.code, str) and exc.code else "ERROR"
+    return f"{label} 失败 [{code}] {_bounded_text(exc.message)}{_action_hint(capability)}"
+
+
 def format_capability_result(capability: str, result: Any, label: str) -> str:
     """Turn a bridge response into a short, readable tellraw body."""
     if not isinstance(result, dict):
-        return f"{label}\n{json.dumps(result, ensure_ascii=False)}"
+        return f"{label}\n{_bounded_text(json.dumps(result, ensure_ascii=False))}"
 
     if result.get("ok") is False:
         error = result.get("error")
         if isinstance(error, dict):
             code = error.get("code", "ERROR")
-            message = error.get("message", "")
-            hint = ""
-            if code == "UNSUPPORTED_CAPABILITY" and capability == "run_world_command":
-                hint = (
-                    "\n提示：run_world_command 默认未注册。"
-                    "请在 addon 侧把 handleRunWorldCommand 挂进 registry，"
-                    "或通过 setCapabilityHandler 启用。"
-                )
+            message = _bounded_text(error.get("message", ""))
+            hint = _action_hint(capability) if code == "UNSUPPORTED_CAPABILITY" else ""
             return f"{label} 失败 [{code}] {message}{hint}".rstrip()
         if "payload" in result and isinstance(result["payload"], dict):
             output = result["payload"].get("output")
             if output:
-                return f"{label} 失败：{output}"
-        return f"{label} 失败：{json.dumps(result, ensure_ascii=False)}"
+                return f"{label} 失败：{_bounded_text(output)}"
+        return f"{label} 失败：{_bounded_text(json.dumps(result, ensure_ascii=False))}"
 
     payload = result.get("payload", result)
 
@@ -675,17 +642,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--log-raw",
         action="store_true",
-        default=True,
-        help=(
-            "log raw outbound WS payloads and inbound "
-            "commandResponse/PlayerMessage bodies (default: on)"
-        ),
+        default=False,
+        help="log raw outbound WS payloads (default: off; payloads may contain player data)",
     )
     parser.add_argument(
         "--no-log-raw",
         action="store_false",
         dest="log_raw",
-        help="disable raw payload logging",
+        help="disable raw payload logging (the default)",
     )
     return parser.parse_args(argv)
 
@@ -697,18 +661,12 @@ async def main(argv: Sequence[str] | None = None) -> None:
     settings = GatewaySettings(
         websocket=WebsocketTransportConfig(host=args.host, port=args.port),
     )
-    # Share one AddonBridgeService between the hook (outbound requests) and the
-    # facade (inbound response reassembly). Passing the same instance keeps the
-    # pending-request futures on a single session map.
-    addon = AddonBridgeService(settings.addon)
-    flow = settings.flow
-    # WS commandRequest/response correlation is host-owned (not in the SDK).
-    ws_commands = WsCommandRunner(flow)
-    facade = McbeServerFacade(
+    bridge = V2Bridge()
+    facade = McbeServer(
         settings=settings,
-        hook=AddonDemoHook(addon, flow, ws_commands, log_raw_payloads=args.log_raw),
-        sink=MinecraftSink(flow, log_raw_payloads=args.log_raw),
-        addon=addon,
+        hook=AddonDemoHook(bridge),
+        sink=MinecraftSink(settings.flow, log_raw_payloads=args.log_raw),
+        v2=bridge,
     )
 
     logger.info("listening", host=args.host, port=args.port, url=f"ws://{args.host}:{args.port}")
@@ -718,7 +676,9 @@ async def main(argv: Sequence[str] | None = None) -> None:
     )
     logger.info(
         "addon_hint",
-        note="world must load the bridge addon for !player/!inv/!cmd; !wscmd needs only /wsserver",
+        note="Enable Beta APIs and load the addon; the default demo build includes "
+        "!cmd/!echo/!stream. Both examples need the addon for protocol negotiation; "
+        "!wscmd uses native WebSocket commands.",
     )
     logger.info("ready", stop_with="Ctrl+C")
     await facade.run_lifetime()

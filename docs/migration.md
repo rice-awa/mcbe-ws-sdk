@@ -1,0 +1,268 @@
+# Upgrade to the current SDK
+
+This guide is for hosts that still use the retired V1 API, including
+intermediate builds that supported both protocols. The current SDK has breaking
+changes: it no longer speaks MCBEWS/1, and it no longer offers a second server
+entry point. Deploy the Python package and the companion addon together as a
+matched pair, because mixed old and new deployments are rejected by design.
+
+Everything marked **removed** below no longer exists in this version. It is
+listed only so that existing hosts can find its replacement.
+
+## What changed at a glance
+
+| Area | Older hosts | This release |
+| --- | --- | --- |
+| Python entry | `McbeServerFacade`; some development builds also exposed `McbeServer` | `McbeServer` only |
+| Dispatch | `legacy` callback order or `reliable` queues | Always the managed queues |
+| Protocol | MCBEWS/1 by default, MCBEWS/2 opt-in | V2 (MCBEWS/2); negotiated before business processing |
+| Negotiation | Business could run before discovery finished | `READY_V2` required before business |
+| Fallback | Old addons continued on known v1 methods | No fallback; old peers are rejected |
+| Addon routes | `mcbews:bridge_req`, `mcbews:text_resp`, UI/session routes | `mcbews:negotiate_v2`, `mcbews:packet_v2` only |
+| Host business DTOs | SDK-owned UI chat, session, approval, text response | Removed; model these as host V2 methods |
+| Streams | Negotiated `stream/1` on the v2 path | `stream/1` on the only path |
+
+## Connection readiness
+
+```text
+WS_TRANSPORT_CONNECTED → NEGOTIATING → READY_V2 → CLOSING → CLOSED
+                              └────────→ REJECTED ────────→ CLOSED
+```
+
+- `WS_TRANSPORT_CONNECTED` only means the transport is open. It does not mean the
+  connection is ready for business.
+- While `NEGOTIATING`, the SDK handles only negotiation frames, required control
+  frames and correlated native `commandResponse` / `error` frames. Business
+  frames are dropped, not buffered for replay.
+- `on_connected` fires exactly once, at `READY_V2`. A rejected connection never
+  emits a business `on_connected`, so it never emits a matching business
+  `on_disconnected` either.
+- A failure closes the WebSocket with code `1008` and a short reason token.
+
+| Peer combination | Result | Business side effects |
+| --- | --- | --- |
+| New server + new addon | One MCBEWS/2 negotiation; ready | Allowed after `READY_V2` |
+| New server + old addon | `UNSUPPORTED_PROTOCOL` or `NEGOTIATION_TIMEOUT`, then close | None |
+| New server + no addon | Bounded timeout, then close | None; `!wscmd` does not run |
+| Old server + new addon | Addon logs and rejects old events | None; the addon cannot close a WebSocket it does not own |
+| Any mixed old/new business frame after ready | Rejected | None |
+
+Typical rejection reasons: `UNSUPPORTED_PROTOCOL`, `NEGOTIATION_TIMEOUT`,
+`NEGOTIATION_CONFIRMATION_TIMEOUT`, `NEGOTIATION_BUSY`, `INVALID_NEGOTIATION`,
+`SESSION_INVALID`.
+
+The native Bedrock WebSocket field `header.version = 1` is part of the game
+protocol and is unrelated to MCBEWS/1. It stays as Bedrock defines it.
+
+## Removed Python API
+
+### Entry points and dispatch
+
+| Removed | Replacement |
+| --- | --- |
+| `McbeServerFacade` | `McbeServer` |
+| `DispatchSettings(mode="legacy" \| "reliable")` switch | Removed. `McbeServer` always uses managed queues |
+| `ConnectionHook.on_ui_chat_reassembled` | Removed. Use native events or host V2 methods |
+| `AddonControlHook` | Removed |
+| `LegacyUiChatHook`, `LegacyUiChatHookAdapter` | Removed |
+| `V2Bridge(negotiate=False)` | Removed. Protocol negotiation runs during connection setup |
+| `V2Bridge.activate(...)` as a public manual path | Removed. Endpoints are installed by negotiation |
+
+`ConnectionHook` now has five lifecycle hooks: `on_connected`,
+`on_disconnected`, `on_player_message`, `on_command_response`, `on_error`.
+`NoOpHook` implements all five.
+
+### Legacy protocol surface
+
+| Removed | Notes |
+| --- | --- |
+| `mcbe_ws_sdk.profiles.mcbews_v1.*` | No v1 profile, manifest, vectors, codecs or delivery |
+| `MCBEWS_V1`, `McbewsV1Profile`, `McbewsV1Protocol` | Removed |
+| `McbewsV1Delivery` | Use `McbeOutboundDelivery` / `V2Endpoint` |
+| `mcbe_ws_sdk.extensions.mcbews_v1.*` | Removed |
+| v1 bridge codecs and wire vectors | Old frames are rejected, not decoded for business |
+
+The 461-byte command budget, which was determined empirically, is preserved. It
+now comes from the MCBEWS/2 manifest (`limits.command_bytes`) and can only be
+lowered.
+
+### Addon bridge and host business helpers
+
+| Removed | Replacement |
+| --- | --- |
+| `AddonBridgeService` | `server.v2` (`V2Bridge`) |
+| `AddonBridgeClient`, `ConnectionAddonBridgeClient` | `V2Bridge.request` / `V2Bridge.stream` |
+| `AddonBridgeSettings`, `AddonMessageResult`, `GatewaySettings.addon` | Removed; transport settings live in `GatewaySettings` |
+| `UiChatMessage`, `ToolPlayerMessage` | Removed |
+| `SessionRequest`, `SessionResponse`, `ApprovalDecision`, `SessionError` | Removed |
+| `TextResponseChunk`, `TextResponseMessage`, `TokenUsage`, text-response codecs | Removed |
+| `mcbews:bridge_req`, `mcbews:session_req`, `mcbews:text_resp` | Removed; rejected with zero side effects |
+
+If your host still needs session, approval, UI-chat or text-response semantics,
+implement them yourself as ordinary MCBEWS/2 methods and notifications in your
+own capability registry. The SDK no longer ships DTOs, channels or aggregate
+handlers for them.
+
+## Removed addon API and routes
+
+| Removed | Replacement |
+| --- | --- |
+| `setCapabilityHandler` aggregate entry | `registerCapability(name, handler, options)` |
+| `mcbews:bridge_req` parser / response sender | `mcbews:negotiate_v2` + `mcbews:packet_v2` carrier |
+| `preReadyQueue` business backlog | Removed; business before readiness is dropped |
+| `activateV2Bridge` public manual activation | Removed; activation happens after world load |
+| `mcbews:text_resp` subscription | Removed |
+| `responseSync.ts` / `extensions/textResponse.ts` | Removed |
+| `chunkBridgePayload`, `chunkUiChatPayload` | Removed; `utf8ByteLength` and neutral limits remain |
+| `MCBEWS\|BRIDGE`, `MCBEWS\|UI_CHAT`, `MCBEWS\|SESSION`, `MCBEWS\|TOOL_APPROVE` | Removed; no longer emitted or accepted |
+
+`getV2Endpoint(epoch)`, `registerCapability`, `unregisterCapability`,
+`registerV2Stream` and the read-only capability registry remain. The transport
+still uses the simulated player `MCBEWS_BRIDGE` for uplink frames; that name is
+transport attribution, not authentication.
+
+## Migration recipes
+
+### 1. Replace the entry point
+
+```python
+# Old
+server = McbeServerFacade(hook=hook)
+
+# New
+server = McbeServer(hook=hook)
+```
+
+Do not wrap your hooks in a background task. The managed queues keep the reader
+free while a hook awaits a command or capability reply.
+
+### 2. Replace capability calls
+
+```python
+# Old
+service = AddonBridgeService(AddonBridgeSettings())
+response = await service.request(state, "get_player_snapshot", params)
+
+# New
+response = await server.v2.request(
+    state.id, "get_player_snapshot", {"target": player_name}
+)
+```
+
+The new call returns the response envelope, and the data of a successful call is
+under `result`. A remote protocol failure raises `RemoteCallError` with a
+`code`. There is no longer a v1 result wrapper.
+
+### 3. Replace capability registration
+
+Python:
+
+```python
+registration = server.v2.registry.register("demo.echo", handler, validate=validate)
+```
+
+Addon:
+
+```typescript
+import { registerCapability } from "./bridge/router";
+
+const registration = registerCapability("demo.echo", (_method, payload, context) => ({
+  text: payload.text,
+  metadata: context.metadata,
+}));
+```
+
+Registering a duplicate name requires `replace: true`. Unregistering affects
+only future calls.
+
+### 4. Replace UI / session / approval / text-response flows
+
+Model each flow as a V2 method or notification:
+
+- a UI submission is a request from the addon to a Python handler;
+- an approval decision is a request or notification with your own stable method
+  name and schema;
+- streamed text is a `stream/1` producer/consumer, not a chunked
+  `mcbews:text_resp` frame;
+- player-facing rendering remains your `ResponseSink` responsibility.
+
+The SDK no longer interprets these payloads or exposes typed DTOs for them.
+
+### 5. Rebuild the addon
+
+Rebuild from the new sources and re-import the pack to update the Minecraft
+side of the protocol:
+
+```bash
+cd addon
+npm ci
+npm run build
+npm run mcaddon
+```
+
+Demo capabilities ship in the default package. Use `npm run build:base` /
+`npm run mcaddon:base` only when you want the lean two-snapshot pack.
+
+## Version numbers
+
+| Version axis | Current value | Meaning |
+| --- | --- | --- |
+| Python SDK | `0.3.0rc1` | Release candidate; becomes `0.3.0` after acceptance |
+| npm project | `0.3.0-rc.1` | Addon build project; private, not an npm release |
+| Pack header and modules | `1.1.0` | Behavior/resource pack deployment version |
+| Wire protocol | `MCBEWS/2` | Message and negotiation contract |
+| Script API dependencies | server `2.8.0`, server-ui `2.1.0` | Game-provided APIs |
+| Gametest | pack `1.0.0-beta`; npm `1.0.0-beta.1.26.30-stable` | Engine module declaration and matching development package |
+| Minimum engine | `[1, 26, 30]` | Declared game target; validate the actual game build separately |
+
+A pack version is made of three integers, so it cannot carry the SDK's `rc1`
+suffix. Keep the Python and addon artifacts of one candidate together. Upgrading
+a Script API dependency does not change the wire protocol and does not decide the
+SDK version.
+
+## Rollback and deployment
+
+1. Save the Python wheel, addon file and host configuration you currently run,
+   plus a world backup, as one rollback set. Keep their version and source
+   information with it.
+2. Install the candidate wheel into a separate environment:
+
+   ```bash
+   python -m venv .venv-next
+   .venv-next/bin/pip install ./dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl
+   ```
+
+   On Windows, use `.venv-next\Scripts\pip` instead. Install your host's own
+   dependencies there and migrate its API calls before switching traffic.
+3. Disconnect the old server, activate the matching candidate addon in the
+   target world, enable **Experiments → Beta APIs**, reload the world and start
+   the updated host in the new environment.
+4. Reconnect with `/wsserver`, then check protocol readiness, `!inv`, `!echo`
+   and `!stream 5` using the addon example before accepting traffic.
+5. To roll back, disconnect, stop the new host, deactivate the new pack and
+   reactivate the saved old addon. Reload the world, start the old host in its
+   saved environment and reconnect. Restore the saved world only if world state
+   also needs to be reverted.
+
+This release has no v1 fallback. A rollback means redeploying a complete older
+version of **both** the Python package and the addon, then reconnecting.
+
+- Mixed versions do not negotiate: the new server rejects the old addon and the
+  new addon rejects the old server's business frames.
+- A reconnect creates a new epoch and session. Old requests, streams, approvals
+  and reassembly state are not restored.
+- Already executed world commands are not undone, and side effects are not
+  replayed automatically.
+- If a rollback needs v1 behavior, it must restore the old Python package and
+  old addon assets together; this version cannot be configured into v1 mode.
+
+## What did not change
+
+- `PlayerMessageEvent.sender` is still the authoritative player identity.
+- `NoOpHook`, `ConnectionHook`, `ResponseSink`, `OutboundText`,
+  `SystemNotification` and `McbeOutboundDelivery` keep their roles.
+- Native event subscriptions and interceptors work as before.
+- The 461-byte command budget, sentence-aware splitting and the rule that native
+  commands are never split are unchanged.
+- Automated tests do not prove live-game support; verify the target game
+  version, platform and addon loading separately.

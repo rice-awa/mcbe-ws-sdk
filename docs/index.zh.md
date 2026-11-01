@@ -1,49 +1,44 @@
-# mcbe-ws-sdk
+# 将 Minecraft 连接到 Python
 
-面向 **Minecraft 基岩版（Bedrock）** 的通用 **WebSocket 网关 SDK**。
+**mcbe-ws-sdk** 是面向 Minecraft 基岩版的 WebSocket 网关 SDK。
+你可以在 Python 中处理玩家消息、执行游戏命令、调用附加包能力和接收流式数据，
+不必自己处理数据分片，也不用维护待回复请求表。
 
-本包拥有 **WS 传输**、**数据包协议**与**字节安全的命令分片**（461 字节实测默认可配置上限）。
-宿主通过两个协议注入行为——`ConnectionHook` 与 `ResponseSink`——并由
-`McbeServerFacade` 驱动整条链路。
+SDK 与附加包之间使用 **V2 协议（MCBEWS/2）**通信。每条连接都会先完成协议协商，
+成功之后你的代码才会收到业务消息。协议版本与 SDK 包版本各自独立编号。
 
-SDK 内部**不包含**消息 broker 或 LLM worker —— 这些关切完全属于宿主应用。
+## 先运行起来
 
-```text
-Minecraft 客户端  ←── /wsserver IP:端口 ──→  你的 Python 宿主（本 SDK）
+在仓库根目录执行：
+
+```bash
+pip install -e ".[dev,docs]"
+npm ci --prefix addon
+npm --prefix addon run mcaddon:production
 ```
 
-## 你能用它做什么
+导入 `addon/dist/packages/mc-ws-sdk.mcaddon`，在目标世界开启
+**实验 → 测试版 API（Beta APIs）**，并启用行为包。
+两个示例都需要附加包来建立连接；没有开启 Beta APIs 时，附加包的脚本不会加载。
 
-| 你想做… | 用不用这个 SDK |
-|---------|----------------|
-| 监听玩家聊天并自动回复 | ✅ |
-| 从 Python 执行 `time set day` 这类命令 | ✅ |
-| 通过 addon 读玩家背包 / 坐标 | ✅ |
-| 做一个带 AI 对话的机器人（LLM 部分自己写） | ✅ |
-| 直接当现成的 AI 服务器用 | ❌ 由宿主应用负责 |
-| 写 Java 版 Minecraft 插件 | ❌ 只面向基岩版 WebSocket |
+```bash
+python examples/addon-server/server.py
+```
 
-## 单向能力模型
+在游戏中执行 `/wsserver <Python宿主IP>:8080`，再发送 `!inv` 查询背包。
+接下来可以试试 `!echo hello` 或 `!stream 5`。示例只回应以 ASCII `!` 开头的消息，普通聊天不会有任何反应。
 
-SDK 从 Python 宿主向 Minecraft addon 发送桥接请求并接收响应。**不包含入站能力注册表分发**——
-所有能力处理逻辑由 addon 端拥有。
+更完整的环境要求、配置和排查方法见[快速开始](getting-started.md)。
 
-唯一内置协议 profile 是 `McbewsV1Profile`（`MCBEWS_V1`）。
+## 开发自己的宿主
 
-`ConnectionHook` 提供六个 typed 生命周期钩子；UI Chat 使用
-`on_ui_chat_reassembled(state, UiChatMessage)`。经过可信 sender 校验的
-session/approval frame 使用可选 `AddonControlHook` 回调。
+- [架构](architecture.md)：连接如何建立、任务如何排队、连接如何结束。
+- [扩展作者指南](extension-authors.md)：添加能力、通知、元数据和流。
+- [原生事件](native-events.md)：订阅游戏事件，观察或拦截它们。
+- [追踪与诊断](diagnostics.md)：跟踪一次请求，弄清失败原因。
+- [V2 协议](protocol-v2.md)：消息格式、协商、分片和限制。
+- [API 参考](reference.md)：类、方法和参数。
+- [迁移指南](migration.md)：从 0.2.x 升级，或把 Python 包与附加包一起回退。
 
-## 双层接口
-
-| 层级 | 用法 |
-|------|------|
-| 高层 | 实现 `ConnectionHook` + `ResponseSink`，运行 `McbeServerFacade` |
-| 低层 | 订阅按 `WsEventType` 分键的 `EventBus` |
-
-## 下一步
-
-- **[快速开始](getting-started.md)** — 安装、5 分钟上手、最小回声机器人、FAQ
-- [架构](architecture.md) — 分层栈与依赖倒置
-- [协议](addon-bridge-protocol.md) — mcbews v1 桥接线格式
-- [API 参考](reference.md) — 自动生成正文见英文站；本站含导读
+SDK 负责传输和协议。认证、授权与业务状态由宿主负责：
+`ConnectionHook` 接收输入，`ResponseSink` 显示回复。

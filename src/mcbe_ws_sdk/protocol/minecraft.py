@@ -68,9 +68,9 @@ class MinecraftHeader(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     requestId: str = Field(default_factory=lambda: str(uuid4()))
-    messagePurpose: Literal["subscribe", "commandRequest", "commandResponse", "event", "error"] = (
-        "commandRequest"
-    )
+    messagePurpose: Literal[
+        "subscribe", "unsubscribe", "commandRequest", "commandResponse", "event", "error"
+    ] = "commandRequest"
     version: int = 1
     EventName: str | None = None
     eventName: str | None = None  # lowercase event name (wire alias)
@@ -181,7 +181,28 @@ class MinecraftSubscribe(BaseModel):
     @classmethod
     def player_message(cls) -> MinecraftSubscribe:
         """Subscribe to the ``PlayerMessage`` event."""
-        return cls(body=MinecraftSubscribeBody(eventName="PlayerMessage"))
+        return cls.event("PlayerMessage")
+
+    @classmethod
+    def event(cls, event_name: str) -> MinecraftSubscribe:
+        """Build a subscribe request for an opaque native event name."""
+        return cls(body=MinecraftSubscribeBody(eventName=event_name))
+
+
+class MinecraftUnsubscribe(BaseModel):
+    """Minecraft native event unsubscription request."""
+
+    header: MinecraftHeader = Field(
+        default_factory=lambda: MinecraftHeader(
+            messagePurpose="unsubscribe", EventName="commandRequest"
+        )
+    )
+    body: MinecraftSubscribeBody
+
+    @classmethod
+    def event(cls, event_name: str) -> MinecraftUnsubscribe:
+        """Build an unsubscribe request for an opaque native event name."""
+        return cls(body=MinecraftSubscribeBody(eventName=event_name))
 
 
 class PlayerMessageEvent(BaseModel):

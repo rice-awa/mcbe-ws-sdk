@@ -40,6 +40,8 @@ Thumbs.db
 
 # Logs
 *.log
+*.log.*
+logs/
 
 docs/superpowers
 .firecrawl

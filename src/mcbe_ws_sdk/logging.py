@@ -10,9 +10,25 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Literal
+from collections.abc import MutableMapping
+from typing import Any, Literal
 
 import structlog
+
+from mcbe_ws_sdk.tracing import current_trace
+
+
+def trace_context_processor(
+    logger: Any, method_name: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
+    """Add current identifiers without replacing explicit log fields."""
+    context = current_trace()
+    for key in ("connection_id", "player", "request_id", "trace_id"):
+        value = getattr(context, key)
+        if value is not None:
+            event_dict.setdefault(key, value)
+    return event_dict
+
 
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 
@@ -41,6 +57,7 @@ def configure_logging(
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        trace_context_processor,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
         structlog.processors.StackInfoRenderer(),

@@ -11,6 +11,7 @@ strict: true
 # Keep internal working notes out of the published site.
 exclude_docs: |
   PRD.md
+  multiplayer-tellraw-origin-fix-plan.md
   reviews/**
   plans/**
   superpowers/**
@@ -71,7 +72,11 @@ plugins:
             - 首页: index.md
             - 快速开始: getting-started.md
             - 架构: architecture.md
-            - 协议: addon-bridge-protocol.md
+            - 扩展作者: extension-authors.md
+            - 协议（MCBEWS/2）: protocol-v2.md
+            - 追踪与诊断: diagnostics.md
+            - 原生事件: native-events.md
+            - 迁移指南: migration.md
             - API 参考: reference.md
   - mkdocstrings:
       default_handler: python
@@ -124,5 +129,9 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Architecture: architecture.md
-  - Protocol: addon-bridge-protocol.md
+  - Extension Authors: extension-authors.md
+  - Protocol (MCBEWS/2): protocol-v2.md
+  - Diagnostics: diagnostics.md
+  - Native Events: native-events.md
+  - Migration: migration.md
   - API Reference: reference.md

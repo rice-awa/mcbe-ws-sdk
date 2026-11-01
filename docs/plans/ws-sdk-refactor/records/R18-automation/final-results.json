@@ -1,0 +1,86 @@
+[
+  {
+    "name": "build",
+    "command": "/tmp/r18-envs/py311/bin/python -m build --sdist --wheel --outdir /tmp/r18-final-candidate/dist",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 55.83
+  },
+  {
+    "name": "twine",
+    "command": "/tmp/r18-envs/py311/bin/python -m twine check /tmp/r18-final-candidate/dist/mcbe_ws_sdk-0.2.1-py3-none-any.whl /tmp/r18-final-candidate/dist/mcbe_ws_sdk-0.2.1.tar.gz",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 2.08
+  },
+  {
+    "name": "check-dist",
+    "command": "/tmp/r18-envs/py311/bin/python tools/check_dist.py /tmp/r18-final-candidate/dist",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 0.37
+  },
+  {
+    "name": "rebuild-sdist",
+    "command": "/tmp/r18-envs/py311/bin/python -m build --wheel --outdir /tmp/r18-final-candidate/rebuilt /tmp/r18-final-candidate/unpacked/mcbe_ws_sdk-0.2.1",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 25.21
+  },
+  {
+    "name": "venv-dist",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/final-installed-dist",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 0.04
+  },
+  {
+    "name": "install-dist",
+    "command": "uv pip install --python /tmp/r18-envs/final-installed-dist/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple --constraint /tmp/r18-dependencies.txt /tmp/r18-final-candidate/dist/mcbe_ws_sdk-0.2.1-py3-none-any.whl",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 1.31
+  },
+  {
+    "name": "installed-contract-dist",
+    "command": "/tmp/r18-envs/final-installed-dist/bin/python /tmp/r18-final-candidate/tools/probe_installed_contract.py",
+    "cwd": "/tmp/r18-installed-cwd",
+    "exit_code": 0,
+    "seconds": 2.0
+  },
+  {
+    "name": "environment-dist",
+    "command": "uv pip freeze --python /tmp/r18-envs/final-installed-dist/bin/python",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 0.03
+  },
+  {
+    "name": "venv-rebuilt",
+    "command": "uv venv --python 3.11 /tmp/r18-envs/final-installed-rebuilt",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 0.07
+  },
+  {
+    "name": "install-rebuilt",
+    "command": "uv pip install --python /tmp/r18-envs/final-installed-rebuilt/bin/python --index-url https://pypi.tuna.tsinghua.edu.cn/simple --constraint /tmp/r18-dependencies.txt /tmp/r18-final-candidate/rebuilt/mcbe_ws_sdk-0.2.1-py3-none-any.whl",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 0.38
+  },
+  {
+    "name": "installed-contract-rebuilt",
+    "command": "/tmp/r18-envs/final-installed-rebuilt/bin/python /tmp/r18-final-candidate/tools/probe_installed_contract.py",
+    "cwd": "/tmp/r18-installed-cwd",
+    "exit_code": 0,
+    "seconds": 3.05
+  },
+  {
+    "name": "environment-rebuilt",
+    "command": "uv pip freeze --python /tmp/r18-envs/final-installed-rebuilt/bin/python",
+    "cwd": "/tmp/r18-final-candidate",
+    "exit_code": 0,
+    "seconds": 0.15
+  }
+]

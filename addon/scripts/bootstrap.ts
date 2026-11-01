@@ -1,6 +1,5 @@
 import { world, system } from "@minecraft/server";
 import { registerBridgeRouter } from "./bridge/router";
-import { registerResponseSyncHandler } from "./bridge/responseSync";
 
 const DEBUG = true;
 
@@ -17,7 +16,6 @@ function log(message: string): void {
 export function initializeEarly(): void {
   log("initializeEarly: 注册桥接事件...");
   registerBridgeRouter();
-  registerResponseSyncHandler();
   log("initializeEarly: 完成");
 }
 
@@ -31,7 +29,7 @@ export function initializeEarly(): void {
  * worldLoad 再触发一次）。initializeToolPlayer / activateBridge 自身也有幂等保护。
  *
  * 用法：在你的 addon main 入口中，`initializeEarly()` 之后调用 `initializeAfterWorldLoad()`。
- * 你的宿主代码在此处注册能力处理器和 AI 响应处理器。
+ * 你的宿主代码在此处注册能力处理器。
  */
 export function initializeAfterWorldLoad(onReady?: () => void | Promise<void>): void {
   log("initializeAfterWorldLoad: 等待世界就绪...");

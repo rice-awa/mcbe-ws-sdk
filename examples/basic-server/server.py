@@ -2,9 +2,14 @@
 
 This example uses the SDK as a transport gateway. It accepts a Bedrock
 ``/wsserver`` connection, subscribes to ``PlayerMessage`` events, and replies
-to chat messages with ``tellraw``. The application-specific behaviour lives in
+to ``!`` commands with ``tellraw``. The application-specific behaviour lives in
 ``ExampleHook`` and ``MinecraftSink``; the SDK owns the WebSocket lifetime and
 packet protocol.
+
+The companion addon completes protocol negotiation before chat is processed.
+Install it in a world with Experiments / Beta APIs enabled. Without it the
+server logs ``NEGOTIATION_TIMEOUT`` and closes the connection; the example
+itself never calls addon capabilities.
 
 Usage::
 
@@ -23,28 +28,34 @@ from contextlib import suppress
 import structlog
 
 from mcbe_ws_sdk import (
+    ConnectionState,
     DefaultResponseSink,
     FlowControlSettings,
     GatewaySettings,
     McbeOutboundDelivery,
-    McbeServerFacade,
+    McbeServer,
+    MinecraftCommandResponse,
+    MinecraftErrorFrame,
+    NativeEvent,
     NoOpHook,
     OutboundText,
+    ParsedCommand,
+    PlayerMessageEvent,
     SystemNotification,
     WebsocketTransportConfig,
     configure_logging,
-)
-from mcbe_ws_sdk.command.registry import ParsedCommand
-from mcbe_ws_sdk.gateway.connection import ConnectionState, enqueue_response
-from mcbe_ws_sdk.protocol.minecraft import (
-    MinecraftCommandResponse,
-    MinecraftErrorFrame,
-    PlayerMessageEvent,
+    enqueue_response,
+    is_external_echo,
 )
 
-# Bedrock echoes successful tellraw/say output back as PlayerMessage events
-# with sender "外部". Treat those as transport noise, not real player chat.
-_EXTERNAL_ECHO_SENDERS = frozenset({"外部", "External"})
+_HELP_TEXT = (
+    "基础示例命令：\n"
+    "  !help             显示本帮助\n"
+    "  !wscmd <command>  通过 WS commandRequest 执行命令并等待响应\n"
+    "也支持：!帮助"
+)
+_USAGE_TEXT = "请在消息开头使用 ! 调用命令，例如 !help 或 !wscmd time query daytime。"
+_MAX_REPLY_BYTES = 256
 
 logger = structlog.get_logger("example")
 
@@ -61,6 +72,7 @@ class MinecraftSink(DefaultResponseSink):
         return McbeOutboundDelivery(
             connection_id=state.id,
             send_payload=state.send_payload,
+            send_bulk=state.send_bulk,
             settings=self._flow,
         )
 
@@ -87,6 +99,7 @@ class ExampleHook(NoOpHook):
         enqueue_response(state, message)
 
     async def on_connected(self, state: ConnectionState) -> None:
+        await state.native_events.subscribe("PlayerMessage", self._observe_chat)
         logger.info(
             "connected",
             connection_id=str(state.id),
@@ -96,9 +109,13 @@ class ExampleHook(NoOpHook):
             state,
             SystemNotification(
                 level="info",
-                message="SDK 示例服务器已连接。发送任意聊天消息即可收到回复。",
+                message="SDK 示例服务器已连接。发送 !help 查看可用命令。",
             ),
         )
+
+    @staticmethod
+    def _observe_chat(event: NativeEvent) -> None:
+        logger.debug("native_event", event_name=event.name)
 
     async def on_disconnected(self, state: ConnectionState) -> None:
         logger.info("disconnected", connection_id=str(state.id))
@@ -111,7 +128,7 @@ class ExampleHook(NoOpHook):
     ) -> None:
         # Ignore Bedrock's tellraw echo so we don't treat our own outbound text
         # as an inbound player message (and don't reply to ourselves).
-        if player_event.sender in _EXTERNAL_ECHO_SENDERS:
+        if is_external_echo(player_event.sender, player_event.type):
             logger.debug(
                 "external_echo_ignored",
                 connection_id=str(state.id),
@@ -121,7 +138,9 @@ class ExampleHook(NoOpHook):
             return
 
         message = player_event.message.strip()
-        if not message:
+        # Only the ASCII ``!`` prefix dispatches. Ordinary chat, bare ``help``
+        # and full-width ``！`` stay silent, matching the addon example.
+        if not message.startswith("!"):
             return
 
         logger.info(
@@ -132,10 +151,26 @@ class ExampleHook(NoOpHook):
             message_type=player_event.type,
             parsed_type=parsed.type if parsed is not None else None,
         )
-        if message.lower() in {"!help", "帮助"}:
-            reply = "可用示例：直接发送聊天消息，服务器会把消息回复给你。"
+        command, _, argument = message.partition(" ")
+        command_key = command.lower()
+        argument = argument.strip()
+        if message == "!":
+            reply = _USAGE_TEXT
+        elif command_key in {"!help", "!帮助"}:
+            reply = _HELP_TEXT
+        elif command_key == "!wscmd":
+            if not argument:
+                reply = "用法：!wscmd <command>  例如：!wscmd time query daytime"
+            elif state.command_client is None:
+                reply = "命令失败 [NO_COMMAND_CLIENT] 连接没有命令客户端。"
+            else:
+                try:
+                    response = await state.command_client.run(argument)
+                    reply = str(response.body)
+                except Exception as exc:
+                    reply = f"命令失败 [{type(exc).__name__}] {_bounded_text(str(exc))}"
         else:
-            reply = f"收到 {player_event.sender} 的消息：{message}"
+            reply = f"未知命令：{_bounded_text(message, 96)}\n发送 !help 查看可用命令。"
 
         # Use event.sender as the authoritative player identity. Do not use
         # ConnectionState.player_name: one WS connection can carry many players.
@@ -177,6 +212,15 @@ class ExampleHook(NoOpHook):
         )
 
 
+def _bounded_text(text: object, limit: int = _MAX_REPLY_BYTES) -> str:
+    """Truncate to ``limit`` UTF-8 bytes without splitting a scalar value."""
+    value = str(text)
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a minimal MCBE SDK WebSocket server")
     parser.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
@@ -197,7 +241,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
     settings = GatewaySettings(
         websocket=WebsocketTransportConfig(host=args.host, port=args.port),
     )
-    facade = McbeServerFacade(
+    facade = McbeServer(
         settings=settings,
         hook=ExampleHook(),
         sink=MinecraftSink(settings.flow),
