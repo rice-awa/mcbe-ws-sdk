@@ -119,13 +119,7 @@ def test_help_lines_keep_whole_command_tokens_at_boundaries() -> None:
         max_chunk_content_length=20,
     )
     mid = FlowControlMiddleware(settings)
-    help_text = (
-        "AGENT 聊天 <消息>\n"
-        "AGENT 脚本 <消息>\n"
-        "AGENT 保存\n"
-        "!stream 2\n"
-        "!stream-cancel 2\n"
-    )
+    help_text = "AGENT 聊天 <消息>\nAGENT 脚本 <消息>\nAGENT 保存\n!stream 2\n!stream-cancel 2\n"
     payloads = mid.chunk_scriptevent(help_text)
     assert len(payloads) >= 2
     contents = [_scriptevent_content(payload) for payload in payloads]

@@ -271,7 +271,9 @@ async def test_connections_share_pool_and_release_independently() -> None:
     second_peer = bridge.connection(second.id)
     assert first_peer is not None and second_peer is not None
     message = {
-        "v": "MCBEWS/2", "kind": "notification", "method": "notice",
+        "v": "MCBEWS/2",
+        "kind": "notification",
+        "method": "notice",
         "params": {"text": "long" * 200},
     }
     try:

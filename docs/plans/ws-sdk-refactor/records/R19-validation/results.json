@@ -356,5 +356,308 @@
     "env": {
       "PYTHONPATH": ""
     }
+  },
+  {
+    "name": "pytest-311",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T07:52:32.144601+00:00",
+    "exit_code": 0,
+    "seconds": 276.77,
+    "log": "pytest-311.log",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/tmp/mcbe-r19-envs-_4ccgiy2/.coverage-311"
+    }
+  },
+  {
+    "name": "environment-312",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py312/bin/python -c 'import sys; from importlib.metadata import distributions; print(sys.version); print(\"\\n\".join(sorted(d.metadata[\"Name\"]+\"==\"+d.version for d in distributions())))'",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T07:57:08.919352+00:00",
+    "exit_code": 0,
+    "seconds": 0.5,
+    "log": "environment-312.log"
+  },
+  {
+    "name": "format-final",
+    "command": ".venv/bin/python tools/format.py --check",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T07:57:04.552542+00:00",
+    "exit_code": 1,
+    "seconds": 8.44,
+    "log": "format-final.log"
+  },
+  {
+    "name": "artifact-correspondence",
+    "command": ".venv/bin/python /tmp/r19-correspondence.py",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T07:57:33.603724+00:00",
+    "exit_code": 0,
+    "seconds": 0.17,
+    "log": "artifact-correspondence.log"
+  },
+  {
+    "name": "docs-links",
+    "command": ".venv/bin/python /tmp/r19-doc-links.py",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T07:57:52.244983+00:00",
+    "exit_code": 0,
+    "seconds": 3.32,
+    "log": "docs-links.log"
+  },
+  {
+    "name": "pytest-312",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py312/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T07:57:09.421832+00:00",
+    "exit_code": 0,
+    "seconds": 206.51,
+    "log": "pytest-312.log",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/tmp/mcbe-r19-envs-_4ccgiy2/.coverage-312"
+    }
+  },
+  {
+    "name": "environment-313",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py313/bin/python -c 'import sys; from importlib.metadata import distributions; print(sys.version); print(\"\\n\".join(sorted(d.metadata[\"Name\"]+\"==\"+d.version for d in distributions())))'",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:00:35.936103+00:00",
+    "exit_code": 0,
+    "seconds": 0.15,
+    "log": "environment-313.log"
+  },
+  {
+    "name": "pytest-313",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py313/bin/python -m pytest -p no:cacheprovider --cov=mcbe_ws_sdk --cov-report=term-missing -q",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:00:36.089836+00:00",
+    "exit_code": 0,
+    "seconds": 206.89,
+    "log": "pytest-313.log",
+    "env": {
+      "MCBE_REQUIRE_CROSS_LANGUAGE": "1",
+      "COVERAGE_FILE": "/tmp/mcbe-r19-envs-_4ccgiy2/.coverage-313"
+    }
+  },
+  {
+    "name": "websockets-install-12.0",
+    "command": "uv pip install --python /tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python websockets==12.0",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:04:02.983762+00:00",
+    "exit_code": 0,
+    "seconds": 4.68,
+    "log": "websockets-install-12.0.log"
+  },
+  {
+    "name": "websockets-12.0",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python -m pytest -p no:cacheprovider tests/unit/test_server.py tests/unit/test_delivery.py tests/unit/test_server_entry.py tests/unit/test_admission.py -q",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:04:07.669378+00:00",
+    "exit_code": 0,
+    "seconds": 1.28,
+    "log": "websockets-12.0.log"
+  },
+  {
+    "name": "websockets-install-14.2",
+    "command": "uv pip install --python /tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python websockets==14.2",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:04:08.950629+00:00",
+    "exit_code": 0,
+    "seconds": 2.06,
+    "log": "websockets-install-14.2.log"
+  },
+  {
+    "name": "websockets-14.2",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python -m pytest -p no:cacheprovider tests/unit/test_server.py tests/unit/test_delivery.py tests/unit/test_server_entry.py tests/unit/test_admission.py -q",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:04:11.015379+00:00",
+    "exit_code": 0,
+    "seconds": 1.47,
+    "log": "websockets-14.2.log"
+  },
+  {
+    "name": "websockets-install-16.1.1",
+    "command": "uv pip install --python /tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python websockets==16.1.1",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:04:12.483112+00:00",
+    "exit_code": 0,
+    "seconds": 0.05,
+    "log": "websockets-install-16.1.1.log"
+  },
+  {
+    "name": "websockets-16.1.1",
+    "command": "/tmp/mcbe-r19-envs-_4ccgiy2/py311/bin/python -m pytest -p no:cacheprovider tests/unit/test_server.py tests/unit/test_delivery.py tests/unit/test_server_entry.py tests/unit/test_admission.py -q",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:04:12.531075+00:00",
+    "exit_code": 0,
+    "seconds": 1.47,
+    "log": "websockets-16.1.1.log"
+  },
+  {
+    "name": "format-ast",
+    "command": ".venv/bin/python /tmp/r19-format.py",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:05:28.252253+00:00",
+    "exit_code": 0,
+    "seconds": 1.38,
+    "log": "format-ast.log"
+  },
+  {
+    "name": "format-complete",
+    "command": ".venv/bin/python tools/format.py --check",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:05:29.698151+00:00",
+    "exit_code": 0,
+    "seconds": 7.12,
+    "log": "format-complete.log"
+  },
+  {
+    "name": "ruff-final",
+    "command": ".venv/bin/python -m ruff check --no-cache src tests examples tools",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:04.122953+00:00",
+    "exit_code": 0,
+    "seconds": 0.11,
+    "log": "ruff-final.log"
+  },
+  {
+    "name": "docs-formatted",
+    "command": ".venv/bin/python -m mkdocs build --strict",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:04.288530+00:00",
+    "exit_code": 0,
+    "seconds": 13.55,
+    "log": "docs-formatted.log"
+  },
+  {
+    "name": "final-build",
+    "command": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python -m build --sdist --wheel --outdir /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/python",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:03.103382+00:00",
+    "exit_code": 0,
+    "seconds": 22.18,
+    "log": "final-build.log"
+  },
+  {
+    "name": "final-twine",
+    "command": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python -m twine check /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1.tar.gz",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:25.283118+00:00",
+    "exit_code": 0,
+    "seconds": 0.59,
+    "log": "final-twine.log"
+  },
+  {
+    "name": "final-check-dist",
+    "command": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python tools/check_dist.py /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/python",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:25.871821+00:00",
+    "exit_code": 0,
+    "seconds": 0.15,
+    "log": "final-check-dist.log"
+  },
+  {
+    "name": "final-sdist-rebuild",
+    "command": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python -m build --wheel --outdir /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/rebuilt /tmp/mcbe-r19-contract-c54tnyyk/source/mcbe_ws_sdk-0.3.0rc1",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:26.078755+00:00",
+    "exit_code": 0,
+    "seconds": 3.41,
+    "log": "final-sdist-rebuild.log"
+  },
+  {
+    "name": "final-contract-venv-wheel",
+    "command": "uv venv --python /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python /tmp/mcbe-r19-contract-c54tnyyk/wheel",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:29.492286+00:00",
+    "exit_code": 0,
+    "seconds": 0.03,
+    "log": "final-contract-venv-wheel.log"
+  },
+  {
+    "name": "final-contract-install-wheel",
+    "command": "uv pip install --python /tmp/mcbe-r19-contract-c54tnyyk/wheel/bin/python /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/python/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:29.520631+00:00",
+    "exit_code": 0,
+    "seconds": 2.15,
+    "log": "final-contract-install-wheel.log"
+  },
+  {
+    "name": "final-contract-wheel",
+    "command": "/tmp/mcbe-r19-contract-c54tnyyk/wheel/bin/python /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/tools/probe_installed_contract.py",
+    "cwd": "/tmp/mcbe-r19-contract-c54tnyyk",
+    "started": "2026-11-01T08:06:31.676230+00:00",
+    "exit_code": 0,
+    "seconds": 0.85,
+    "log": "final-contract-wheel.log",
+    "env": {
+      "PYTHONPATH": ""
+    }
+  },
+  {
+    "name": "final-contract-version-wheel",
+    "command": "/tmp/mcbe-r19-contract-c54tnyyk/wheel/bin/python -c 'import mcbe_ws_sdk as s; assert s.__version__==\"0.3.0rc1\"; print(s.__version__,s.__file__)'",
+    "cwd": "/tmp/mcbe-r19-contract-c54tnyyk",
+    "started": "2026-11-01T08:06:32.524509+00:00",
+    "exit_code": 0,
+    "seconds": 0.41,
+    "log": "final-contract-version-wheel.log",
+    "env": {
+      "PYTHONPATH": ""
+    }
+  },
+  {
+    "name": "final-contract-venv-rebuilt",
+    "command": "uv venv --python /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/.venv/bin/python /tmp/mcbe-r19-contract-c54tnyyk/rebuilt",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:32.934271+00:00",
+    "exit_code": 0,
+    "seconds": 0.02,
+    "log": "final-contract-venv-rebuilt.log"
+  },
+  {
+    "name": "final-contract-install-rebuilt",
+    "command": "uv pip install --python /tmp/mcbe-r19-contract-c54tnyyk/rebuilt/bin/python /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/dist/0.3.0rc1/rebuilt/mcbe_ws_sdk-0.3.0rc1-py3-none-any.whl",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:06:32.957053+00:00",
+    "exit_code": 0,
+    "seconds": 0.16,
+    "log": "final-contract-install-rebuilt.log"
+  },
+  {
+    "name": "final-contract-rebuilt",
+    "command": "/tmp/mcbe-r19-contract-c54tnyyk/rebuilt/bin/python /home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk/tools/probe_installed_contract.py",
+    "cwd": "/tmp/mcbe-r19-contract-c54tnyyk",
+    "started": "2026-11-01T08:06:33.114673+00:00",
+    "exit_code": 0,
+    "seconds": 0.88,
+    "log": "final-contract-rebuilt.log",
+    "env": {
+      "PYTHONPATH": ""
+    }
+  },
+  {
+    "name": "final-contract-version-rebuilt",
+    "command": "/tmp/mcbe-r19-contract-c54tnyyk/rebuilt/bin/python -c 'import mcbe_ws_sdk as s; assert s.__version__==\"0.3.0rc1\"; print(s.__version__,s.__file__)'",
+    "cwd": "/tmp/mcbe-r19-contract-c54tnyyk",
+    "started": "2026-11-01T08:06:33.993652+00:00",
+    "exit_code": 0,
+    "seconds": 0.41,
+    "log": "final-contract-version-rebuilt.log",
+    "env": {
+      "PYTHONPATH": ""
+    }
+  },
+  {
+    "name": "final-artifact-correspondence",
+    "command": ".venv/bin/python /tmp/r19-correspondence.py",
+    "cwd": "/home/riceawa/Desktop/code/MCBE-AI-Agent/mcbe-ws-sdk",
+    "started": "2026-11-01T08:07:49.293456+00:00",
+    "exit_code": 0,
+    "seconds": 0.12,
+    "log": "final-artifact-correspondence.log"
   }
 ]

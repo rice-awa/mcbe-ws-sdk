@@ -190,9 +190,7 @@ async def test_control_reservation_keeps_queue_room_for_control_frames() -> None
             await scheduler.send("request-b", priority=SendPriority.REQUEST)
         assert scheduler.pending_by_priority[SendPriority.BULK] == 0
 
-        control = asyncio.create_task(
-            scheduler.send("control", priority=SendPriority.CONTROL)
-        )
+        control = asyncio.create_task(scheduler.send("control", priority=SendPriority.CONTROL))
         await _wait_until(lambda: scheduler.pending_by_priority[SendPriority.CONTROL] == 1)
 
         gate.set()
@@ -234,9 +232,7 @@ async def test_control_reservation_covers_bytes_as_well_as_frame_count() -> None
         with pytest.raises(SendQueueFullError):
             await scheduler.send("b" * 50, priority=SendPriority.BULK)
 
-        control = asyncio.create_task(
-            scheduler.send("c" * 50, priority=SendPriority.CONTROL)
-        )
+        control = asyncio.create_task(scheduler.send("c" * 50, priority=SendPriority.CONTROL))
         await _wait_until(lambda: scheduler.pending_by_priority[SendPriority.CONTROL] == 1)
 
         gate.set()
@@ -270,18 +266,16 @@ async def test_sustained_control_traffic_does_not_starve_bulk() -> None:
     try:
         await asyncio.wait_for(started.wait(), timeout=1.0)
 
-        bulk_b = asyncio.create_task(
-            scheduler.send("bulk-b", priority=SendPriority.BULK)
-        )
+        bulk_b = asyncio.create_task(scheduler.send("bulk-b", priority=SendPriority.BULK))
         controls = [
-            asyncio.create_task(
-                scheduler.send(f"control-{index}", priority=SendPriority.CONTROL)
-            )
+            asyncio.create_task(scheduler.send(f"control-{index}", priority=SendPriority.CONTROL))
             for index in range(5)
         ]
         await _wait_until(
-            lambda: scheduler.pending_by_priority[SendPriority.CONTROL] == 5
-            and scheduler.pending_by_priority[SendPriority.BULK] == 1
+            lambda: (
+                scheduler.pending_by_priority[SendPriority.CONTROL] == 5
+                and scheduler.pending_by_priority[SendPriority.BULK] == 1
+            )
         )
 
         gate.set()

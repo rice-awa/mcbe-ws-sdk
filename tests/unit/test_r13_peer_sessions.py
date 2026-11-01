@@ -21,9 +21,7 @@ from .test_reliable_facade import QueueWebSocket, RecordingHook, _player_frame, 
 async def test_request_and_notice_after_ready_are_admitted_inline() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.2)
     hook = RecordingHook()
-    facade = McbeServer(
-        v2=bridge, hook=hook, settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket(auto_negotiate=False)
     received: asyncio.Queue[str] = asyncio.Queue()
 
@@ -92,9 +90,7 @@ async def test_request_and_notice_after_ready_are_admitted_inline() -> None:
 async def test_empty_advertised_features_bind_endpoint_and_wrapper() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.2)
     hook = RecordingHook()
-    facade = McbeServer(
-        v2=bridge, hook=hook, settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket(auto_negotiate=False)
 
     async def answer(payload: str) -> None:
@@ -158,9 +154,7 @@ async def test_actual_node_router_multiplexes_two_facades_and_reconnect_during_t
         async def on_connected(self, state: ConnectionState) -> None:
             await connected.put(state)
 
-    facade = McbeServer(
-        v2=bridge, hook=Hook(), settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=Hook(), settings=GatewaySettings())
     sockets: list[QueueWebSocket] = []
     tasks: list[asyncio.Task[None]] = []
     events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -278,9 +272,7 @@ async def test_actual_node_router_multiplexes_two_facades_and_reconnect_during_t
 async def test_busy_admission_is_an_error_not_a_fallback() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.2)
     hook = RecordingHook()
-    facade = McbeServer(
-        v2=bridge, hook=hook, settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket(auto_negotiate=False)
 
     async def answer(payload: str) -> None:
@@ -303,9 +295,7 @@ async def test_busy_admission_is_an_error_not_a_fallback() -> None:
 async def test_blocked_confirmation_send_is_bounded_and_removes_early_activation() -> None:
     bridge = V2Bridge(negotiation_timeout_seconds=0.1)
     hook = RecordingHook()
-    facade = McbeServer(
-        v2=bridge, hook=hook, settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket(auto_negotiate=False)
     blocked = asyncio.Event()
 
@@ -340,9 +330,7 @@ async def test_lease_ack_renews_and_missing_ack_retires_endpoint(monkeypatch: An
     monkeypatch.setitem(_NEGOTIATION, "refresh_ms", 40)
     bridge = V2Bridge(negotiation_timeout_seconds=0.2)
     hook = RecordingHook()
-    facade = McbeServer(
-        v2=bridge, hook=hook, settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket(auto_negotiate=False)
     refreshed = asyncio.Event()
     respond = True
@@ -383,9 +371,7 @@ async def test_lease_ack_renews_and_missing_ack_retires_endpoint(monkeypatch: An
 async def test_endpoint_close_stops_queued_handlers_and_retires_owner() -> None:
     bridge = V2Bridge()
     hook = RecordingHook()
-    facade = McbeServer(
-        v2=bridge, hook=hook, settings=GatewaySettings()
-    )
+    facade = McbeServer(v2=bridge, hook=hook, settings=GatewaySettings())
     websocket = QueueWebSocket()
     task = asyncio.create_task(facade._on_connection(websocket))
     await asyncio.wait_for(hook.connected.wait(), 2)

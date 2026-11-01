@@ -1,0 +1,15 @@
+{
+  "changed": [
+    "src/mcbe_ws_sdk/errors.py",
+    "src/mcbe_ws_sdk/gateway/connection.py",
+    "src/mcbe_ws_sdk/profiles/mcbews_v2/runtime.py",
+    "tests/unit/test_v2_codec.py",
+    "tests/unit/test_admission.py",
+    "tests/unit/test_outbound_scheduler.py",
+    "tests/unit/test_send_priority_integration.py",
+    "tests/unit/test_v2_runtime.py",
+    "tests/unit/test_r13_peer_sessions.py",
+    "tests/unit/test_flow_control.py"
+  ],
+  "python_ast_unchanged": true
+}

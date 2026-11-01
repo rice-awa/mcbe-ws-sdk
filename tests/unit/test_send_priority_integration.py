@@ -62,10 +62,7 @@ class GatedWebSocket:
                         "header": {"eventName": "PlayerMessage", "requestId": "evt"},
                         "body": {
                             "sender": "MCBEWS_BRIDGE",
-                            "message": (
-                                f"MCBEWS2N|{attempt}|e{attempt[:22]}|2|"
-                                f"{_FEATURES}"
-                            ),
+                            "message": (f"MCBEWS2N|{attempt}|e{attempt[:22]}|2|{_FEATURES}"),
                         },
                     }
                 )
@@ -180,8 +177,10 @@ async def test_two_long_tellraws_and_a_command_keep_distinct_priorities() -> Non
 
     try:
         await _wait_until(
-            lambda: scheduler.pending_by_priority[SendPriority.BULK] >= 1
-            and scheduler.pending_by_priority[SendPriority.REQUEST] >= 1
+            lambda: (
+                scheduler.pending_by_priority[SendPriority.BULK] >= 1
+                and scheduler.pending_by_priority[SendPriority.REQUEST] >= 1
+            )
         )
         queued = scheduler.pending_by_priority
         assert queued[SendPriority.BULK] >= 1

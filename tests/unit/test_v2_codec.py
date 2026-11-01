@@ -96,9 +96,7 @@ def test_generation_stable() -> None:
     )
     path = ROOT / "addon/scripts/bridge/v2/assets.ts"
     before = path.read_bytes()
-    subprocess.run(
-        [sys.executable, "tools/generate_v2_assets.py"], check=True, cwd=ROOT
-    )
+    subprocess.run([sys.executable, "tools/generate_v2_assets.py"], check=True, cwd=ROOT)
     assert path.read_bytes() == before
 
 

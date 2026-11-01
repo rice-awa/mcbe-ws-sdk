@@ -108,9 +108,7 @@ class ConnectionState:
     # Admission state machine. Business frames are only routed once ``ready``
     # is true; ``pre_ready_dropped`` counts frames discarded before then so the
     # close log can summarise them without replaying anything.
-    admission_state: str = field(
-        default="WS_TRANSPORT_CONNECTED", kw_only=True, repr=False
-    )
+    admission_state: str = field(default="WS_TRANSPORT_CONNECTED", kw_only=True, repr=False)
     ready: bool = field(default=False, kw_only=True)
     pre_ready_dropped: int = field(default=0, kw_only=True)
 
@@ -200,9 +198,7 @@ class ConnectionManager:
         logger.info("connection_created", connection_id=str(state.id))
         return state
 
-    async def drop_connection(
-        self, connection_id: UUID, *, notify: bool | None = None
-    ) -> None:
+    async def drop_connection(self, connection_id: UUID, *, notify: bool | None = None) -> None:
         """Cancel the sender, release the runtime, drop, emit DISCONNECTED.
 
         ``notify=None`` emits ``DISCONNECTED`` only for a connection that reached

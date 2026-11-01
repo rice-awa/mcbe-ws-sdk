@@ -29,9 +29,7 @@ class CapabilityAlreadyRegisteredError(CapabilityError, ValueError):
     """Raised when a capability name is registered twice without replacement."""
 
     def __init__(self, name: str) -> None:
-        super().__init__(
-            f"capability already registered: {name!r} (pass replace=True to override)"
-        )
+        super().__init__(f"capability already registered: {name!r} (pass replace=True to override)")
         self.name = name
 
 
@@ -85,9 +83,7 @@ class RequestDuplicateError(RequestError, ValueError):
     """
 
     def __init__(self, request_id: str, category: str) -> None:
-        super().__init__(
-            f"duplicate pending request id {request_id!r} in category {category!r}"
-        )
+        super().__init__(f"duplicate pending request id {request_id!r} in category {category!r}")
         self.request_id = request_id
         self.category = category
 

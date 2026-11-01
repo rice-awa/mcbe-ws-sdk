@@ -187,12 +187,8 @@ async def test_old_business_frames_after_ready_are_not_executed() -> None:
     server, task = await _start(hook, websocket)
     await asyncio.wait_for(hook.connected.wait(), 2)
     try:
-        await websocket.push(
-            _player_frame("MCBEWS_BRIDGE", 'MCBEWS|BRIDGE|req-1|1/1|{"ok":true}')
-        )
-        await websocket.push(
-            _player_frame("MCBEWS_BRIDGE", 'MCBEWS|SESSION|{"request_id":"s1"}')
-        )
+        await websocket.push(_player_frame("MCBEWS_BRIDGE", 'MCBEWS|BRIDGE|req-1|1/1|{"ok":true}'))
+        await websocket.push(_player_frame("MCBEWS_BRIDGE", 'MCBEWS|SESSION|{"request_id":"s1"}'))
         await asyncio.sleep(0.02)
         assert hook.messages == []
         assert not any("mcbews:bridge_req" in payload for payload in websocket.sent)

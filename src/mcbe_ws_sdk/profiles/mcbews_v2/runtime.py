@@ -138,9 +138,7 @@ class V2Bridge:
                             "NEGOTIATION_CONFIRMATION_TIMEOUT",
                             "negotiation confirmation timed out",
                         ) from exc
-                    raise NegotiationError(
-                        "NEGOTIATION_TIMEOUT", "negotiation timed out"
-                    ) from exc
+                    raise NegotiationError("NEGOTIATION_TIMEOUT", "negotiation timed out") from exc
             except asyncio.CancelledError as exc:
                 raise RequestClosedError(attempt) from exc
             finally:
@@ -263,9 +261,7 @@ class V2Bridge:
         async def notify() -> None:
             await handler(connection_id)
 
-        task = asyncio.create_task(
-            notify(), name=f"v2-session-invalid:{connection_id}"
-        )
+        task = asyncio.create_task(notify(), name=f"v2-session-invalid:{connection_id}")
         task.add_done_callback(
             lambda completed: completed.exception() if not completed.cancelled() else None
         )
