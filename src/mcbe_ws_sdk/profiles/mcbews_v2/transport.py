@@ -60,7 +60,9 @@ def fragment(
     """Plan bounded frames with worst-case index overhead before any send."""
     cfg = limits(overrides)
     _transport_id(transport_id, direction)
-    wire = encode(message, resource_limits=cfg)
+    # Minecraft expands selectors in both scriptevent and tell message arguments.
+    # JSON escaping preserves literal data until reassembly and JSON decoding.
+    wire = encode(message, resource_limits=cfg).replace("@", r"\u0040")
     if len(wire.encode()) > cfg["message_bytes"]:
         fail("LIMIT_EXCEEDED")
     header = f"{PREFIX}|{transport_id}|{cfg['chunks']}/{cfg['chunks']}|"

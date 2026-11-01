@@ -155,6 +155,16 @@ queries are host-defined and must validate their own scope.
 
 ## World command safety
 
+For player-relative commands, call `run_world_command` with
+`{"command": "testfor @s", "player": "Alex"}`. The exact online player name
+supplies the executor, position and dimension; an unavailable player returns an
+error. Omitting `player` keeps the overworld dimension context. The example's
+`!cmd` supplies the chat sender automatically.
+
+`successCount` is the number of successful command applications. A zero count
+is reported explicitly; a completed bridge call alone does not establish a
+world change.
+
 `run_world_command` ships in the default package, but its policy still applies:
 
 - the default policy is denylist-only: any entrypoint on the dangerous-command

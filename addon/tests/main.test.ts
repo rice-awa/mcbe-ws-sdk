@@ -19,7 +19,7 @@ async function loadMainHarness() {
   const router = (await import("../scripts/bridge/router")) as unknown as RouterHarness;
   router._testingReset();
   await import("../scripts/main");
-  const runCommand = vi.fn(async () => undefined);
+  const runCommand = vi.fn(() => ({ successCount: 1 }));
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   minecraft.world.getAllPlayers.mockReturnValue([
     {

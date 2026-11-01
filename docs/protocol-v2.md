@@ -148,6 +148,10 @@ MCBEWS2|sender.session.sequence|index/total|content
 ```
 
 - `MCBEWS_BRIDGE` is transport attribution, not authentication.
+- Before fragmentation, encode every literal `@` in the JSON as `\u0040` so
+  Minecraft's `scriptevent` and `tell` message parsers cannot expand selectors.
+  Reassemble before JSON decoding to recover the original strings. Escaped
+  bytes count toward message, fragment and buffer limits.
 - Split only at Unicode scalar boundaries. Content may contain pipes and
   newlines.
 - `index` and `total` are canonical positive decimals, 1-based, at most 1024.

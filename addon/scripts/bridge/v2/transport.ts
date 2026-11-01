@@ -46,7 +46,8 @@ function fits(frame: string, direction: Direction, cfg: Limits): boolean {
 export function fragment(message: unknown, tid: string, direction: Direction, overrides: Limits = {}): string[] {
   const cfg = limits(overrides);
   transportId(tid, direction);
-  const wire = encode(message, cfg);
+  // Keep Minecraft's scriptevent/tell message parser from expanding payload selectors.
+  const wire = encode(message, cfg).replace(/@/g, "\\u0040");
   if (utf8ByteLength(wire) > cfg.message_bytes) fail("LIMIT_EXCEEDED");
   const header = MANIFEST.carrier.prefix + "|" + tid + "|" + cfg.chunks + "/" + cfg.chunks + "|";
   const parts: string[] = [];

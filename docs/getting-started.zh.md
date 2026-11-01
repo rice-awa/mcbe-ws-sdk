@@ -117,7 +117,7 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 | `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` |
 | `!wscmd <command>` / `!ws命令` | 原生命令，不需要附加包能力 |
-| `!cmd <command>` / `!命令` | `run_world_command`，危险命令被拒绝 |
+| `!cmd <command>` / `!命令` | `run_world_command`，以发言玩家为上下文，危险命令被拒绝 |
 | `!echo <text>` | `demo.echo`，附带示例元数据 |
 | `!stream [count]` | 消费 `demo.ticks` 直到正常结束（默认 5 项） |
 | `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） |
@@ -125,6 +125,9 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 
 `run_world_command` 随默认包发布。默认策略为仅禁止列表：命中危险命令禁止列表的入口
 一律拒绝；需要更严格时可向 `handleRunWorldCommand` 传入显式允许列表。
+`!cmd testfor @s` 使用发送者的玩家上下文，包括位置与维度。
+直接调用能力时可传入在线玩家的完整 `player` 名称；省略时保留主世界上下文。
+`successCount` 为零时明确显示成功应用次数为零。
 
 ## 从 Python 调用附加包能力
 

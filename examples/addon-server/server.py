@@ -66,7 +66,7 @@ _HELP_TEXT = (
     "Addon 示例命令：\n"
     "  !player [target]  获取玩家快照（默认自己）\n"
     "  !inv [target]     获取背包快照（默认自己）\n"
-    "  !cmd <command>    通过 addon 执行世界命令（危险命令被拒绝）\n"
+    "  !cmd <command>    通过 addon 以自己为上下文执行（危险命令被拒绝）\n"
     "  !wscmd <command>  通过 WS commandRequest 执行命令（不依赖 addon）\n"
     "  !echo <text>      自定义能力与元数据\n"
     "  !stream [count]   持续流直到正常结束（默认5项）\n"
@@ -261,7 +261,7 @@ class AddonDemoHook(NoOpHook):
                 state,
                 sender,
                 capability="run_world_command",
-                payload={"command": arg},
+                payload={"command": arg, "player": sender},
                 label=f"addon 世界命令 ({arg})",
             )
             return True

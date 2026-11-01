@@ -63,7 +63,7 @@ filtered by this rule.
 | `!player [target]` / `!玩家` | `get_player_snapshot`, current player by default | Default + lean |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` | Default + lean |
 | `!wscmd <command>` / `!ws命令` | Native `command_client.run`, no addon capability needed | Default + lean |
-| `!cmd <command>` / `!命令` | `run_world_command`, dangerous commands denied | Default only |
+| `!cmd <command>` / `!命令` | `run_world_command` as the chat sender, dangerous commands denied | Default only |
 | `!echo <text>` | `demo.echo`, with `example.label` and `example.player` metadata | Default only |
 | `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) | Default only |
 | `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) | Default only |
@@ -73,6 +73,22 @@ With the lean `--base` package, the demo commands return a readable
 `UNSUPPORTED_METHOD` error and a hint to use the default build.
 `run_world_command` keeps the dangerous-command denylist; pass an explicit
 allowlist to `handleRunWorldCommand` to narrow it further.
+
+### Selectors and command context
+
+Use `!cmd testfor @s` to target yourself or
+`!cmd testfor @e[type=minecraft:cow]` to find cows in your dimension.
+`!cmd` passes your exact player name, so `@s`, nearest-player selection and
+relative coordinates use your execution context. If you leave before execution,
+the request fails. `!wscmd` uses the WebSocket connection's native context.
+
+Direct `run_world_command` calls may omit `player` to retain the overworld
+dimension context. See [world command safety](../../addon/README.md#world-command-safety).
+Zero `successCount` means zero successful applications and is displayed explicitly.
+
+Entity types require a selector such as `@e[type=minecraft:cow]`; a bare `cow`
+does not select by type. `setblock` requires three coordinates (for example,
+`setblock ~ ~ ~ stone`) and remains denied by the addon policy.
 
 ## Ordering, failures and cancellation
 

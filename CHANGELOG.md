@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve literal selectors in both directions of the MCBEWS/2 carrier by
+  JSON-escaping `@` before fragmentation and byte accounting.
+- Let `run_world_command` accept an optional exact player name for execution
+  context; the addon example's `!cmd` uses the sender. Calls without a player
+  keep the overworld context. Report zero successful applications explicitly.
 - Ship the demo capability set (`demo.echo`, the `demo.ticks` stream and
   `run_world_command`) in the default addon package; `--base` / `MCBE_BASE=1`
   builds the lean two-snapshot pack.

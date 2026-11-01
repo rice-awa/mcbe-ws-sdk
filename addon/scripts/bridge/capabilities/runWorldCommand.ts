@@ -8,8 +8,9 @@ import { findDisallowedCommand } from "./commandSafety";
  */
 const DEFAULT_ALLOWLIST: string[] | null = null;
 
+/** Run as an exact online player, or in the overworld when player is omitted. */
 export function handleRunWorldCommand(
-  payload: { command?: string },
+  payload: { command?: string; player?: string },
   allowlist: string[] | null = DEFAULT_ALLOWLIST
 ): {
   ok: boolean;
@@ -32,11 +33,19 @@ export function handleRunWorldCommand(
   }
 
   try {
-    const result = world.getDimension("overworld").runCommand(command);
+    const player =
+      payload.player === undefined ? undefined : world.getAllPlayers().find((entry) => entry.name === payload.player);
+    if (payload.player !== undefined && !player) {
+      return {
+        ok: false,
+        payload: { output: `未找到在线玩家：${payload.player}`, successCount: 0 },
+      };
+    }
+    const result = player ? player.runCommand(command) : world.getDimension("overworld").runCommand(command);
     return {
       ok: true,
       payload: {
-        output: "命令执行成功",
+        output: result.successCount === 0 ? "命令已返回，成功应用次数为 0" : "命令执行成功",
         successCount: result.successCount,
       },
     };

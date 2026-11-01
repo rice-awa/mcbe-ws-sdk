@@ -140,6 +140,13 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 
 ## 世界命令安全
 
+需要玩家上下文时，以 `{"command": "testfor @s", "player": "Alex"}` 调用
+`run_world_command`。`player` 必须是在线玩家的完整名称，提供执行者、位置与维度；
+玩家不在线时返回错误。省略 `player` 时继续使用主世界维度上下文。
+示例中的 `!cmd` 会自动传入聊天发送者。
+
+`successCount` 表示命令成功应用的次数，零值会明确显示；桥接调用完成并不代表世界已发生修改。
+
 `run_world_command` 随默认包发布，但策略仍然生效：
 
 - 默认策略为仅禁止列表：命中危险命令禁止列表（`execute`、`script`、`op`、

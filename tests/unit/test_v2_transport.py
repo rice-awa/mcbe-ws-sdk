@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -74,6 +75,61 @@ def test_large_cross_language_both_directions(kind: str, direction: str, tid: st
     else:
         assert all(len(f) <= 256 and len(f.encode()) <= 1024 for f in frames)
         assert max(len(f.encode()) for f in frames) > 461
+
+
+@pytest.mark.parametrize("direction,tid", [("down", "p.e.2"), ("up", "a.e.2")])
+def test_selectors_survive_minecraft_message_interpolation(direction: str, tid: str) -> None:
+    obj = message(length=0)
+    obj["params"] = {
+        "command": "kill @e[type=minecraft:cow]",
+        "@key": ('@a @p @s @r @n 玩家😀 "quoted" \\@e literal \\u0040\n' * 20),
+    }
+    frames = fragment(obj, tid, direction, overrides={"command_bytes": 180})
+    tsframes = typescript(
+        [
+            {
+                "op": "fragment",
+                "message": obj,
+                "tid": tid,
+                "direction": direction,
+                "overrides": {"command_bytes": 180},
+            }
+        ]
+    )[0]["frames"]
+    assert frames == tsframes
+    # Both scriptevent and tell treat their message argument as selector-aware text.
+    received = [re.sub(r"@[aepsrn](?:\[[^\]]*\])?", 'Alex, 猪, "牛"', f) for f in frames]
+    pool = ReassemblyPool()
+    values = [pool.receive("c", "s", f, direction) for f in reversed(received)]
+    assert [v for v in values if v is not None] == [obj]
+    results = typescript(
+        [{"op": "init"}] + [{"op": "receive", "frame": f, "direction": direction} for f in received]
+    )
+    assert results[-1]["message"] == obj
+    assert all("@" not in f for f in frames)
+    assert len(frames) > 1
+
+
+def test_selector_escaping_counts_toward_message_byte_limit() -> None:
+    obj = message(length=0)
+    obj["params"] = "@" * 30
+    overrides = {"message_bytes": len(encode(obj).encode())}
+    with pytest.raises(V2ProtocolError, match="LIMIT_EXCEEDED"):
+        fragment(obj, "p.e.2", "down", overrides=overrides)
+    assert (
+        typescript(
+            [
+                {
+                    "op": "fragment",
+                    "message": obj,
+                    "tid": "p.e.2",
+                    "direction": "down",
+                    "overrides": overrides,
+                }
+            ]
+        )[0]["code"]
+        == "LIMIT_EXCEEDED"
+    )
 
 
 def operations(

@@ -95,6 +95,30 @@ async def test_addon_example_inventory_uses_negotiated_public_request() -> None:
     assert "未找到玩家背包" in final.content
 
 
+async def test_addon_example_command_uses_senders_context_and_reports_zero_successes() -> None:
+    module = _example("addon-server")
+    bridge = AsyncMock()
+    bridge.request.return_value = {
+        "result": {
+            "ok": True,
+            "payload": {"output": "命令已返回，成功应用次数为 0", "successCount": 0},
+        }
+    }
+    hook = module.AddonDemoHook(bridge)
+    state = ConnectionState(response_queue=asyncio.Queue())
+    await hook._dispatch_command(state, "玩家 Alex", "!cmd testfor @s")
+    bridge.request.assert_awaited_once_with(
+        state.id,
+        "run_world_command",
+        {"command": "testfor @s", "player": "玩家 Alex"},
+        metadata=None,
+    )
+    state.response_queue.get_nowait()
+    reply = state.response_queue.get_nowait().content
+    assert "成功应用次数为 0" in reply
+    assert "命令执行成功" not in reply
+
+
 async def test_addon_example_reports_stream_unavailable_without_retry() -> None:
     module = _example("addon-server")
     bridge = AsyncMock()

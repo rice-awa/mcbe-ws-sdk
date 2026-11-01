@@ -70,7 +70,7 @@ export interface Player {
   readonly name: string;
   readonly location: Vector3;
   readonly dimension: Dimension;
-  runCommand(command: string): Promise<void>;
+  runCommand(command: string): { successCount: number };
   getComponent(componentId: string): EntityHealthComponent | EntityInventoryComponent | undefined;
   getTags(): string[];
   getGameMode(): GameMode;

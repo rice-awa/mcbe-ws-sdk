@@ -128,7 +128,7 @@ Addon example commands:
 | `!player [target]` / `!玩家` | `get_player_snapshot`; current player by default |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` |
 | `!wscmd <command>` / `!ws命令` | Native command, no addon capability needed |
-| `!cmd <command>` / `!命令` | `run_world_command`; dangerous commands are denied |
+| `!cmd <command>` / `!命令` | `run_world_command` as the chat sender; dangerous commands are denied |
 | `!echo <text>` | `demo.echo`, with example metadata |
 | `!stream [count]` | Consume `demo.ticks` until normal completion (default 5) |
 | `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) |
@@ -137,6 +137,10 @@ Addon example commands:
 `run_world_command` ships in the default package. Its default policy is
 denylist-only: every entrypoint on the dangerous-command denylist is rejected.
 Pass an explicit allowlist to `handleRunWorldCommand` to narrow it further.
+`!cmd testfor @s` uses the sender's player context, including position and
+dimension. Direct capability calls may pass an exact online `player` name;
+omitting it retains the overworld context. A zero `successCount` is shown as
+zero successful applications.
 
 ## Call an addon capability from Python
 

@@ -45,7 +45,13 @@ export function registerDemoCapabilities(): void {
     if (payload.command !== undefined && typeof payload.command !== "string") {
       return { ok: false, error: { code: "INVALID_REQUEST", message: "payload.command must be a string" } };
     }
-    const result = handleRunWorldCommand(payload as { command?: string });
+    if (payload.player !== undefined && (typeof payload.player !== "string" || !payload.player.trim())) {
+      return {
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "payload.player must be a non-empty player name" },
+      };
+    }
+    const result = handleRunWorldCommand(payload as { command?: string; player?: string });
     if (!result.ok) {
       return { ok: false, error: { code: "INVALID_REQUEST", message: result.payload.output } };
     }

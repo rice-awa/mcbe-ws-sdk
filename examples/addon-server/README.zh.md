@@ -57,7 +57,7 @@ python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DE
 | `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 | 默认 + 精简 |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` | 默认 + 精简 |
 | `!wscmd <command>` / `!ws命令` | 原生 `command_client.run`，不需要附加包能力 | 默认 + 精简 |
-| `!cmd <command>` / `!命令` | `run_world_command`，危险命令被拒绝 | 仅默认 |
+| `!cmd <command>` / `!命令` | `run_world_command`，以发言玩家为上下文，危险命令被拒绝 | 仅默认 |
 | `!echo <text>` | `demo.echo`，附带 `example.label` 与 `example.player` 元数据 | 仅默认 |
 | `!stream [count]` | 消费有限的 `demo.ticks` 直到正常结束（默认 5 项） | 仅默认 |
 | `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） | 仅默认 |
@@ -66,6 +66,19 @@ python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DE
 使用 `--base` 精简包时，演示命令会返回可读的 `UNSUPPORTED_METHOD` 错误，并提示使用默认构建。
 `run_world_command` 始终保留危险命令禁止列表；需要更严格时可向
 `handleRunWorldCommand` 传入显式允许列表。
+
+### 选择器与执行上下文
+
+用 `!cmd testfor @s` 选择自己，或用 `!cmd testfor @e[type=minecraft:cow]`
+查找自己所在维度的牛。`!cmd` 会传入你的完整玩家名，因此 `@s`、最近玩家选择与相对坐标
+使用你的执行上下文；执行前离线会返回错误。`!wscmd` 使用 WebSocket 连接的原生上下文。
+
+直接调用 `run_world_command` 时，可以省略 `player`，保留主世界维度上下文，
+详见[世界命令安全](../../addon/README.zh.md)。`successCount` 为零表示成功应用次数为零，
+会明确显示。
+
+按实体类型选择需要写成 `@e[type=minecraft:cow]`，裸 `cow` 不按类型筛选。
+`setblock` 的位置参数要求三个坐标，例如 `setblock ~ ~ ~ stone`；它仍受附加包禁止列表限制。
 
 ## 顺序、失败与取消
 

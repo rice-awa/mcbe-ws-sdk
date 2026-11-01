@@ -136,6 +136,9 @@ MCBEWS2|sender.session.sequence|index/total|content
 ```
 
 - `MCBEWS_BRIDGE` 只是传输归属，不是认证。
+- 分片前，将 JSON 中所有字面量 `@` 编码为 `\u0040`，避免 Minecraft 的
+  `scriptevent` 与 `tell` 消息解析器展开选择器。收齐后再解码 JSON，恢复原始字符串。
+  转义后的字节计入消息、分片与缓存限制。
 - 仅在 Unicode 标量边界切分，内容可包含竖线和换行。
 - `index` 与 `total` 必须是规范正十进制数，从 1 开始，最多 1024 片。
 - 收齐后才拼接解码。相同重复片忽略且不刷新空闲期限；冲突重复或总数变化会释放消息并拒绝该传输编号。
