@@ -2,8 +2,11 @@ import { world } from "@minecraft/server";
 
 import { findDisallowedCommand } from "./commandSafety";
 
-/** Default allowlist: only `say` is permitted through the bridge. */
-const DEFAULT_ALLOWLIST = ["say"];
+/**
+ * Default policy: no allowlist, so every entrypoint outside the
+ * dangerous-command denylist runs. Pass an allowlist to narrow it further.
+ */
+const DEFAULT_ALLOWLIST: string[] | null = null;
 
 export function handleRunWorldCommand(
   payload: { command?: string },

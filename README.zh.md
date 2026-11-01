@@ -100,7 +100,7 @@ asyncio.run(main())
 
 ## 附加包
 
-基础包（两个只读快照）：
+默认包包含两个只读快照、`demo.echo`、`demo.ticks` 流和 `run_world_command`：
 
 ```bash
 cd addon
@@ -109,11 +109,11 @@ npm run build
 npm run mcaddon
 ```
 
-完整演示包（额外包含 `demo.echo`、`demo.ticks` 流和受限的 `run_world_command`）：
+精简包只保留两个只读快照：
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
 导入生成的 `.mcaddon`，在目标世界开启 **实验 → 测试版 API（Beta APIs）**，并启用行为包。

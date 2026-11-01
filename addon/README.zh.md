@@ -34,17 +34,19 @@ npm run build       # tsc 类型检查 + esbuild 打包
 npm run mcaddon     # 组装 .mcaddon
 ```
 
-基础包只包含两个只读快照能力。
+默认包包含完整能力集：两个只读快照、`demo.echo`、`demo.ticks` 流与
+`run_world_command`。导入 `dist/packages/mc-ws-sdk.mcaddon`。
 
-完整演示包额外包含 `demo.echo`、`demo.ticks` 流与受限的 `run_world_command`：
+精简包只包含两个只读快照：
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
-`--demo` 或 `MCBE_DEMO=1` 选择 `scripts/main.demo.ts`；两个变体都输出同一个最终文件
-`dist/scripts/main.js`。`lib/` 只是类型检查的中间产物，不会由游戏加载。
+`--base` 或 `MCBE_BASE=1` 选择 `scripts/main.ts`；默认构建使用
+`scripts/main.demo.ts`。两个变体都输出同一个最终文件 `dist/scripts/main.js`，
+精简包产物为 `mc-ws-sdk-base.mcaddon`。`lib/` 只是类型检查的中间产物，不会由游戏加载。
 
 打包会把 `@minecraft/server`、`@minecraft/server-ui` 与
 `@minecraft/server-gametest` 作为外部模块；模块版本由包清单提供。
@@ -119,30 +121,30 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 
 ## 内置能力
 
-基础包只注册：
+所有包都会注册：
 
 | 能力 | 说明 |
 | --- | --- |
 | `get_player_snapshot` | 玩家名称、生命值、标签、坐标、维度与游戏模式 |
 | `get_inventory_snapshot` | 背包槽位、物品 ID、数量与自定义名称 |
 
-完整演示包额外注册：
+默认演示构建额外注册：
 
 | 能力 / 流 | 说明 |
 | --- | --- |
 | `demo.echo` | 回显载荷与请求元数据 |
 | `demo.ticks` | 有限或无限的索引流；取消后停止生产 |
-| `run_world_command` | 受限的世界命令处理器，基础包不提供 |
+| `run_world_command` | 世界命令处理器；危险命令禁止列表仍然生效 |
 
 `find_entities` 等能力不随包提供。自定义实体查询由宿主定义，并自行校验范围。
 
 ## 世界命令安全
 
-`run_world_command` 故意不在基础包中。完整演示包会显式注册它，但策略仍然生效：
+`run_world_command` 随默认包发布，但策略仍然生效：
 
-- 默认允许列表只有 `["say"]`；
-- 危险命令禁止列表（`execute`、`script`、`op`、`setblock`、`fill` 等）
-  是第二道防线，即使宿主放宽允许列表也仍然生效；
+- 默认策略为仅禁止列表：命中危险命令禁止列表（`execute`、`script`、`op`、
+  `setblock`、`fill` 等）的入口一律拒绝；
+- 需要更严格时，可向 `handleRunWorldCommand` 传入显式允许列表；
 - 每次调用仍须由 Python 宿主授权。
 
 桥接层**不是**安全边界。传输归属、模拟玩家与元数据身份都不能替代认证与授权。
@@ -154,8 +156,8 @@ const unregister = registerV2Stream("demo.ticks", async function* (_method, para
 | --- | --- |
 | 准入超时 | 包未启用、目标世界不对，或 **测试版 API** 未开启 |
 | 日志出现 `UNSUPPORTED_PROTOCOL` | 有已退休的 scriptevent 到达附加包；把 Python 宿主或附加包升级到 MCBEWS/2 |
-| `!echo` / `!stream` 返回 `UNSUPPORTED_METHOD` | 安装的是基础包，请使用演示构建 |
-| `!cmd` 被拒绝 | 未注册 `run_world_command`，或命令不在允许列表 |
+| `!echo` / `!stream` 返回 `UNSUPPORTED_METHOD` | 安装的是 `--base` 精简包，请使用默认演示构建 |
+| `!cmd` 被拒绝 | 命令在危险命令禁止列表内，或附加包是 `--base` 精简构建 |
 | 游戏内没有桥接活动 | 脚本未加载；确认测试版 API、内容日志与包启用情况 |
 | `demo.ticks` 提前停止 | 消费者取消，或超过流限制 |
 

@@ -5,7 +5,7 @@
 
 ## 构建附加包
 
-基础包，包含两个只读快照：
+默认包包含本服务器调用的全部能力：
 
 ```bash
 cd addon
@@ -14,20 +14,21 @@ npm run build
 npm run mcaddon
 ```
 
-完整演示包，`!echo`、`!stream`、`!stream-cancel` 与 `!cmd` 需要它：
+`--base` 精简包只有两个只读快照工具，无法提供 `!echo`、`!stream`、`!stream-cancel`
+与 `!cmd`：
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
 导入生成的 `.mcaddon`。在目标世界设置中开启 **实验 → 测试版 API（Beta APIs）**，
 并启用行为包。未开启时脚本不会加载，准入会超时。
 详见[附加包设置](../../addon/README.zh.md)。
 
-演示构建会打包 `addon/scripts/main.demo.ts` 并调用 `registerDemoCapabilities()`，
-不需要手动复制文件。`demoCapabilities.ts` 是 `demo.echo`、`demo.ticks` 流与受限
-`run_world_command` 的共同注册源。
+默认构建会打包 `addon/scripts/main.demo.ts` 并调用 `registerDemoCapabilities()`，
+不需要手动复制文件。`demoCapabilities.ts` 是 `demo.echo`、`demo.ticks` 流与
+`run_world_command` 的共同注册源；世界命令中的危险命令仍会被拒绝。
 
 ## 运行
 
@@ -53,18 +54,18 @@ python examples/addon-server/server.py --host 0.0.0.0 --port 8080 --log-level DE
 
 | 聊天命令 | 行为 | 包 |
 | --- | --- | --- |
-| `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 | 基础 |
-| `!inv [target]` / `!背包` | `get_inventory_snapshot` | 基础 |
-| `!wscmd <command>` / `!ws命令` | 原生 `command_client.run`，不需要附加包能力 | 基础 |
-| `!cmd <command>` / `!命令` | `run_world_command`，受限 | 演示 |
-| `!echo <text>` | `demo.echo`，附带 `example.label` 与 `example.player` 元数据 | 演示 |
-| `!stream [count]` | 消费有限的 `demo.ticks` 直到正常结束（默认 5 项） | 演示 |
-| `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） | 演示 |
-| `!help` / `!帮助` | 查看帮助 | 基础 |
+| `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 | 默认 + 精简 |
+| `!inv [target]` / `!背包` | `get_inventory_snapshot` | 默认 + 精简 |
+| `!wscmd <command>` / `!ws命令` | 原生 `command_client.run`，不需要附加包能力 | 默认 + 精简 |
+| `!cmd <command>` / `!命令` | `run_world_command`，危险命令被拒绝 | 仅默认 |
+| `!echo <text>` | `demo.echo`，附带 `example.label` 与 `example.player` 元数据 | 仅默认 |
+| `!stream [count]` | 消费有限的 `demo.ticks` 直到正常结束（默认 5 项） | 仅默认 |
+| `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） | 仅默认 |
+| `!help` / `!帮助` | 查看帮助 | 默认 + 精简 |
 
-使用基础包时，演示命令会返回可读的 `UNSUPPORTED_METHOD` 错误，并提示使用演示构建。
-即使在演示构建中，`run_world_command` 仍受限制：默认允许列表只有 `say`，
-危险命令禁止列表仍然生效。
+使用 `--base` 精简包时，演示命令会返回可读的 `UNSUPPORTED_METHOD` 错误，并提示使用默认构建。
+`run_world_command` 始终保留危险命令禁止列表；需要更严格时可向
+`handleRunWorldCommand` 传入显式允许列表。
 
 ## 顺序、失败与取消
 

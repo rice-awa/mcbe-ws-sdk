@@ -152,22 +152,29 @@ async with stream:
 
 ## 构建变体与演示注册
 
-默认附加包只注册 `get_player_snapshot` 与 `get_inventory_snapshot`。
-完整演示包额外注册 `demo.echo`、`demo.ticks` 流与受限的 `run_world_command`：
+默认附加包会注册全部内置能力：`get_player_snapshot`、`get_inventory_snapshot`、
+`demo.echo`、`demo.ticks` 流与 `run_world_command`：
 
 ```bash
 cd addon
 npm install
-npm run build:demo
-npm run mcaddon:demo
+npm run build
+npm run mcaddon
 ```
 
-`--demo` 或 `MCBE_DEMO=1` 选择 `main.demo.ts`；输出路径仍是
-`dist/scripts/main.js`。添加自己的处理器时，在 `main.ts`（或自己的入口）中导入，
+`--base` 精简包只注册 `get_player_snapshot` 与 `get_inventory_snapshot`：
+
+```bash
+npm run build:base
+npm run mcaddon:base
+```
+
+`--base` 或 `MCBE_BASE=1` 选择 `main.ts`；默认入口是 `main.demo.ts`。
+输出路径仍是 `dist/scripts/main.js`。添加自己的处理器时，在自己的入口中导入，
 并在 `initializeAfterWorldLoad` 内注册一次。
 
-`run_world_command` 从不属于基础包。注册后，默认允许列表只有 `say`，
-危险命令禁止列表仍然生效。不要在缺少宿主授权时放宽策略。
+`run_world_command` 默认应用危险命令禁止列表；需要更严格时可向
+`handleRunWorldCommand` 传入显式允许列表。无论附加包策略如何，宿主侧授权都必须保留。
 
 附加包必须导入目标世界，并开启 **实验 → 测试版 API（Beta APIs）**。
 自动化示例不建立实机支持承诺；请单独验证游戏版本与平台。

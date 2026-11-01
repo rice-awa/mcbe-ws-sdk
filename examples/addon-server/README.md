@@ -6,7 +6,7 @@ admission, callbacks, request waiters, timeouts and fragments.
 
 ## Build the addon
 
-Basic package, with the two read-only snapshots:
+The default package includes every capability this server calls:
 
 ```bash
 cd addon
@@ -15,12 +15,12 @@ npm run build
 npm run mcaddon
 ```
 
-Complete demo package, required for `!echo`, `!stream`, `!stream-cancel` and
-`!cmd`:
+The lean `--base` package has only the two read-only snapshots and cannot serve
+`!echo`, `!stream`, `!stream-cancel` or `!cmd`:
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
 Import the generated `.mcaddon`. In the target world's settings enable
@@ -28,10 +28,11 @@ Import the generated `.mcaddon`. In the target world's settings enable
 scripts do not load and admission times out. See
 [addon setup](../../addon/README.md#enable-in-a-world).
 
-The demo build bundles `addon/scripts/main.demo.ts` and calls
+The default build bundles `addon/scripts/main.demo.ts` and calls
 `registerDemoCapabilities()`; you do not copy files into the addon by hand.
 `demoCapabilities.ts` is the shared registration source for `demo.echo`, the
-`demo.ticks` stream and the restricted `run_world_command` handler.
+`demo.ticks` stream and `run_world_command`, whose dangerous commands stay
+denied.
 
 ## Run
 
@@ -59,19 +60,19 @@ filtered by this rule.
 
 | Chat command | Action | Package |
 | --- | --- | --- |
-| `!player [target]` / `!玩家` | `get_player_snapshot`, current player by default | Basic |
-| `!inv [target]` / `!背包` | `get_inventory_snapshot` | Basic |
-| `!wscmd <command>` / `!ws命令` | Native `command_client.run`, no addon capability needed | Basic |
-| `!cmd <command>` / `!命令` | `run_world_command`, restricted | Demo |
-| `!echo <text>` | `demo.echo`, with `example.label` and `example.player` metadata | Demo |
-| `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) | Demo |
-| `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) | Demo |
-| `!help` / `!帮助` | Show command help | Basic |
+| `!player [target]` / `!玩家` | `get_player_snapshot`, current player by default | Default + lean |
+| `!inv [target]` / `!背包` | `get_inventory_snapshot` | Default + lean |
+| `!wscmd <command>` / `!ws命令` | Native `command_client.run`, no addon capability needed | Default + lean |
+| `!cmd <command>` / `!命令` | `run_world_command`, dangerous commands denied | Default only |
+| `!echo <text>` | `demo.echo`, with `example.label` and `example.player` metadata | Default only |
+| `!stream [count]` | Consume finite `demo.ticks` until normal completion (default 5) | Default only |
+| `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) | Default only |
+| `!help` / `!帮助` | Show command help | Default + lean |
 
-With the basic package, demo commands return a readable `UNSUPPORTED_METHOD`
-error and a hint to use the demo build. `run_world_command` remains restricted
-even in the demo build: its default allowlist is `say`, and the dangerous-command
-denylist still applies.
+With the lean `--base` package, the demo commands return a readable
+`UNSUPPORTED_METHOD` error and a hint to use the default build.
+`run_world_command` keeps the dangerous-command denylist; pass an explicit
+allowlist to `handleRunWorldCommand` to narrow it further.
 
 ## Ordering, failures and cancellation
 

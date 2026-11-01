@@ -108,7 +108,8 @@ example server does.
 
 ## Addon
 
-Basic package (two read-only snapshots):
+The default package includes the two read-only snapshots, `demo.echo`, the
+`demo.ticks` stream and `run_world_command`:
 
 ```bash
 cd addon
@@ -117,12 +118,11 @@ npm run build
 npm run mcaddon
 ```
 
-Complete demo package (adds `demo.echo`, the `demo.ticks` stream and the
-restricted `run_world_command` handler):
+The lean package keeps only the two read-only snapshots:
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
 Import the generated `.mcaddon`, enable **Experiments → Beta APIs** in the

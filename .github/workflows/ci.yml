@@ -71,8 +71,9 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build:production
-      - run: npm run build:demo
-      - run: npm run mcaddon:demo
+      - run: npm run build:base
+      - run: npm run mcaddon
+      - run: npm run mcaddon:base
   docs:
     runs-on: ubuntu-latest
     steps:

@@ -25,7 +25,8 @@ jobs:
       - run: mypy --no-incremental src
       - run: >-
           cp .env.example .env && npm test && npm run lint && npm run typecheck
-          && npm run build:production && npm run build:demo && npm run mcaddon:demo
+          && npm run build:production && npm run build:base && npm run mcaddon
+          && npm run mcaddon:base
         working-directory: addon
       - name: Verify tag matches package version
         env: {TAG: "${{ github.ref_name }}"}

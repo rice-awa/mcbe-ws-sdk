@@ -31,7 +31,8 @@ runtime dependencies are resolved from its metadata.
 
 ## Build and import the addon
 
-Basic package, with exactly the two read-only snapshot capabilities:
+The default package registers the two read-only snapshots, `demo.echo`, the
+`demo.ticks` stream, and `run_world_command`:
 
 ```bash
 cd addon
@@ -40,19 +41,18 @@ npm run build
 npm run mcaddon
 ```
 
-Complete demo package, which additionally registers `demo.echo`, the
-`demo.ticks` stream, and the restricted `run_world_command` handler:
+The lean package registers only the two read-only snapshots:
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
 Both variants write the same final script path, `dist/scripts/main.js`, but they
-are separate builds. The basic pack produces `mc-ws-sdk.mcaddon`; the demo pack
-produces `mc-ws-sdk-demo.mcaddon` under `dist/packages/`, so one does not
-overwrite the other. The demo entry is selected by `--demo` or `MCBE_DEMO=1`;
-the npm scripts above are shortcuts for that flag plus `--production`.
+are separate builds. The default pack produces `mc-ws-sdk.mcaddon`; the lean pack
+produces `mc-ws-sdk-base.mcaddon` under `dist/packages/`, so one does not
+overwrite the other. `--base` or `MCBE_BASE=1` selects `main.ts`; the default
+entry is `main.demo.ts`.
 
 ### Enable the world
 
@@ -128,16 +128,15 @@ Addon example commands:
 | `!player [target]` / `!玩家` | `get_player_snapshot`; current player by default |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` |
 | `!wscmd <command>` / `!ws命令` | Native command, no addon capability needed |
-| `!cmd <command>` / `!命令` | `run_world_command`; only present in the demo pack |
+| `!cmd <command>` / `!命令` | `run_world_command`; dangerous commands are denied |
 | `!echo <text>` | `demo.echo`, with example metadata |
 | `!stream [count]` | Consume `demo.ticks` until normal completion (default 5) |
 | `!stream-cancel [count]` | Consume a bounded prefix of an unbounded producer, then cancel (default 3) |
 | `!help` / `!帮助` | Show help |
 
-`run_world_command` is not registered by the basic package. The demo package
-registers it explicitly, and its policy still allows only `say` by default; the
-denylist for dangerous commands remains in force even if the allowlist is
-widened.
+`run_world_command` ships in the default package. Its default policy is
+denylist-only: every entrypoint on the dangerous-command denylist is rejected.
+Pass an explicit allowlist to `handleRunWorldCommand` to narrow it further.
 
 ## Call an addon capability from Python
 
@@ -166,7 +165,7 @@ async with stream:
         print(item)
 ```
 
-Streams require `stream/1` in the negotiated feature set. The demo package
+Streams require `stream/1` in the negotiated feature set. The default package
 registers the `demo.ticks` producer. Use `async with` or `await stream.aclose()`
 when consumption may stop early; cancelling a pending read cancels that stream,
 not other requests.
@@ -178,7 +177,7 @@ Application-level failures should show the player:
 - the method or capability being called,
 - a stable error code,
 - a bounded readable message (at most 256 UTF-8 bytes, never split Unicode),
-- an action hint, such as “enable the demo package” or “check the parameter”.
+- an action hint, such as “use the default package” or “check the parameter”.
 
 Internal request IDs, trace IDs and stack traces stay in logs. The addon maps
 unknown capabilities, invalid parameters and handler failures to
@@ -195,7 +194,7 @@ unknown capabilities, invalid parameters and handler failures to
 | `INVALID_NEGOTIATION` | A malformed or mismatched control frame. Verify the addon version matches this SDK. |
 | `SESSION_INVALID` | The admitted session was revoked or became stale. Reconnect; the new session gets a fresh epoch. |
 | Capability call times out | Confirm the active pack, the target world, Beta APIs and the live `/wsserver` connection. |
-| `!cmd` fails while `!wscmd` works | `run_world_command` is absent from the basic package and is intentionally restricted. Use the demo build and review its policy. |
+| `!cmd` fails while `!wscmd` works | The command is on the dangerous-command denylist, or the pack is the lean `--base` build. |
 | Ordinary chat gets no reply | This is expected. Examples answer only trimmed messages that start with ASCII `!`. |
 | Text arrives in pieces | The SDK uses a 461-byte empirical command budget and may split tellraw/scriptevent. Native commands stay atomic and reject overflow. |
 

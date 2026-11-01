@@ -103,9 +103,9 @@
 
 - 只接受 `mcbews:negotiate_v2` 与 `mcbews:packet_v2`。
 - 能力通过 `registerCapability` 按名注册；流通过 `registerV2Stream` 注册。
-- 基础包恰好包含 `get_player_snapshot` 与 `get_inventory_snapshot`。
-- 完整演示包显式注册 `demo.echo`、`demo.ticks` 与受限 `run_world_command`；
-  世界命令默认关闭，允许/禁止列表策略保留。
+- 默认包注册 `get_player_snapshot`、`get_inventory_snapshot`、`demo.echo`、
+  `demo.ticks` 与 `run_world_command`；`--base` 精简包只含两个只读快照。
+- `run_world_command` 默认应用危险命令禁止列表；需要更严格时可传入显式允许列表。
 - 依赖 `@minecraft/server` 2.8.0、`@minecraft/server-ui` 2.1.0，
   以及与 1.26.30 基线匹配的 gametest beta；两个包清单最低引擎为 `[1,26,30]`。
 - 目标世界必须开启 **实验 → 测试版 API（Beta APIs）**。

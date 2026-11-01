@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Ship the demo capability set (`demo.echo`, the `demo.ticks` stream and
+  `run_world_command`) in the default addon package; `--base` / `MCBE_BASE=1`
+  builds the lean two-snapshot pack.
+- Run `run_world_command` with the dangerous-command denylist only; callers can
+  pass an explicit allowlist to narrow it.
+- Expose `StreamError.message` so hosts can render stream failures without
+  parsing exception text.
+
 ## 0.2.1
 
 - Accept an explicitly supplied `cid="default"` for session `switch` requests while

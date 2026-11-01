@@ -195,8 +195,8 @@ npm run build
 npm run mcaddon
 ```
 
-For the complete demo capabilities, use `npm run build:demo` /
-`npm run mcaddon:demo`.
+Demo capabilities ship in the default package. Use `npm run build:base` /
+`npm run mcaddon:base` only when you want the lean two-snapshot pack.
 
 ## Rollback and deployment
 

@@ -18,10 +18,15 @@ Send = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class StreamError(RuntimeError):
-    """A classified stream failure; already executed side effects are not undone."""
+    """A classified stream failure; already executed side effects are not undone.
+
+    ``code`` is the protocol error code and ``message`` the remote or local
+    reason, so hosts can render them without parsing the exception text.
+    """
 
     def __init__(self, code: str, message: str = "stream failed") -> None:
         self.code = code
+        self.message = message
         super().__init__(f"{code}: {message}")
 
 

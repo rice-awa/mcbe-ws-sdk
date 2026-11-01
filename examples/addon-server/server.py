@@ -15,9 +15,9 @@ SDK-owned awaitable ``commandRequest`` / ``commandResponse`` client
 * ``!help`` → list available commands
 
 Only messages that start with ASCII ``!`` after trimming are dispatched;
-ordinary chat is silent. The last three capability commands need
-``capabilities.ts`` installed in the addon. Enable the world's Beta APIs
-experiment before loading the addon.
+ordinary chat is silent. The addon's default build ships every capability this
+server calls; ``--base`` builds register only the two read-only snapshots.
+Enable the world's Beta APIs experiment before loading the addon.
 
 Usage::
 
@@ -53,6 +53,7 @@ from mcbe_ws_sdk import (
     ParsedCommand,
     PlayerMessageEvent,
     RemoteCallError,
+    StreamError,
     SystemNotification,
     V2Bridge,
     WebsocketTransportConfig,
@@ -65,9 +66,9 @@ _HELP_TEXT = (
     "Addon 示例命令：\n"
     "  !player [target]  获取玩家快照（默认自己）\n"
     "  !inv [target]     获取背包快照（默认自己）\n"
-    "  !cmd <command>    通过 addon 执行世界命令（需在 addon 侧启用）\n"
+    "  !cmd <command>    通过 addon 执行世界命令（危险命令被拒绝）\n"
     "  !wscmd <command>  通过 WS commandRequest 执行命令（不依赖 addon）\n"
-    "  !echo <text>      自定义能力与元数据（需安装 capabilities.ts）\n"
+    "  !echo <text>      自定义能力与元数据\n"
     "  !stream [count]   持续流直到正常结束（默认5项）\n"
     "  !stream-cancel [count]  消费后取消无限流（默认3项）\n"
     "  !help             显示本帮助\n"
@@ -394,6 +395,20 @@ class AddonDemoHook(NoOpHook):
                 f"流失败 [{exc.reason}] {_bounded_text(str(exc))}"
                 f"{_action_hint('demo.ticks')}",
             )
+        except StreamError as exc:
+            logger.warning(
+                "addon_stream_remote_error",
+                connection_id=str(state.id),
+                method="demo.ticks",
+                code=exc.code,
+                message=exc.message,
+            )
+            self._reply(
+                state,
+                sender,
+                f"流失败 [{exc.code}] {_bounded_text(exc.message)}"
+                f"{_action_hint('demo.ticks')}",
+            )
         except Exception:
             logger.exception(
                 "addon_stream_failed",
@@ -429,6 +444,13 @@ class AddonDemoHook(NoOpHook):
             # The SDK registers the request before sending and pairs the
             # commandResponse; no host-side wait table is needed.
             response = await state.command_client.run(command)
+            logger.info(
+                "ws_command_response",
+                connection_id=str(state.id),
+                command=command,
+                request_id=response.request_id,
+                status_code=response.body.get("statusCode"),
+            )
         except TimeoutError as exc:
             logger.warning(
                 "ws_command_timeout",
@@ -491,11 +513,11 @@ def _bounded_text(text: object, limit: int = _MAX_ERROR_BYTES) -> str:
 def _action_hint(capability: str) -> str:
     if capability == "run_world_command":
         return (
-            "\n提示：世界命令默认未开放；请在 addon 侧显式注册 run_world_command "
-            "并保留命令允许列表。"
+            "\n提示：该命令在 addon 的危险命令禁止列表内，"
+            "或当前附加包是 --base 精简构建（不含世界命令能力）。"
         )
     if capability == "demo.ticks":
-        return "\n提示：确认 addon 已安装 capabilities.ts 并启用 stream/1 能力。"
+        return "\n提示：确认附加包为默认演示构建，并启用 stream/1 能力。"
     return "\n提示：确认 addon 已注册该能力，并检查命令参数。"
 
 
@@ -660,8 +682,8 @@ async def main(argv: Sequence[str] | None = None) -> None:
     )
     logger.info(
         "addon_hint",
-        note="Enable Beta APIs and load the addon; !echo/!stream need capabilities.ts; "
-        "!wscmd needs only /wsserver",
+        note="Enable Beta APIs and load the addon; the default demo build includes "
+        "!cmd/!echo/!stream; !wscmd needs only /wsserver",
     )
     logger.info("ready", stop_with="Ctrl+C")
     await facade.run_lifetime()

@@ -38,19 +38,21 @@ npm run build       # tsc type-check + esbuild bundle
 npm run mcaddon     # assemble the .mcaddon
 ```
 
-Basic package: exactly the two read-only snapshot capabilities.
+The default package ships the complete capability set: the two read-only
+snapshots, `demo.echo`, the `demo.ticks` stream and `run_world_command`. Import
+`dist/packages/mc-ws-sdk.mcaddon`.
 
-Complete demo package: adds `demo.echo`, the `demo.ticks` stream and the
-restricted `run_world_command` handler.
+The lean package contains only the two read-only snapshots:
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
-`--demo` or `MCBE_DEMO=1` selects `scripts/main.demo.ts`; both variants write the
-same final artifact, `dist/scripts/main.js`. `lib/` is only intermediate
-type-check output and is not loaded by the game.
+`--base` or `MCBE_BASE=1` selects `scripts/main.ts`; the default build uses
+`scripts/main.demo.ts`. Both variants write the same final artifact,
+`dist/scripts/main.js`, and the lean pack is `mc-ws-sdk-base.mcaddon`. `lib/` is
+only intermediate type-check output and is not loaded by the game.
 
 The bundle externalizes `@minecraft/server`, `@minecraft/server-ui` and
 `@minecraft/server-gametest`; the pack manifest supplies the module versions.
@@ -133,33 +135,32 @@ the per-connection endpoint directly.
 
 ## Built-in capabilities
 
-The basic package registers exactly:
+Every package registers:
 
 | Capability | Description |
 | --- | --- |
 | `get_player_snapshot` | Player name, health, tags, coordinates, dimension and game mode |
 | `get_inventory_snapshot` | Inventory slots, item IDs, counts and custom names |
 
-The demo package additionally registers:
+The default demo build additionally registers:
 
 | Capability / stream | Description |
 | --- | --- |
 | `demo.echo` | Echoes the payload with request metadata |
 | `demo.ticks` | Finite or unbounded index stream; cancellation stops production |
-| `run_world_command` | Restricted world-command handler, disabled outside the demo package |
+| `run_world_command` | World-command handler; the dangerous-command denylist applies |
 
 Other capabilities such as `find_entities` are not bundled. Custom entity
 queries are host-defined and must validate their own scope.
 
 ## World command safety
 
-`run_world_command` is intentionally absent from the basic package. The demo
-package registers it explicitly, but its policy still applies:
+`run_world_command` ships in the default package, but its policy still applies:
 
-- the default allowlist is `["say"]` only;
-- the denylist of dangerous commands (`execute`, `script`, `op`, `setblock`,
-  `fill`, and others) remains a second line of defense even if a host widens the
-  allowlist;
+- the default policy is denylist-only: any entrypoint on the dangerous-command
+  denylist (`execute`, `script`, `op`, `setblock`, `fill`, and others) is
+  rejected;
+- pass an explicit allowlist to `handleRunWorldCommand` to narrow it further;
 - every call must still be authorized by the Python host.
 
 The bridge is **not** a security boundary. Transport attribution, the simulated
@@ -172,8 +173,8 @@ The addon only provides the defensive command filter above.
 | --- | --- |
 | Admission times out | The pack is not active, the target world is wrong, or **Beta APIs** is off |
 | `UNSUPPORTED_PROTOCOL` in logs | A retired script event reached the addon; update the Python host or the addon so both speak MCBEWS/2 |
-| `UNSUPPORTED_METHOD` for `!echo` or `!stream` | The basic package is installed. Use the demo build |
-| `!cmd` is rejected | `run_world_command` is not registered, or the command is outside the allowlist |
+| `UNSUPPORTED_METHOD` for `!echo` or `!stream` | The lean `--base` package is installed. Use the default demo build |
+| `!cmd` is rejected | The command is on the dangerous-command denylist, or the pack is the lean `--base` build |
 | No bridge activity in-game | Scripts did not load. Confirm Beta APIs, content log and pack activation |
 | `demo.ticks` stops early | The consumer cancelled or exceeded a stream limit |
 

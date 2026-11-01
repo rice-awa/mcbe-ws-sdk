@@ -167,24 +167,33 @@ mechanism. See [the protocol contract](protocol-v2.md#request-streams).
 
 ## Build variants and demo registration
 
-The default addon build registers exactly `get_player_snapshot` and
-`get_inventory_snapshot`. The complete demo build registers `demo.echo`, the
-`demo.ticks` stream and the restricted `run_world_command` handler:
+The default addon build registers every bundled capability: `get_player_snapshot`,
+`get_inventory_snapshot`, `demo.echo`, the `demo.ticks` stream and
+`run_world_command`:
 
 ```bash
 cd addon
 npm install
-npm run build:demo
-npm run mcaddon:demo
+npm run build
+npm run mcaddon
 ```
 
-`--demo` or `MCBE_DEMO=1` selects `main.demo.ts`; the output path is still
-`dist/scripts/main.js`. To add your own handlers, import them in `main.ts` (or
-your own entry) and register once during `initializeAfterWorldLoad`.
+The lean `--base` build registers exactly `get_player_snapshot` and
+`get_inventory_snapshot`:
 
-`run_world_command` is never part of the basic package. When registered, its
-default allowlist is `say` and the dangerous-command denylist still applies.
-Do not widen the policy without host-side authorization.
+```bash
+npm run build:base
+npm run mcaddon:base
+```
+
+`--base` or `MCBE_BASE=1` selects `main.ts`; the default entry is
+`main.demo.ts`. The output path is still `dist/scripts/main.js`. To add your own
+handlers, import them in your entry and register once during
+`initializeAfterWorldLoad`.
+
+`run_world_command` applies the dangerous-command denylist by default; pass an
+explicit allowlist to `handleRunWorldCommand` to narrow it further. Keep
+host-side authorization in place regardless of the addon policy.
 
 The addon must be imported into the target world with **Experiments → Beta
 APIs** enabled. Automated examples do not establish live-game support; verify

@@ -3,10 +3,12 @@ import { registerCapability, registerV2Stream } from "./bridge/router";
 import { handleRunWorldCommand } from "./bridge/capabilities/runWorldCommand";
 
 /**
- * Register the complete demo set used by `main.demo.ts` and the example server.
+ * Register the complete demo set used by the default `main.demo.ts` entry and
+ * the example server.
  *
- * The default package registers only the two read-only snapshots. The world
- * command stays opt-in and keeps the shared allowlist/denylist policy.
+ * The default package ships these capabilities. `--base` selects `main.ts`,
+ * which registers only the two read-only snapshots. The world command still
+ * rejects every entrypoint on the shared dangerous-command denylist.
  */
 export function registerDemoCapabilities(): void {
   registerCapability("demo.echo", (_method, payload, context) => ({

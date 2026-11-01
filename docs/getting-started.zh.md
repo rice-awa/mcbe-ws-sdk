@@ -28,7 +28,7 @@ pip install -e ".[dev,docs]"
 
 ## 构建并导入附加包
 
-基础包，只包含两个只读快照能力：
+默认包会注册两个只读快照、`demo.echo`、`demo.ticks` 流和 `run_world_command`：
 
 ```bash
 cd addon
@@ -37,17 +37,17 @@ npm run build
 npm run mcaddon
 ```
 
-完整演示包，额外注册 `demo.echo`、`demo.ticks` 流和受限的 `run_world_command`：
+精简包只注册两个只读快照：
 
 ```bash
-npm run build:demo
-npm run mcaddon:demo
+npm run build:base
+npm run mcaddon:base
 ```
 
 两个变体写入同一个脚本路径 `dist/scripts/main.js`，但构建产物彼此独立：
-基础包生成 `mc-ws-sdk.mcaddon`，演示包生成 `mc-ws-sdk-demo.mcaddon`，均位于
-`dist/packages/`，不会互相覆盖。演示入口由 `--demo` 或 `MCBE_DEMO=1` 选择；
-上面的 npm 脚本就是该标志加 `--production` 的快捷方式。
+默认包生成 `mc-ws-sdk.mcaddon`，精简包生成 `mc-ws-sdk-base.mcaddon`，均位于
+`dist/packages/`，不会互相覆盖。`--base` 或 `MCBE_BASE=1` 选择 `main.ts`；
+默认入口是 `main.demo.ts`。
 
 ### 在世界中启用
 
@@ -117,14 +117,14 @@ Python 与游戏在同一台机器时使用 `127.0.0.1`。
 | `!player [target]` / `!玩家` | `get_player_snapshot`，默认当前玩家 |
 | `!inv [target]` / `!背包` | `get_inventory_snapshot` |
 | `!wscmd <command>` / `!ws命令` | 原生命令，不需要附加包能力 |
-| `!cmd <command>` / `!命令` | `run_world_command`，仅完整演示包提供 |
+| `!cmd <command>` / `!命令` | `run_world_command`，危险命令被拒绝 |
 | `!echo <text>` | `demo.echo`，附带示例元数据 |
 | `!stream [count]` | 消费 `demo.ticks` 直到正常结束（默认 5 项） |
 | `!stream-cancel [count]` | 读取无限生产者的前若干项后取消（默认 3 项） |
 | `!help` / `!帮助` | 显示帮助 |
 
-`run_world_command` 不在基础包中。完整演示包会显式注册它，默认允许列表仍然只有
-`say`；即使宿主放宽允许列表，危险命令禁止列表仍然生效。
+`run_world_command` 随默认包发布。默认策略为仅禁止列表：命中危险命令禁止列表的入口
+一律拒绝；需要更严格时可向 `handleRunWorldCommand` 传入显式允许列表。
 
 ## 从 Python 调用附加包能力
 
@@ -151,7 +151,7 @@ async with stream:
         print(item)
 ```
 
-流要求协商出 `stream/1`。`demo.ticks` 生产者由完整演示包注册。
+流要求协商出 `stream/1`。`demo.ticks` 生产者由默认包注册。
 可能提前退出时使用 `async with` 或 `await stream.aclose()`；
 取消正在等待的读取只取消该流，不影响其他请求。
 
@@ -162,7 +162,7 @@ async with stream:
 - 正在调用的方法或能力名；
 - 稳定的错误码；
 - 有界可读说明（最多 256 个 UTF-8 字节，不截断 Unicode 标量）；
-- 行动提示，例如“请启用完整演示包”或“请检查参数”。
+- 行动提示，例如“请使用默认包”或“请检查参数”。
 
 内部请求编号、追踪编号和堆栈只留在日志中。附加包会把未知能力、参数错误与处理器异常映射为
 `UNSUPPORTED_METHOD`、`INVALID_PARAMS` 与 `HANDLER_FAILED`。
@@ -178,7 +178,7 @@ async with stream:
 | `INVALID_NEGOTIATION` | 控制帧格式错误或不匹配。确认附加包版本与本 SDK 一致。 |
 | `SESSION_INVALID` | 已准入会话被撤销或过期。重连会获得新的会话代次。 |
 | 能力调用超时 | 确认启用的包、目标世界、测试版 API 与 `/wsserver` 连接。 |
-| `!cmd` 失败但 `!wscmd` 正常 | 基础包没有 `run_world_command`，且该能力受到限制。使用演示构建并检查策略。 |
+| `!cmd` 失败但 `!wscmd` 正常 | 命令在危险命令禁止列表内，或附加包是 `--base` 精简构建。 |
 | 普通聊天没有回复 | 这是预期行为。示例只处理以 ASCII `!` 开头的消息。 |
 | 文本分成多段 | SDK 使用 461 字节经验预算拆分 tellraw/scriptevent；原生命令保持原子，超限即拒绝。 |
 

@@ -181,7 +181,8 @@ npm run build
 npm run mcaddon
 ```
 
-需要完整演示能力时使用 `npm run build:demo` / `npm run mcaddon:demo`。
+演示能力随默认包发布。只有需要两个只读快照的精简包时，才使用
+`npm run build:base` / `npm run mcaddon:base`。
 
 ## 回退与部署
 

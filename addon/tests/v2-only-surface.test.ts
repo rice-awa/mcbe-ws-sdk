@@ -53,7 +53,7 @@ describe("MCBEWS/2-only production surface", () => {
     }
   });
 
-  it("keeps the demo capabilities out of the default entry", () => {
+  it("builds the demo entry by default and keeps the base entry lean", () => {
     const main = source("main.ts");
     const demo = source("main.demo.ts");
     expect(main).not.toContain("demoCapabilities");
@@ -63,5 +63,8 @@ describe("MCBEWS/2-only production surface", () => {
     for (const name of ["demo.echo", "demo.ticks", "run_world_command"]) {
       expect(demoSource).toContain(name);
     }
+    const buildConfig = readFileSync(join(scripts, "..", "just.config.ts"), "utf-8");
+    expect(buildConfig).toContain('argv()["base"]');
+    expect(buildConfig).toContain("./scripts/main.demo.ts");
   });
 });
